@@ -1,0 +1,6 @@
+* text=auto eol=lf
+# Preserve exact upstream bytes (including CRLF) on every platform.
+assets/original-crtsim/*.fx -text -whitespace
+assets/original-crtsim/COPYING.txt -text -whitespace
+*.bmp binary
+*.m3d binary
