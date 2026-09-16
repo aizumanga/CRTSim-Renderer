@@ -95,9 +95,7 @@ fn add_text_chunk(bytes: &mut Vec<u8>, keyword: &[u8], text: &[u8]) -> Result<()
     chunk.extend_from_slice(&(data.len() as u32).to_be_bytes());
     chunk.extend_from_slice(b"tEXt");
     chunk.extend_from_slice(&data);
-    chunk.extend_from_slice(
-        &crc32(&[b"tEXt".as_slice(), data.as_slice()].concat()).to_be_bytes(),
-    );
+    chunk.extend_from_slice(&crc32(&[b"tEXt".as_slice(), data.as_slice()].concat()).to_be_bytes());
     ensure!(
         bytes.starts_with(b"\x89PNG\r\n\x1a\n") && bytes.len() >= 12,
         "Invalid PNG output"
