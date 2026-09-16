@@ -24,6 +24,9 @@ On first launch, the app honestly describes this AI-assisted project as “what 
 Acknowledging that message is remembered on this computer. **Credits** always reopens the attribution and links to
 [J. Kyle Pittman's itch.io page](https://piratehearts.itch.io/) and [Minor Key Games on Steam](https://store.steampowered.com/developer/MinorKeyGames).
 Please support the original developer by buying and playing their games. This port is unofficial and is not endorsed by him.
+The welcome and credits also link to Pittman's
+[CRT Simulation in Super Win the Game](https://www.gamedeveloper.com/programming/crt-simulation-in-super-win-the-game),
+an interesting technical account of how the effect developed.
 
 **Preset gallery** includes General image, Original CRTSim, Soft television, Clean RGB, Pixel art 240p, Warm analog and Linear light.
 Enter a name and choose **Save current** to add your exact settings to **My presets**; they reappear after restarting.
@@ -32,7 +35,8 @@ Names are never overwritten; malformed files are skipped with an explanation. Pe
 in the app data directory shown in the gallery. `CRTSIM_DATA_DIR` can override that directory with an absolute path.
 Only explicitly saved presets and the welcome acknowledgement persist; unsaved edits are not automatically saved on exit.
 
-Preview and export show stage-based progress. Warm-up advances after completed GPU batches, followed by surface rendering/readback and PNG saving.
+Full-resolution export shows stage-based progress; routine live-preview updates stay unobtrusive. Warm-up advances after completed GPU batches,
+followed by surface rendering/readback and PNG saving.
 Percentages represent weighted work stages, not remaining seconds; PNG encoding stays at its stage until the file is completely saved.
 
 **Filter mask when shrinking** uses a mipmapped mask to reduce minification aliasing. New general-image presets enable it;
@@ -53,13 +57,15 @@ cargo run --release --locked -p crtsim-desktop
 Use **Open image** or drag one PNG/JPEG/WebP/BMP into the window. Adjust the controls on the left;
 the preview refreshes after you finish a drag or pause typing. **Export PNG** renders using the export size,
 even when the preview is smaller. The window remains responsive while loading, rendering and exporting.
-Settings changed during an export apply to the next export. Files are never overwritten; choose a new filename.
+Settings changed during an export apply to the next export. The native save dialog asks for confirmation when a desktop PNG or JSON preset
+already exists; after confirmation, the app writes a complete temporary file and atomically replaces the destination.
 
 - **General image** starts with square pixels, smooth resizing, contain fitting and saturation 1.0.
 - **Original CRTSim** restores the public-reference defaults, including 256x224 signal resampling and saturation 1.35.
 - **Original / CRT / Side by side** compares the source with the rendered tube. Comparison is not geometrically aligned because the CRT bends the image.
 - **Fast / Balanced / Export resolution** changes preview canvas resolution only. Use Export resolution and turn off Fit view at 1x zoom to inspect mask sampling.
 - **Load / Save preset** uses the same version-1 JSON format as the CLI. **Undo / Redo / Reset** acts on settings, not source files or exported files.
+  `Ctrl+Z` and `Ctrl+Shift+Z` provide undo and redo shortcuts (`Command` equivalents are also accepted on macOS).
 - Signal and export size boxes accept named presets or custom `WIDTHxHEIGHT`. Resolved dimensions and crop/mask warnings are shown in the window.
 
 The original-image display is limited to a 2048-pixel thumbnail; export always uses the loaded source.
@@ -80,6 +86,16 @@ Windows uses the system file picker and normally DX12 for rendering; macOS uses 
 The window itself uses OpenGL through eframe. macOS runtime support remains provisional until tested on a real Mac.
 For Linux source-build errors about windowing libraries, install your distribution's Wayland and xkbcommon development packages
 (Debian/Ubuntu: `libwayland-dev libxkbcommon-dev libegl1-mesa-dev`; Arch: `wayland libxkbcommon`).
+
+### Graphics-card compatibility
+
+The renderer is not NVIDIA-specific. It requests no optional wgpu device features and is expected to work on AMD, Intel, NVIDIA and Apple GPUs
+when the operating system has a working Vulkan, DX12 or Metal driver. Integrated graphics should also work, although large exports and the
+experimental linear-light mode need more memory and may be slower. The adapter's maximum texture dimension is checked before rendering.
+
+CI compiles the application for Windows, Linux and macOS and executes the GPU pipeline through Linux software Vulkan. That proves the shaders
+do not depend on one vendor, but it is not a substitute for runtime tests on several physical GPUs and drivers. Older hardware without a usable
+Vulkan/DX12/Metal implementation will show a compatible-adapter error; it is not silently switched to a CPU renderer.
 
 ## Build and try
 

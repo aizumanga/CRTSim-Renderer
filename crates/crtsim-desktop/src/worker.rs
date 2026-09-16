@@ -23,13 +23,12 @@ pub enum Job {
 }
 pub enum Event {
     Progress {
-        revision: Option<u64>,
         progress: RenderProgress,
     },
     Loaded(Result<(PathBuf, RgbaImage, RgbaImage), String>),
     Preview {
         revision: u64,
-        result: Result<(RgbaImage, String, f32), String>,
+        result: Result<(RgbaImage, f32), String>,
     },
     Exported(Result<PathBuf, String>),
 }
@@ -67,14 +66,8 @@ pub fn start(
                     config,
                 } => {
                     let started = Instant::now();
-                    let result = render(&mut renderer, backends, &input, &config, |progress| {
-                        let _ = events.send(Event::Progress {
-                            revision: Some(revision),
-                            progress,
-                        });
-                        ctx.request_repaint();
-                    })
-                    .map(|(im, adapter)| (im, adapter, started.elapsed().as_secs_f32()));
+                    let result = render(&mut renderer, backends, &input, &config, |_| {})
+                        .map(|im| (im, started.elapsed().as_secs_f32()));
                     Event::Preview { revision, result }
                 }
                 Job::Export {
@@ -84,15 +77,11 @@ pub fn start(
                 } => Event::Exported(
                     render(&mut renderer, backends, &input, &config, |mut progress| {
                         progress.fraction *= 0.9;
-                        let _ = events.send(Event::Progress {
-                            revision: None,
-                            progress,
-                        });
+                        let _ = events.send(Event::Progress { progress });
                         ctx.request_repaint();
                     })
-                    .and_then(|(im, _)| {
+                    .and_then(|im| {
                         let _ = events.send(Event::Progress {
-                            revision: None,
                             progress: RenderProgress {
                                 fraction: 0.95,
                                 stage: "Encoding and saving PNG".into(),
@@ -118,7 +107,7 @@ fn render(
     input: &RgbaImage,
     c: &Config,
     mut progress: impl FnMut(RenderProgress),
-) -> Result<(RgbaImage, String), String> {
+) -> Result<RgbaImage, String> {
     // Surface backend validation/device errors in the window, leaving settings usable.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> anyhow::Result<_> {
         if renderer.is_none() {
@@ -130,10 +119,7 @@ fn render(
         }
         let renderer = renderer.as_ref().unwrap();
         let image = renderer.render_with_progress(input, c, &mut progress)?.crt;
-        Ok((
-            image,
-            format!("{} · {:?}", renderer.adapter.name, renderer.adapter.backend),
-        ))
+        Ok(image)
     }));
     match result {
         Ok(v) => v.map_err(|e| format!("{e:#}")),

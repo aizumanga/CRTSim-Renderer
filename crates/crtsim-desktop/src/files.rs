@@ -22,8 +22,8 @@ pub fn load_preset(path: &Path, input: (u32, u32)) -> Result<Config> {
     c.output_size(input)?;
     Ok(c)
 }
-/// Publish only a complete file; never clobber an existing file, even after a dialog race.
-fn save_new(path: &Path, write: impl FnOnce(&mut std::fs::File) -> Result<()>) -> Result<()> {
+/// Publish only a complete file, atomically replacing a destination approved by the save dialog.
+fn save_atomic(path: &Path, write: impl FnOnce(&mut std::fs::File) -> Result<()>) -> Result<()> {
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -31,13 +31,9 @@ fn save_new(path: &Path, write: impl FnOnce(&mut std::fs::File) -> Result<()>) -
     let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
     write(temporary.as_file_mut())?;
     temporary.as_file_mut().sync_all()?;
-    temporary.persist_noclobber(path).map_err(|e| {
-        anyhow::anyhow!(
-            "Cannot save {}: {}. Choose a new filename; existing files are kept.",
-            path.display(),
-            e.error
-        )
-    })?;
+    temporary
+        .persist(path)
+        .map_err(|e| anyhow::anyhow!("Cannot save {}: {}", path.display(), e.error))?;
     Ok(())
 }
 pub fn save_png(path: &Path, image: RgbaImage) -> Result<()> {
@@ -46,14 +42,14 @@ pub fn save_png(path: &Path, image: RgbaImage) -> Result<()> {
             .is_some_and(|e| e.eq_ignore_ascii_case("png")),
         "Export filename must end in .png"
     );
-    save_new(path, |file| {
+    save_atomic(path, |file| {
         DynamicImage::ImageRgba8(image).write_to(file, ImageOutputFormat::Png)?;
         Ok(())
     })
 }
 pub fn save_preset(path: &Path, c: &Config) -> Result<()> {
     c.validate()?;
-    save_new(path, |f| {
+    save_atomic(path, |f| {
         f.write_all(serde_json::to_string_pretty(c)?.as_bytes())?;
         Ok(())
     })
@@ -63,18 +59,18 @@ pub fn save_preset(path: &Path, c: &Config) -> Result<()> {
 mod tests {
     use super::*;
     #[test]
-    fn preset_roundtrip_and_exports_never_overwrite() {
+    fn preset_and_png_saves_atomically_replace_existing_files() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("preset.json");
         let c = crate::model::general();
         save_preset(&path, &c).unwrap();
         assert_eq!(load_preset(&path, (1216, 832)).unwrap(), c);
-        assert!(save_preset(&path, &Config::default()).is_err());
-        assert_eq!(load_preset(&path, (1216, 832)).unwrap(), c);
+        save_preset(&path, &Config::default()).unwrap();
+        assert_eq!(load_preset(&path, (1216, 832)).unwrap(), Config::default());
         let png = dir.path().join("image.png");
         let src = config::test_card();
         save_png(&png, src.clone()).unwrap();
-        assert!(save_png(&png, RgbaImage::new(1, 1)).is_err());
-        assert_eq!(load_image(&png).unwrap(), src);
+        save_png(&png, RgbaImage::new(1, 1)).unwrap();
+        assert_eq!(load_image(&png).unwrap(), RgbaImage::new(1, 1));
     }
 }

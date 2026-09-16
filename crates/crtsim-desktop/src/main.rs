@@ -36,7 +36,6 @@ struct App {
     gallery_entries: Vec<gallery::Entry>,
     gallery_warnings: Vec<String>,
     gallery_name: String,
-    preview_progress: Option<RenderProgress>,
     export_progress: Option<RenderProgress>,
     smoke_welcome: bool,
     smoke_gallery: bool,
@@ -66,7 +65,6 @@ struct App {
     status: String,
     error: Option<String>,
     preview_error: Option<String>,
-    adapter: String,
     smoke: Option<PathBuf>,
     smoke_requested: bool,
     started: Instant,
@@ -134,7 +132,6 @@ impl App {
             gallery_entries,
             gallery_warnings,
             gallery_name: String::new(),
-            preview_progress: None,
             export_progress: None,
             smoke_welcome: false,
             smoke_gallery: false,
@@ -164,7 +161,6 @@ impl App {
             status: "Preparing preview…".into(),
             error: storage_error,
             preview_error: None,
-            adapter: String::new(),
             smoke,
             smoke_requested: false,
             started: Instant::now(),
@@ -172,7 +168,6 @@ impl App {
     }
 
     fn changed(&mut self) {
-        self.preview_progress = None;
         self.revision += 1;
         self.dirty = true;
         self.changed_at = Instant::now();
@@ -224,13 +219,6 @@ impl App {
         }
     }
     fn export(&mut self, path: PathBuf) {
-        if path.exists() {
-            self.error = Some(
-                "That file already exists. Choose a new filename; exports never overwrite files."
-                    .into(),
-            );
-            return;
-        }
         if let Err(e) = model::preview_config(&self.config, self.input.dimensions(), None) {
             self.error = Some(format!("{e:#}"));
             return;
@@ -296,11 +284,10 @@ impl App {
         }
         while let Ok(event) = self.events.try_recv() {
             match event {
-                Event::Progress { revision, progress } => match revision {
-                    Some(id) if id == self.revision => self.preview_progress = Some(progress),
-                    None if self.exporting => self.export_progress = Some(progress),
-                    _ => {}
-                },
+                Event::Progress { progress } if self.exporting => {
+                    self.export_progress = Some(progress)
+                }
+                Event::Progress { .. } => {}
                 Event::Loaded(result) => {
                     self.loading = false;
                     match result {
@@ -322,18 +309,16 @@ impl App {
                     }
                 }
                 Event::Preview { revision, result } => {
-                    self.preview_progress = None;
                     self.rendering = false;
                     if revision != self.revision {
                         continue;
                     }
                     match result {
-                        Ok((im, adapter, seconds)) => {
+                        Ok((im, seconds)) => {
                             let max_texture =
                                 ctx.input(|i| i.max_texture_side).min(u32::MAX as usize) as u32;
                             self.rendered = Some(texture(ctx, "crt", &im, max_texture));
                             self.rendered_revision = Some(revision);
-                            self.adapter = adapter;
                             if !self.exporting {
                                 self.status = format!(
                                     "Preview {} × {} · {:.2}s",
@@ -391,9 +376,6 @@ impl App {
                 self.refresh_gallery();
                 self.show_gallery = true;
             }
-            if ui.button("Credits").clicked() {
-                self.show_credits = true;
-            }
             if ui
                 .add_enabled(enabled, egui::Button::new("Open image…"))
                 .clicked()
@@ -428,6 +410,9 @@ impl App {
             {
                 self.dialog(Dialog::Export, ctx);
             }
+            if ui.button("Credits").clicked() {
+                self.show_credits = true;
+            }
         });
     }
     fn settings(&mut self, ui: &mut egui::Ui) {
@@ -439,13 +424,17 @@ impl App {
             self.input.height()
         ));
         ui.horizontal(|ui| {
-            if ui.button("Undo").clicked() {
+            if ui.button("Undo").on_hover_text("Ctrl+Z").clicked() {
                 if let Some(c) = self.history.undo(&self.config) {
                     self.config = c;
                     self.changed();
                 }
             }
-            if ui.button("Redo").clicked() {
+            if ui
+                .button("Redo")
+                .on_hover_text("Ctrl+Shift+Z")
+                .clicked()
+            {
                 if let Some(c) = self.history.redo(&self.config) {
                     self.config = c;
                     self.changed();
@@ -804,6 +793,10 @@ impl App {
             ui.hyperlink_to("J. Kyle Pittman on itch.io", gallery::ITCH);
             ui.hyperlink_to("Minor Key Games on Steam", gallery::STEAM);
         });
+        ui.hyperlink_to(
+            "Read: CRT Simulation in Super Win the Game",
+            gallery::ARTICLE,
+        );
         ui.separator();
         ui.small("Renderer port and interface: CRTSim-Renderer contributors, with AI assistance. Built with Rust, wgpu, egui/eframe, image and other open-source libraries; see THIRD_PARTY_NOTICES.md in the repository.");
     }
@@ -866,6 +859,42 @@ fn show_image(ui: &mut egui::Ui, im: &TextureHandle, available: egui::Vec2, fit:
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.receive(ctx);
+        if !self.dialog_open && !self.show_welcome {
+            let mut ctrl_shift = egui::Modifiers::CTRL;
+            ctrl_shift.shift = true;
+            let mut command_shift = egui::Modifiers::COMMAND;
+            command_shift.shift = true;
+            let redo = ctx.input_mut(|i| {
+                i.consume_shortcut(&egui::KeyboardShortcut::new(
+                    ctrl_shift,
+                    egui::Key::Z,
+                )) || i.consume_shortcut(&egui::KeyboardShortcut::new(
+                    command_shift,
+                    egui::Key::Z,
+                ))
+            });
+            let undo = !redo
+                && ctx.input_mut(|i| {
+                    i.consume_shortcut(&egui::KeyboardShortcut::new(
+                        egui::Modifiers::CTRL,
+                        egui::Key::Z,
+                    )) || i.consume_shortcut(&egui::KeyboardShortcut::new(
+                        egui::Modifiers::COMMAND,
+                        egui::Key::Z,
+                    ))
+                });
+            if redo {
+                if let Some(c) = self.history.redo(&self.config) {
+                    self.config = c;
+                    self.changed();
+                }
+            } else if undo {
+                if let Some(c) = self.history.undo(&self.config) {
+                    self.config = c;
+                    self.changed();
+                }
+            }
+        }
         if !self.loading && !self.dialog_open && !self.show_welcome {
             let dropped = ctx.input(|i| i.raw.dropped_files.first().and_then(|f| f.path.clone()));
             if let Some(path) = dropped {
@@ -878,20 +907,12 @@ impl eframe::App for App {
         });
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
             ui.label(&self.status);
-            for (name, progress) in [
-                ("Preview", &self.preview_progress),
-                ("Export", &self.export_progress),
-            ] {
-                if let Some(p) = progress {
-                    ui.add(
-                        egui::ProgressBar::new(p.fraction)
-                            .text(format!("{name}: {} — {:.0}%", p.stage, p.fraction * 100.))
-                            .animate(true),
-                    );
-                }
-            }
-            if !self.adapter.is_empty() {
-                ui.small(&self.adapter);
+            if let Some(p) = &self.export_progress {
+                ui.add(
+                    egui::ProgressBar::new(p.fraction)
+                        .text(format!("Export: {} — {:.0}%", p.stage, p.fraction * 100.))
+                        .animate(true),
+                );
             }
             for error in [self.error.clone(), self.preview_error.clone()]
                 .into_iter()
@@ -1049,7 +1070,7 @@ mod tests {
         app.changed();
         send.send(Event::Preview {
             revision: 0,
-            result: Ok((config::test_card(), "obsolete".into(), 0.1)),
+            result: Ok((config::test_card(), 0.1)),
         })
         .unwrap();
         app.receive(&ctx);
@@ -1060,12 +1081,11 @@ mod tests {
             .unwrap();
         send.send(Event::Preview {
             revision: app.revision,
-            result: Ok((config::test_card(), "current".into(), 0.1)),
+            result: Ok((config::test_card(), 0.1)),
         })
         .unwrap();
         app.receive(&ctx);
         assert_eq!(app.rendered_revision, Some(app.revision));
-        assert_eq!(app.adapter, "current");
         assert_eq!(app.error.as_deref(), Some("Cannot decode selected file"));
     }
 

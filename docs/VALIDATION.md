@@ -13,7 +13,7 @@ Native file dialogs, real GPU performance and cross-driver visual equivalence re
 ## Phase 1 desktop checks
 
 Five desktop tests cover aspect-preserving preview resolution without changing signal dimensions,
-settings undo/redo, JSON preset round-trips, PNG/preset overwrite protection, rejection of stale preview results,
+settings undo/redo, JSON preset round-trips, atomic PNG/preset replacement, rejection of stale preview results,
 and export snapshots preserving the original source and full output resolution while settings change.
 The stale-result test also checks that a successful preview does not erase an image-loading error.
 The existing six core tests and upstream asset hashes remain applicable. Local tests, formatting and strict Clippy pass.

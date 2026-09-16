@@ -6,6 +6,8 @@ pub const DISCLAIMER: &str = "This project is what some would call \"vibe-coded 
 pub const SUPPORT: &str = "Please support J. Kyle Pittman and Minor Key Games: buy and play their games on itch.io and Steam.";
 pub const ITCH: &str = "https://piratehearts.itch.io/";
 pub const STEAM: &str = "https://store.steampowered.com/developer/MinorKeyGames";
+pub const ARTICLE: &str =
+    "https://www.gamedeveloper.com/programming/crt-simulation-in-super-win-the-game";
 
 #[derive(Clone)]
 pub struct Entry {

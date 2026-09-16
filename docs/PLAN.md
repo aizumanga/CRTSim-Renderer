@@ -44,7 +44,8 @@ Reference screenshots from the commercial game are not golden test data.
 Native eframe desktop preview uses the same core. Image loading, rendering and PNG export run on a background worker.
 Only one preview can be in flight; revision numbers reject stale results and the next request uses the latest settings.
 Preview requests are debounced and wait until a slider drag finishes. Preview resolution is independent of export resolution.
-Exports capture the image and settings when the file dialog completes and publish complete PNGs without overwriting files.
+Exports capture the image and settings when the file dialog completes. After the native save dialog handles overwrite confirmation,
+the app publishes a complete PNG by atomic replacement.
 
 Implemented controls include before/after side-by-side views, zoom, named/custom resolutions, fitting, filtering, pixel aspect,
 all existing shader parameters, temporal warm-up, phase selection, shared JSON presets and settings undo/redo/reset.
@@ -54,9 +55,10 @@ This phase does not promise continuous real-time frame rates, cancellable GPU su
 
 ## Phase 2: still-image expansion and polish
 
-- First-launch acknowledgement and permanent credits place J. Kyle Pittman's original work first, with the requested honest AI-assisted-project wording and game-store links.
+- First-launch acknowledgement and permanent credits place J. Kyle Pittman's original work first, with the requested honest AI-assisted-project wording, game-store links and technical-article link.
 - Included presets and personal JSON presets stored outside the checkout; current settings can be saved directly into the gallery.
-- Progress based on completed warm-up batches plus surface/readback/save stages, independently labeled for previews and exports.
+- Export-only progress based on completed warm-up batches plus surface/readback/save stages; live preview changes do not show a progress bar.
+- Settings undo/redo buttons plus `Ctrl+Z` and `Ctrl+Shift+Z` shortcuts; the renderer's adapter name is not displayed in the application window.
 - Optional mipmapped mask filtering; legacy sampling is retained for old/reference presets.
 - Optional YIQ hue/chroma grade, explicitly not the unpublished NES LUT or a complete NTSC decoder.
 - Experimental linear-light glass/lighting/bloom with float intermediates and SDR output. Composite/history stays in gamma space.
