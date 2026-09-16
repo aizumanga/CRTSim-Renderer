@@ -109,7 +109,7 @@ fn find_text_chunk<'a>(bytes: &'a [u8], keyword: &[u8]) -> Option<&'a [u8]> {
     if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         return None;
     }
-    let mut offset = 8;
+    let mut offset: usize = 8;
     while offset.checked_add(12)? <= bytes.len() {
         let length = u32::from_be_bytes(bytes[offset..offset + 4].try_into().ok()?) as usize;
         let data_start = offset + 8;
