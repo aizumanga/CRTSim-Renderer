@@ -248,15 +248,21 @@ impl App {
             if let Some(mut path) = path {
                 match kind {
                     Dialog::Image => self.load(path),
-                    Dialog::ImportPreset => match files::load_preset_from_image(&path, self.input.dimensions()) {
-                        Ok(c) => {
-                            self.gallery_name = path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
-                            self.replace_config(c);
-                            self.status = format!("Imported preset from {}", path.display());
-                            self.error = None;
+                    Dialog::ImportPreset => {
+                        match files::load_preset_from_image(&path, self.input.dimensions()) {
+                            Ok(c) => {
+                                self.gallery_name = path
+                                    .file_stem()
+                                    .unwrap_or_default()
+                                    .to_string_lossy()
+                                    .into_owned();
+                                self.replace_config(c);
+                                self.status = format!("Imported preset from {}", path.display());
+                                self.error = None;
+                            }
+                            Err(e) => self.error = Some(format!("Cannot import preset: {e:#}")),
                         }
-                        Err(e) => self.error = Some(format!("Cannot import preset: {e:#}")),
-                    },
+                    }
                     Dialog::LoadPreset => {
                         match files::load_preset(&path, self.input.dimensions()) {
                             Ok(c) => {
