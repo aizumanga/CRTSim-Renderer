@@ -52,6 +52,7 @@ struct App {
     dialog_receive: mpsc::Receiver<(Dialog, Option<PathBuf>)>,
     status: String,
     error: Option<String>,
+    preview_error: Option<String>,
     adapter: String,
     smoke: Option<PathBuf>,
     smoke_requested: bool,
@@ -122,6 +123,7 @@ impl App {
             dialog_receive,
             status: "Preparing preview…".into(),
             error: None,
+            preview_error: None,
             adapter: String::new(),
             smoke,
             smoke_requested: false,
@@ -284,9 +286,9 @@ impl App {
                                     seconds
                                 );
                             }
-                            self.error = None;
+                            self.preview_error = None;
                         }
-                        Err(e) => self.error = Some(e),
+                        Err(e) => self.preview_error = Some(e),
                     }
                 }
                 Event::Exported(result) => {
@@ -317,7 +319,7 @@ impl App {
                     config,
                 });
             }
-            Err(e) => self.error = Some(format!("Cannot preview: {e:#}")),
+            Err(e) => self.preview_error = Some(format!("Cannot preview: {e:#}")),
         }
     }
     fn toolbar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -676,11 +678,15 @@ impl eframe::App for App {
             if !self.adapter.is_empty() {
                 ui.small(&self.adapter);
             }
-            if let Some(error) = self.error.clone() {
+            for error in [self.error.clone(), self.preview_error.clone()]
+                .into_iter()
+                .flatten()
+            {
                 ui.horizontal_wrapped(|ui| {
                     ui.colored_label(Color32::LIGHT_RED, error);
                     if ui.button("Dismiss").clicked() {
                         self.error = None;
+                        self.preview_error = None;
                     }
                 });
             }
@@ -714,7 +720,10 @@ impl eframe::App for App {
         // Reproducible CI screenshot after an actual preview, without platform-specific mouse coordinates.
         if let Some(ref path) = self.smoke {
             if self.started.elapsed() > Duration::from_secs(120) {
-                eprintln!("Desktop smoke test timed out: {:?}", self.error);
+                eprintln!(
+                    "Desktop smoke test timed out: {:?}; {:?}",
+                    self.error, self.preview_error
+                );
                 std::process::exit(1);
             }
             if self.rendered_revision == Some(self.revision) && !self.smoke_requested {
@@ -813,6 +822,8 @@ mod tests {
         assert!(app.rendered.is_none());
         assert!(!app.rendering);
         assert!(app.dirty);
+        send.send(Event::Loaded(Err("Cannot decode selected file".into())))
+            .unwrap();
         send.send(Event::Preview {
             revision: app.revision,
             result: Ok((config::test_card(), "current".into(), 0.1)),
@@ -821,6 +832,7 @@ mod tests {
         app.receive(&ctx);
         assert_eq!(app.rendered_revision, Some(app.revision));
         assert_eq!(app.adapter, "current");
+        assert_eq!(app.error.as_deref(), Some("Cannot decode selected file"));
     }
 
     #[test]
