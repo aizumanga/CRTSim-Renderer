@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/crtsim-core", "crates/crtsim-cli"]
+members = ["crates/crtsim-core", "crates/crtsim-cli", "crates/crtsim-desktop"]
 resolver = "2"
 
 [workspace.package]
