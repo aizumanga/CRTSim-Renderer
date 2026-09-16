@@ -247,22 +247,12 @@ impl App {
                 Event::Loaded(result) => {
                     self.loading = false;
                     match result {
-                        Ok((path, input)) => {
+                        Ok((path, input, thumb)) => {
                             self.source_name = path
                                 .file_name()
                                 .unwrap_or_default()
                                 .to_string_lossy()
                                 .into_owned();
-                            // Before-view composites alpha onto the same black background as the renderer.
-                            let mut thumb = image::DynamicImage::ImageRgba8(input.clone())
-                                .thumbnail(2048, 2048)
-                                .to_rgba8();
-                            for p in thumb.pixels_mut() {
-                                for i in 0..3 {
-                                    p[i] = (u16::from(p[i]) * u16::from(p[3]) / 255) as u8;
-                                }
-                                p[3] = 255;
-                            }
                             self.original = texture(ctx, "original", &thumb, 2048);
                             self.input = Arc::new(input);
                             self.rendered = None;
@@ -643,6 +633,7 @@ fn slider(ui: &mut egui::Ui, label: &str, value: &mut f32, range: std::ops::Rang
     ui.add(
         egui::Slider::new(value, range)
             .logarithmic(logarithmic)
+            .clamp_to_range(false)
             .text(label),
     );
 }
@@ -705,13 +696,19 @@ impl eframe::App for App {
             });
         egui::CentralPanel::default().show(ctx, |ui| self.preview(ui));
         if self.dirty
-            && self.live
             && self.changed_at.elapsed() >= Duration::from_millis(180)
             && !ctx.input(|i| i.pointer.any_down())
         {
-            self.request_preview();
+            self.history.commit(&self.config);
+            if self.live {
+                self.request_preview();
+            }
         }
-        if (self.dirty && self.live) || self.rendering || self.loading || self.exporting {
+        if (self.dirty && (self.live || self.changed_at.elapsed() < Duration::from_millis(180)))
+            || self.rendering
+            || self.loading
+            || self.exporting
+        {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
         // Reproducible CI screenshot after an actual preview, without platform-specific mouse coordinates.
