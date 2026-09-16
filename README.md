@@ -44,6 +44,7 @@ The CRT mask can look different at different preview sizes; exports retain the r
 Preset changes are kept in memory until saved; the app does not silently write settings on exit.
 
 Linux needs working OpenGL for the window and Vulkan for the CRT renderer, plus an X11 or Wayland session.
+X11 also needs the xkbcommon X11 library (`libxkbcommon-x11` on Arch, `libxkbcommon-x11-0` on Debian/Ubuntu).
 The native file picker uses the desktop portal. On Arch/KDE, ensure `xdg-desktop-portal` and `xdg-desktop-portal-kde`
 are installed and working in your logged-in desktop session. Drag-and-drop or passing an image path also works:
 
