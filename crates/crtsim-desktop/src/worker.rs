@@ -1,5 +1,5 @@
 use crate::files;
-use crtsim_core::{config::Config, Renderer};
+use crtsim_core::{config::Config, RenderProgress, Renderer};
 use eframe::egui;
 use image::RgbaImage;
 use std::{
@@ -22,10 +22,13 @@ pub enum Job {
     },
 }
 pub enum Event {
+    Progress {
+        progress: RenderProgress,
+    },
     Loaded(Result<(PathBuf, RgbaImage, RgbaImage), String>),
     Preview {
         revision: u64,
-        result: Result<(RgbaImage, String, f32), String>,
+        result: Result<(RgbaImage, f32), String>,
     },
     Exported(Result<PathBuf, String>),
 }
@@ -63,8 +66,8 @@ pub fn start(
                     config,
                 } => {
                     let started = Instant::now();
-                    let result = render(&mut renderer, backends, &input, &config)
-                        .map(|(im, adapter)| (im, adapter, started.elapsed().as_secs_f32()));
+                    let result = render(&mut renderer, backends, &input, &config, |_| {})
+                        .map(|im| (im, started.elapsed().as_secs_f32()));
                     Event::Preview { revision, result }
                 }
                 Job::Export {
@@ -72,11 +75,22 @@ pub fn start(
                     config,
                     path,
                 } => Event::Exported(
-                    render(&mut renderer, backends, &input, &config)
-                        .and_then(|(im, _)| {
-                            files::save_png(&path, im).map_err(|e| format!("{e:#}"))
-                        })
-                        .map(|_| path),
+                    render(&mut renderer, backends, &input, &config, |mut progress| {
+                        progress.fraction *= 0.9;
+                        let _ = events.send(Event::Progress { progress });
+                        ctx.request_repaint();
+                    })
+                    .and_then(|im| {
+                        let _ = events.send(Event::Progress {
+                            progress: RenderProgress {
+                                fraction: 0.95,
+                                stage: "Encoding and saving PNG".into(),
+                            },
+                        });
+                        ctx.request_repaint();
+                        files::save_png(&path, im, Some(&config)).map_err(|e| format!("{e:#}"))
+                    })
+                    .map(|_| path),
                 ),
             };
             if events.send(event).is_err() {
@@ -92,18 +106,20 @@ fn render(
     backends: wgpu::Backends,
     input: &RgbaImage,
     c: &Config,
-) -> Result<(RgbaImage, String), String> {
+    mut progress: impl FnMut(RenderProgress),
+) -> Result<RgbaImage, String> {
     // Surface backend validation/device errors in the window, leaving settings usable.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> anyhow::Result<_> {
         if renderer.is_none() {
+            progress(RenderProgress {
+                fraction: 0.,
+                stage: "Initializing graphics device".into(),
+            });
             *renderer = Some(pollster::block_on(Renderer::new(backends))?);
         }
         let renderer = renderer.as_ref().unwrap();
-        let image = renderer.render(input, c)?.crt;
-        Ok((
-            image,
-            format!("{} · {:?}", renderer.adapter.name, renderer.adapter.backend),
-        ))
+        let image = renderer.render_with_progress(input, c, &mut progress)?.crt;
+        Ok(image)
     }));
     match result {
         Ok(v) => v.map_err(|e| format!("{e:#}")),

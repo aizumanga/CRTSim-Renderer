@@ -1,8 +1,10 @@
 mod files;
+mod gallery;
 mod model;
 mod worker;
 
-use crtsim_core::config::{self, Config, Filter, Fit, Phase};
+use crtsim_core::config::{self, ColorMode, Config, Filter, Fit, Phase};
+use crtsim_core::RenderProgress;
 use eframe::egui::{self, Color32, TextureHandle};
 use image::RgbaImage;
 use std::{
@@ -15,6 +17,7 @@ use worker::{Event, Job};
 #[derive(Clone, Copy)]
 enum Dialog {
     Image,
+    ImportPreset,
     LoadPreset,
     SavePreset,
     Export,
@@ -27,6 +30,16 @@ enum View {
 }
 
 struct App {
+    store: Option<gallery::Store>,
+    show_welcome: bool,
+    show_credits: bool,
+    show_gallery: bool,
+    gallery_entries: Vec<gallery::Entry>,
+    gallery_warnings: Vec<String>,
+    gallery_name: String,
+    export_progress: Option<RenderProgress>,
+    smoke_welcome: bool,
+    smoke_gallery: bool,
     config: Config,
     history: model::History,
     input: Arc<RgbaImage>,
@@ -53,7 +66,6 @@ struct App {
     status: String,
     error: Option<String>,
     preview_error: Option<String>,
-    adapter: String,
     smoke: Option<PathBuf>,
     smoke_requested: bool,
     started: Instant,
@@ -97,7 +109,33 @@ impl App {
         if let Some(path) = input_path {
             let _ = jobs.send(Job::Load(path));
         }
+        let (store, storage_error) = match gallery::Store::discover() {
+            Ok(s) => (Some(s), None),
+            Err(e) => (None, Some(format!("App data unavailable: {e:#}"))),
+        };
+        let show_welcome = smoke.is_none() && store.as_ref().is_none_or(|s| s.welcome_needed());
+        let mut gallery_entries = gallery::builtins();
+        let mut gallery_warnings = vec![];
+        if let Some(ref s) = store {
+            match s.scan() {
+                Ok((entries, warnings)) => {
+                    gallery_entries.extend(entries);
+                    gallery_warnings = warnings;
+                }
+                Err(e) => gallery_warnings.push(format!("{e:#}")),
+            }
+        }
         Self {
+            store,
+            show_welcome,
+            show_credits: false,
+            show_gallery: false,
+            gallery_entries,
+            gallery_warnings,
+            gallery_name: String::new(),
+            export_progress: None,
+            smoke_welcome: false,
+            smoke_gallery: false,
             history: model::History::new(config.clone()),
             config,
             input,
@@ -122,9 +160,8 @@ impl App {
             dialog_send,
             dialog_receive,
             status: "Preparing preview…".into(),
-            error: None,
+            error: storage_error,
             preview_error: None,
-            adapter: String::new(),
             smoke,
             smoke_requested: false,
             started: Instant::now(),
@@ -150,6 +187,9 @@ impl App {
             let path = match kind {
                 Dialog::Image => rfd::FileDialog::new()
                     .add_filter("Images", &["png", "jpg", "jpeg", "webp", "bmp"])
+                    .pick_file(),
+                Dialog::ImportPreset => rfd::FileDialog::new()
+                    .add_filter("Rendered PNG", &["png"])
                     .pick_file(),
                 Dialog::LoadPreset => rfd::FileDialog::new()
                     .add_filter("CRT preset", &["json"])
@@ -183,18 +223,15 @@ impl App {
         }
     }
     fn export(&mut self, path: PathBuf) {
-        if path.exists() {
-            self.error = Some(
-                "That file already exists. Choose a new filename; exports never overwrite files."
-                    .into(),
-            );
-            return;
-        }
         if let Err(e) = model::preview_config(&self.config, self.input.dimensions(), None) {
             self.error = Some(format!("{e:#}"));
             return;
         }
         self.exporting = true;
+        self.export_progress = Some(RenderProgress {
+            fraction: 0.,
+            stage: "Queued for export".into(),
+        });
         self.status = format!(
             "Exporting {}… Settings are captured for this export.",
             path.display()
@@ -211,9 +248,29 @@ impl App {
             if let Some(mut path) = path {
                 match kind {
                     Dialog::Image => self.load(path),
+                    Dialog::ImportPreset => {
+                        match files::load_preset_from_image(&path, self.input.dimensions()) {
+                            Ok(c) => {
+                                self.gallery_name = path
+                                    .file_stem()
+                                    .unwrap_or_default()
+                                    .to_string_lossy()
+                                    .into_owned();
+                                self.replace_config(c);
+                                self.status = format!("Imported preset from {}", path.display());
+                                self.error = None;
+                            }
+                            Err(e) => self.error = Some(format!("Cannot import preset: {e:#}")),
+                        }
+                    }
                     Dialog::LoadPreset => {
                         match files::load_preset(&path, self.input.dimensions()) {
                             Ok(c) => {
+                                self.gallery_name = path
+                                    .file_stem()
+                                    .unwrap_or_default()
+                                    .to_string_lossy()
+                                    .into_owned();
                                 self.replace_config(c);
                                 self.status = format!("Loaded preset {}", path.display());
                                 self.error = None;
@@ -246,6 +303,10 @@ impl App {
         }
         while let Ok(event) = self.events.try_recv() {
             match event {
+                Event::Progress { progress } if self.exporting => {
+                    self.export_progress = Some(progress)
+                }
+                Event::Progress { .. } => {}
                 Event::Loaded(result) => {
                     self.loading = false;
                     match result {
@@ -272,12 +333,11 @@ impl App {
                         continue;
                     }
                     match result {
-                        Ok((im, adapter, seconds)) => {
+                        Ok((im, seconds)) => {
                             let max_texture =
                                 ctx.input(|i| i.max_texture_side).min(u32::MAX as usize) as u32;
                             self.rendered = Some(texture(ctx, "crt", &im, max_texture));
                             self.rendered_revision = Some(revision);
-                            self.adapter = adapter;
                             if !self.exporting {
                                 self.status = format!(
                                     "Preview {} × {} · {:.2}s",
@@ -292,6 +352,7 @@ impl App {
                     }
                 }
                 Event::Exported(result) => {
+                    self.export_progress = None;
                     self.exporting = false;
                     match result {
                         Ok(path) => {
@@ -328,6 +389,13 @@ impl App {
             ui.separator();
             let enabled = !self.dialog_open && !self.loading;
             if ui
+                .add_enabled(enabled, egui::Button::new("Preset gallery…"))
+                .clicked()
+            {
+                self.refresh_gallery();
+                self.show_gallery = true;
+            }
+            if ui
                 .add_enabled(enabled, egui::Button::new("Open image…"))
                 .clicked()
             {
@@ -342,6 +410,12 @@ impl App {
                 self.source_name = "Built-in test card".into();
                 self.rendered = None;
                 self.changed();
+            }
+            if ui
+                .add_enabled(enabled, egui::Button::new("Import preset from image…"))
+                .clicked()
+            {
+                self.dialog(Dialog::ImportPreset, ctx);
             }
             if ui
                 .add_enabled(enabled, egui::Button::new("Load preset…"))
@@ -361,6 +435,9 @@ impl App {
             {
                 self.dialog(Dialog::Export, ctx);
             }
+            if ui.button("Credits").clicked() {
+                self.show_credits = true;
+            }
         });
     }
     fn settings(&mut self, ui: &mut egui::Ui) {
@@ -372,13 +449,13 @@ impl App {
             self.input.height()
         ));
         ui.horizontal(|ui| {
-            if ui.button("Undo").clicked() {
+            if ui.button("Undo").on_hover_text("Ctrl+Z").clicked() {
                 if let Some(c) = self.history.undo(&self.config) {
                     self.config = c;
                     self.changed();
                 }
             }
-            if ui.button("Redo").clicked() {
+            if ui.button("Redo").on_hover_text("Ctrl+Shift+Z").clicked() {
                 if let Some(c) = self.history.redo(&self.config) {
                     self.config = c;
                     self.changed();
@@ -401,6 +478,32 @@ impl App {
             }
         });
         let before = self.config.clone();
+        egui::ComboBox::from_label("Color processing")
+            .selected_text(match self.config.color_mode {
+                ColorMode::Reference => "Original gamma",
+                ColorMode::LinearLight => "Linear light (experimental)",
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(
+                    &mut self.config.color_mode,
+                    ColorMode::Reference,
+                    "Original gamma",
+                );
+                ui.selectable_value(
+                    &mut self.config.color_mode,
+                    ColorMode::LinearLight,
+                    "Linear light (experimental)",
+                );
+            });
+        if self.config.color_mode == ColorMode::LinearLight {
+            ui.small("Linear-light glass, lighting and bloom; SDR output. The analog signal still uses the original gamma-space model.");
+        }
+        egui::CollapsingHeader::new("Optional color grade").show(ui, |ui| {
+            slider(ui, "Hue (degrees)", &mut self.config.hue, -180.0..=180.);
+            slider(ui, "Chroma", &mut self.config.chroma, 0.0..=2.);
+            ui.small("YIQ hue/chroma adjustment. This is an optional grade, not the game's unpublished NES palette LUT or a complete NTSC decoder.");
+        });
+        ui.checkbox(&mut self.config.mask_antialias, "Filter mask when shrinking").on_hover_text("Mipmapped mask filtering reduces moiré during minification. Turn off for Phase 0/1 reference sampling.");
         resolution(
             ui,
             "Signal",
@@ -630,6 +733,118 @@ impl App {
     }
 }
 
+impl App {
+    fn refresh_gallery(&mut self) {
+        self.gallery_entries = gallery::builtins();
+        self.gallery_warnings.clear();
+        if let Some(ref store) = self.store {
+            match store.scan() {
+                Ok((entries, warnings)) => {
+                    self.gallery_entries.extend(entries);
+                    self.gallery_warnings = warnings;
+                }
+                Err(e) => self.gallery_warnings.push(format!("{e:#}")),
+            }
+        }
+    }
+    fn gallery_window(&mut self, ctx: &egui::Context) {
+        if !self.show_gallery || self.show_welcome {
+            return;
+        }
+        let mut open = true;
+        let mut selected = None;
+        egui::Window::new("Preset gallery").open(&mut open).default_width(600.).default_height(500.).show(ctx, |ui| {
+            ui.add_enabled_ui(!self.dialog_open, |ui| {
+                ui.label("Save your current settings here to find them again after restarting the app.");
+                ui.horizontal(|ui| {
+                    ui.label("Name"); ui.text_edit_singleline(&mut self.gallery_name);
+                    if ui.add_enabled(self.store.is_some(), egui::Button::new("Save current")).clicked() {
+                        let result = self.store.as_ref().unwrap().save(&self.gallery_name, &self.config, self.input.dimensions());
+                        match result {
+                            Ok(()) => { self.status = format!("Saved '{}' to My presets",self.gallery_name); self.error = None; self.refresh_gallery(); }
+                            Err(e) => self.error = Some(format!("Cannot save gallery preset: {e:#}")),
+                        }
+                    }
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("Load JSON…").clicked() { self.dialog(Dialog::LoadPreset,ctx); }
+                    if ui.button("Refresh gallery").clicked() { self.refresh_gallery(); }
+                });
+                ui.small("Load an existing JSON, then choose Save current to add it to My presets. Existing names are never overwritten.");
+                if let Some(ref store) = self.store { ui.small(format!("Personal presets: {}",store.root.join("presets").display())); }
+                else { ui.colored_label(Color32::YELLOW,"Personal storage is unavailable. JSON import/export and built-in presets still work."); }
+                if let Some(ref error) = self.error { ui.colored_label(Color32::LIGHT_RED,error); }
+                if !self.gallery_warnings.is_empty() { egui::CollapsingHeader::new("Skipped preset files").show(ui,|ui| { for warning in &self.gallery_warnings { ui.label(warning); } }); }
+                ui.separator();
+                egui::ScrollArea::vertical().max_height(360.).show(ui, |ui| {
+                    for user in [false,true] {
+                        ui.heading(if user { "My presets" } else { "Included presets" });
+                        let mut count = 0;
+                        for entry in self.gallery_entries.iter().filter(|e| e.user == user) {
+                            count += 1;
+                            ui.group(|ui| {
+                                ui.horizontal(|ui| {
+                                    if ui.selectable_label(self.config == entry.config, &entry.name).clicked() { selected = Some(entry.config.clone()); }
+                                    ui.small(&entry.description);
+                                });
+                            });
+                        }
+                        if count == 0 { ui.label("No personal presets yet. Adjust an image and save your first look above."); }
+                    }
+                });
+            });
+        });
+        self.show_gallery = open;
+        if let Some(config) = selected {
+            self.replace_config(config);
+        }
+    }
+    fn credit_text(ui: &mut egui::Ui) {
+        ui.label(gallery::DISCLAIMER);
+        ui.separator();
+        ui.strong("Original CRTSim: J. Kyle Pittman");
+        ui.label("The CRT simulation and original shaders, textures and screen/frame meshes are provided under CC0. Thank you for sharing them publicly.");
+        ui.hyperlink_to(
+            "Original CRTSim source",
+            "https://github.com/MinorKeyGames/CRTSim",
+        );
+        ui.separator();
+        ui.label(gallery::SUPPORT);
+        ui.horizontal(|ui| {
+            ui.hyperlink_to("J. Kyle Pittman on itch.io", gallery::ITCH);
+            ui.hyperlink_to("Minor Key Games on Steam", gallery::STEAM);
+        });
+        ui.hyperlink_to(
+            "Read: CRT Simulation in Super Win the Game",
+            gallery::ARTICLE,
+        );
+        ui.separator();
+        ui.small("Renderer port and interface: CRTSim-Renderer contributors, with AI assistance. Built with Rust, wgpu, egui/eframe, image and other open-source libraries; see THIRD_PARTY_NOTICES.md in the repository.");
+    }
+    fn credits_window(&mut self, ctx: &egui::Context) {
+        if self.show_welcome {
+            egui::Window::new("Welcome to CRTSim Renderer").anchor(egui::Align2::CENTER_CENTER,egui::Vec2::ZERO)
+                .collapsible(false).resizable(false).default_width(560.).show(ctx, |ui| {
+                    Self::credit_text(ui);
+                    ui.add_space(12.);
+                    if ui.button("Got it — continue").clicked() {
+                        if let Some(ref store) = self.store {
+                            if let Err(e) = store.acknowledge() { self.error = Some(format!("Could not remember the welcome message: {e:#}. It may appear next time.")); }
+                        }
+                        self.show_welcome = false;
+                    }
+                });
+        } else if self.show_credits {
+            let mut open = true;
+            egui::Window::new("Credits & support")
+                .open(&mut open)
+                .default_width(560.)
+                .show(ctx, Self::credit_text);
+            self.show_credits = open;
+        }
+    }
+}
+
 fn slider(ui: &mut egui::Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>) {
     let logarithmic = *range.start() >= 1. && *range.end() >= 200.;
     ui.add(
@@ -665,18 +880,55 @@ fn show_image(ui: &mut egui::Ui, im: &TextureHandle, available: egui::Vec2, fit:
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.receive(ctx);
-        if !self.loading && !self.dialog_open {
+        if !self.dialog_open && !self.show_welcome {
+            let mut ctrl_shift = egui::Modifiers::CTRL;
+            ctrl_shift.shift = true;
+            let mut command_shift = egui::Modifiers::COMMAND;
+            command_shift.shift = true;
+            let redo = ctx.input_mut(|i| {
+                i.consume_shortcut(&egui::KeyboardShortcut::new(ctrl_shift, egui::Key::Z))
+                    || i.consume_shortcut(&egui::KeyboardShortcut::new(command_shift, egui::Key::Z))
+            });
+            let undo = !redo
+                && ctx.input_mut(|i| {
+                    i.consume_shortcut(&egui::KeyboardShortcut::new(
+                        egui::Modifiers::CTRL,
+                        egui::Key::Z,
+                    )) || i.consume_shortcut(&egui::KeyboardShortcut::new(
+                        egui::Modifiers::COMMAND,
+                        egui::Key::Z,
+                    ))
+                });
+            if redo {
+                if let Some(c) = self.history.redo(&self.config) {
+                    self.config = c;
+                    self.changed();
+                }
+            } else if undo {
+                if let Some(c) = self.history.undo(&self.config) {
+                    self.config = c;
+                    self.changed();
+                }
+            }
+        }
+        if !self.loading && !self.dialog_open && !self.show_welcome {
             let dropped = ctx.input(|i| i.raw.dropped_files.first().and_then(|f| f.path.clone()));
             if let Some(path) = dropped {
                 self.load(path);
             }
         }
         // A modal file dialog freezes edits so its eventual result uses the displayed settings.
-        egui::TopBottomPanel::top("toolbar").show(ctx, |ui| self.toolbar(ui, ctx));
+        egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
+            ui.add_enabled_ui(!self.show_welcome, |ui| self.toolbar(ui, ctx));
+        });
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
             ui.label(&self.status);
-            if !self.adapter.is_empty() {
-                ui.small(&self.adapter);
+            if let Some(p) = &self.export_progress {
+                ui.add(
+                    egui::ProgressBar::new(p.fraction)
+                        .text(format!("Export: {} — {:.0}%", p.stage, p.fraction * 100.))
+                        .animate(true),
+                );
             }
             for error in [self.error.clone(), self.preview_error.clone()]
                 .into_iter()
@@ -696,17 +948,21 @@ impl eframe::App for App {
             .min_width(300.)
             .resizable(true)
             .show(ctx, |ui| {
-                ui.add_enabled_ui(!self.dialog_open, |ui| {
+                ui.add_enabled_ui(!self.dialog_open && !self.show_welcome, |ui| {
                     egui::ScrollArea::vertical().show(ui, |ui| self.settings(ui));
                 });
             });
-        egui::CentralPanel::default().show(ctx, |ui| self.preview(ui));
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.add_enabled_ui(!self.show_welcome, |ui| self.preview(ui));
+        });
+        self.gallery_window(ctx);
+        self.credits_window(ctx);
         if self.dirty
             && self.changed_at.elapsed() >= Duration::from_millis(180)
             && !ctx.input(|i| i.pointer.any_down())
         {
             self.history.commit(&self.config);
-            if self.live {
+            if self.live && !self.show_welcome {
                 self.request_preview();
             }
         }
@@ -726,7 +982,9 @@ impl eframe::App for App {
                 );
                 std::process::exit(1);
             }
-            if self.rendered_revision == Some(self.revision) && !self.smoke_requested {
+            if (self.smoke_welcome || self.rendered_revision == Some(self.revision))
+                && !self.smoke_requested
+            {
                 self.smoke_requested = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot);
             }
@@ -736,7 +994,7 @@ impl eframe::App for App {
                     let im =
                         RgbaImage::from_raw(image.width() as u32, image.height() as u32, bytes)
                             .unwrap();
-                    if let Err(e) = files::save_png(path, im) {
+                    if let Err(e) = files::save_png(path, im, None) {
                         eprintln!("{e:#}");
                         std::process::exit(1);
                     }
@@ -752,9 +1010,13 @@ fn main() -> eframe::Result<()> {
     let mut input = None;
     let mut smoke = None;
     let mut backends = wgpu::Backends::PRIMARY;
+    let mut smoke_welcome = false;
+    let mut smoke_gallery = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--smoke-welcome" => smoke_welcome = true,
+            "--smoke-gallery" => smoke_gallery = true,
             "--backend" => {
                 backends = match args.next().as_deref() {
                     Some("vulkan") => wgpu::Backends::VULKAN,
@@ -796,7 +1058,16 @@ fn main() -> eframe::Result<()> {
             renderer: eframe::Renderer::Glow,
             ..Default::default()
         },
-        Box::new(move |cc| Box::new(App::new(&cc.egui_ctx, backends, input, smoke))),
+        Box::new(move |cc| {
+            let mut app = App::new(&cc.egui_ctx, backends, input, smoke);
+            if app.smoke.is_some() {
+                app.smoke_welcome = smoke_welcome;
+                app.smoke_gallery = smoke_gallery;
+                app.show_welcome = smoke_welcome;
+                app.show_gallery = smoke_gallery;
+            }
+            Box::new(app)
+        }),
     )
 }
 
@@ -815,7 +1086,7 @@ mod tests {
         app.changed();
         send.send(Event::Preview {
             revision: 0,
-            result: Ok((config::test_card(), "obsolete".into(), 0.1)),
+            result: Ok((config::test_card(), 0.1)),
         })
         .unwrap();
         app.receive(&ctx);
@@ -826,12 +1097,11 @@ mod tests {
             .unwrap();
         send.send(Event::Preview {
             revision: app.revision,
-            result: Ok((config::test_card(), "current".into(), 0.1)),
+            result: Ok((config::test_card(), 0.1)),
         })
         .unwrap();
         app.receive(&ctx);
         assert_eq!(app.rendered_revision, Some(app.revision));
-        assert_eq!(app.adapter, "current");
         assert_eq!(app.error.as_deref(), Some("Cannot decode selected file"));
     }
 

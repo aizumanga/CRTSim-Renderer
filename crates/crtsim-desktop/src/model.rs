@@ -9,6 +9,7 @@ pub fn general() -> Config {
         filter: Filter::Lanczos,
         pixel_aspect: 1.,
         saturation: 1.,
+        mask_antialias: true,
         ..Config::default()
     }
 }

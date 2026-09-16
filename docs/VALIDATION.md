@@ -1,11 +1,19 @@
-# Phase 0 validation
+# Renderer validation
 
 This is a runnable prototype, not a claim of completed cross-platform visual parity.
+
+## Phase 2 checks
+
+CPU tests cover old JSON defaults, exact neutral grading, gray chroma output, gallery persistence, welcome acknowledgement,
+duplicate/path-name protection, corrupt-file isolation and all built-in configuration validation.
+The GPU test covers linear-light float targets, filtered masks and monotonic progress through 100%.
+CI captures the actual welcome window, desktop and gallery, plus linear-light and filtered-mask diagnostics.
+Native file dialogs, real GPU performance and cross-driver visual equivalence remain manual acceptance work.
 
 ## Phase 1 desktop checks
 
 Five desktop tests cover aspect-preserving preview resolution without changing signal dimensions,
-settings undo/redo, JSON preset round-trips, PNG/preset overwrite protection, rejection of stale preview results,
+settings undo/redo, JSON preset round-trips, atomic PNG/preset replacement, rejection of stale preview results,
 and export snapshots preserving the original source and full output resolution while settings change.
 The stale-result test also checks that a successful preview does not erase an image-loading error.
 The existing six core tests and upstream asset hashes remain applicable. Local tests, formatting and strict Clippy pass.
@@ -52,7 +60,7 @@ These are reproducible diagnostics, not approved golden images or a real-GPU per
 ## Remaining fidelity checks
 
 - Compare the same input against a running D3D9 upstream reference, not a compressed game video.
-- Check mask aliasing at all output sizes; this prototype samples mask mip level zero.
+- Check mask aliasing at all output/display sizes; reference mode samples mip zero, while the optional filter chooses mip levels from screen-space derivatives.
 - Check mesh projection, channel order, UV orientation and reflected corners on multiple adapters.
 - Compare Vulkan and DX12 captures of the same preset using perceptual tolerance, not exact hashes.
 - Test Metal on actual Mac hardware. A CI build alone is insufficient.
