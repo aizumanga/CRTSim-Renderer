@@ -25,6 +25,14 @@ pub enum Filter {
     Lanczos,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum ColorMode {
+    #[default]
+    Reference,
+    LinearLight,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
@@ -60,6 +68,11 @@ pub struct Config {
     pub bloom: f32,
     pub bloom_power: f32,
     pub bloom_spread: f32,
+    pub color_mode: ColorMode,
+    pub mask_antialias: bool,
+    /// Optional YIQ hue rotation, in degrees. Not the game's unpublished NES palette LUT.
+    pub hue: f32,
+    pub chroma: f32,
 }
 
 impl Default for Config {
@@ -95,6 +108,10 @@ impl Default for Config {
             bloom: 0.25,
             bloom_power: 2.,
             bloom_spread: 0.025,
+            color_mode: ColorMode::Reference,
+            mask_antialias: false,
+            hue: 0.,
+            chroma: 1.,
         }
     }
 }
@@ -138,6 +155,8 @@ impl Config {
             (self.bloom, 0., 2.),
             (self.bloom_power, 0.1, 8.),
             (self.bloom_spread, 0., 0.2),
+            (self.hue, -180., 180.),
+            (self.chroma, 0., 2.),
         ];
         for (v, min, max) in ranges {
             ensure!(
@@ -228,7 +247,29 @@ pub fn prepare(input: &RgbaImage, config: &Config) -> Result<RgbaImage> {
         Filter::Nearest => imageops::FilterType::Nearest,
         Filter::Lanczos => imageops::FilterType::Lanczos3,
     };
-    Ok(imageops::resize(&opaque, w, h, filter))
+    let mut resized = imageops::resize(&opaque, w, h, filter);
+    if config.hue != 0. || config.chroma != 1. {
+        let (sin, cos) = config.hue.to_radians().sin_cos();
+        for p in resized.pixels_mut() {
+            let [r, g, b] = [p[0] as f32 / 255., p[1] as f32 / 255., p[2] as f32 / 255.];
+            let y = 0.299 * r + 0.587 * g + 0.114 * b;
+            let i = 0.596 * r - 0.274 * g - 0.322 * b;
+            let q = 0.211 * r - 0.523 * g + 0.312 * b;
+            let ii = (i * cos - q * sin) * config.chroma;
+            let qq = (i * sin + q * cos) * config.chroma;
+            for (channel, value) in [
+                y + 0.956 * ii + 0.621 * qq,
+                y - 0.272 * ii - 0.647 * qq,
+                y - 1.106 * ii + 1.703 * qq,
+            ]
+            .iter()
+            .enumerate()
+            {
+                p[channel] = (value.clamp(0., 1.) * 255.).round() as u8;
+            }
+        }
+    }
+    Ok(resized)
 }
 
 /// Original test card, not a screenshot from a commercial game.
@@ -260,6 +301,24 @@ pub fn test_card() -> RgbaImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn old_presets_keep_reference_behavior_and_neutral_grade_is_exact() {
+        let c: Config = serde_json::from_str("{\"version\":1,\"signal\":\"native\"}").unwrap();
+        assert_eq!(c.color_mode, ColorMode::Reference);
+        assert!(!c.mask_antialias);
+        let src = test_card();
+        assert_eq!(prepare(&src, &c).unwrap(), src);
+        let gray = prepare(
+            &src,
+            &Config {
+                chroma: 0.,
+                ..c.clone()
+            },
+        )
+        .unwrap();
+        assert!(gray.pixels().all(|p| p[0] == p[1] && p[1] == p[2]));
+        assert_ne!(prepare(&src, &Config { hue: 30., ..c }).unwrap(), src);
+    }
     #[test]
     fn presets_and_limits() {
         let mut c = Config::default();

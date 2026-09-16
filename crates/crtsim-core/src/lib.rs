@@ -3,7 +3,7 @@ pub mod mesh;
 
 use anyhow::{ensure, Context, Result};
 use bytemuck::{Pod, Zeroable};
-use config::{Config, Phase};
+use config::{ColorMode, Config, Phase};
 use image::RgbaImage;
 use wgpu::util::DeviceExt;
 
@@ -25,6 +25,7 @@ struct Params {
     light: [f32; 4],
     camera: [f32; 4],
     bloom: [f32; 4],
+    processing: [f32; 4],
 }
 
 struct Target {
@@ -35,6 +36,15 @@ struct Target {
 }
 impl Target {
     fn new(device: &wgpu::Device, name: &str, (width, height): (u32, u32)) -> Self {
+        Self::with_format(device, name, (width, height), FORMAT, 1)
+    }
+    fn with_format(
+        device: &wgpu::Device,
+        name: &str,
+        (width, height): (u32, u32),
+        format: wgpu::TextureFormat,
+        mip_level_count: u32,
+    ) -> Self {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some(name),
             size: wgpu::Extent3d {
@@ -42,10 +52,10 @@ impl Target {
                 height,
                 depth_or_array_layers: 1,
             },
-            mip_level_count: 1,
+            mip_level_count,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: FORMAT,
+            format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::COPY_SRC
@@ -121,6 +131,13 @@ pub struct Rendered {
     pub crt: RgbaImage,
 }
 
+#[derive(Clone, Debug)]
+pub struct RenderProgress {
+    /// Completed, weighted stages; not an estimate of elapsed time.
+    pub fraction: f32,
+    pub stage: String,
+}
+
 impl Renderer {
     pub async fn new(backends: wgpu::Backends) -> Result<Self> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -193,14 +210,23 @@ impl Renderer {
             attributes: &attrs,
         }];
         let mut pipelines = Vec::new();
-        for entry in [
+        for (index, entry) in [
             "composite",
             "screen",
             "frame",
             "downsample",
             "upsample",
             "present",
-        ] {
+            "composite",
+            "screen",
+            "frame",
+            "downsample",
+            "upsample",
+            "present",
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let geometry = entry == "screen" || entry == "frame";
             pipelines.push(
                 device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -215,7 +241,11 @@ impl Renderer {
                         module: &module,
                         entry_point: entry,
                         targets: &[Some(wgpu::ColorTargetState {
-                            format: FORMAT,
+                            format: if index >= 6 && entry != "composite" && entry != "present" {
+                                wgpu::TextureFormat::Rgba16Float
+                            } else {
+                                FORMAT
+                            },
                             blend: None,
                             write_mask: wgpu::ColorWrites::ALL,
                         })],
@@ -260,6 +290,7 @@ impl Renderer {
                     address_mode_v: address,
                     mag_filter: filter,
                     min_filter: filter,
+                    mipmap_filter: wgpu::FilterMode::Linear,
                     ..Default::default()
                 })
             })
@@ -275,10 +306,46 @@ impl Renderer {
             include_bytes!("../../../assets/original-crtsim/artifacts.bmp"),
             "NTSC texture",
         )?;
-        let mask = load(
+        let mut mask_image = image::load_from_memory_with_format(
             include_bytes!("../../../assets/original-crtsim/mask.bmp"),
+            image::ImageFormat::Bmp,
+        )?
+        .to_rgba8();
+        let levels = mask_image.width().max(mask_image.height()).ilog2() + 1;
+        let mask = Target::with_format(
+            &device,
             "shadow mask",
-        )?;
+            mask_image.dimensions(),
+            FORMAT,
+            levels,
+        );
+        for level in 0..levels {
+            queue.write_texture(
+                wgpu::ImageCopyTexture {
+                    texture: &mask.texture,
+                    mip_level: level,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                mask_image.as_raw(),
+                wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: Some(mask_image.width() * 4),
+                    rows_per_image: Some(mask_image.height()),
+                },
+                wgpu::Extent3d {
+                    width: mask_image.width(),
+                    height: mask_image.height(),
+                    depth_or_array_layers: 1,
+                },
+            );
+            mask_image = image::imageops::resize(
+                &mask_image,
+                (mask_image.width() / 2).max(1),
+                (mask_image.height() / 2).max(1),
+                image::imageops::FilterType::Triangle,
+            );
+        }
         let screen = GpuMesh::new(&device, mesh::SCREEN)?;
         let frame = GpuMesh::new(&device, mesh::FRAME)?;
         Ok(Self {
@@ -349,6 +416,17 @@ impl Renderer {
 
     /// Deterministic still export. warmup=0 means one tick from cleared history.
     pub fn render(&self, input: &RgbaImage, c: &Config) -> Result<Rendered> {
+        self.render_with_progress(input, c, |_| {})
+    }
+
+    pub fn render_with_progress(
+        &self,
+        input: &RgbaImage,
+        c: &Config,
+        mut progress: impl FnMut(RenderProgress),
+    ) -> Result<Rendered> {
+        let mut report = |fraction, stage: String| progress(RenderProgress { fraction, stage });
+        report(0., "Preparing image".into());
         c.validate()?;
         let sig = c.signal_size(input.dimensions())?;
         let out = c.output_size(input.dimensions())?;
@@ -358,8 +436,15 @@ impl Renderer {
             "image exceeds adapter texture limit {limit}"
         );
         // Conservative working-set guard: color targets, depth, readback and history.
-        let estimated =
-            u64::from(out.0) * u64::from(out.1) * 24 + u64::from(sig.0) * u64::from(sig.1) * 16;
+        let linear = c.color_mode == ColorMode::LinearLight;
+        let base_pipeline = if linear { 6 } else { 0 };
+        let surface_format = if linear {
+            wgpu::TextureFormat::Rgba16Float
+        } else {
+            FORMAT
+        };
+        let estimated = u64::from(out.0) * u64::from(out.1) * if linear { 48 } else { 24 }
+            + u64::from(sig.0) * u64::from(sig.1) * 16;
         ensure!(
             estimated <= 1_500_000_000,
             "estimated working set exceeds Phase 0 budget; choose a smaller preset"
@@ -367,17 +452,20 @@ impl Renderer {
         let clean = config::prepare(input, c)?;
         let source = Target::new(&self.device, "clean signal", sig);
         source.upload(&self.queue, &clean);
+        report(0.05, "Image prepared".into());
         let history = [
             Target::new(&self.device, "history A", sig),
             Target::new(&self.device, "history B", sig),
         ];
-        let full = Target::new(&self.device, "screen and frame", out);
-        let down = Target::new(
+        let full = Target::with_format(&self.device, "screen and frame", out, surface_format, 1);
+        let down = Target::with_format(
             &self.device,
             "bloom downsample",
             ((out.0 / 16).max(1), (out.1 / 16).max(1)),
+            surface_format,
+            1,
         );
-        let up = Target::new(&self.device, "bloom upsample", out);
+        let up = Target::with_format(&self.device, "bloom upsample", out, surface_format, 1);
         let final_target = Target::new(&self.device, "output", out);
         let depth = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("depth"),
@@ -413,7 +501,12 @@ impl Renderer {
                 c.mask_opacity,
             ],
             lighting: [c.diffuse, c.specular, c.specular_power, c.rim],
-            surface: [c.dimming, c.reflection, c.saturation, 0.],
+            surface: [
+                c.dimming,
+                c.reflection,
+                c.saturation,
+                if c.mask_antialias { 1. } else { 0. },
+            ],
             frame: [c.frame_color[0], c.frame_color[1], c.frame_color[2], 1.],
             light: [
                 c.light_position[0],
@@ -423,6 +516,7 @@ impl Renderer {
             ],
             camera: [camera.x, camera.y, camera.z, 0.],
             bloom: [c.bloom, c.bloom_power, c.bloom_spread, 0.],
+            processing: [if linear { 1. } else { 0. }, 0., 0., 0.],
         };
         let mut encoder = self
             .device
@@ -463,6 +557,16 @@ impl Renderer {
                 });
             let bindings = self.bind(&uniform, &source, &history[(1 - tick % 2) as usize]);
             self.pass(&mut encoder, &history[(tick % 2) as usize], &bindings, 0);
+            // Report completed GPU work, not just command encoding. Small batches keep overhead bounded.
+            if (tick + 1) % 8 == 0 || tick == c.warmup {
+                self.queue.submit(Some(encoder.finish()));
+                self.device.poll(wgpu::Maintain::Wait);
+                report(
+                    0.05 + 0.75 * (tick + 1) as f32 / (c.warmup + 1) as f32,
+                    format!("Warm-up {}/{}", tick + 1, c.warmup + 1),
+                );
+                encoder = self.device.create_command_encoder(&Default::default());
+            }
         }
         let signal = &history[(c.warmup % 2) as usize];
         let uniform = self
@@ -497,23 +601,38 @@ impl Renderer {
             });
             pass.set_bind_group(0, &bindings, &[]);
             for (index, m) in [(1, &self.screen), (2, &self.frame)] {
-                pass.set_pipeline(&self.pipelines[index]);
+                pass.set_pipeline(&self.pipelines[index + base_pipeline]);
                 pass.set_vertex_buffer(0, m.vertices.slice(..));
                 pass.set_index_buffer(m.indices.slice(..), wgpu::IndexFormat::Uint16);
                 pass.draw_indexed(0..m.count, 0, 0..1);
             }
         }
-        self.pass(&mut encoder, &down, &self.bind(&uniform, &full, &source), 3);
-        self.pass(&mut encoder, &up, &self.bind(&uniform, &down, &source), 4);
+        self.pass(
+            &mut encoder,
+            &down,
+            &self.bind(&uniform, &full, &source),
+            3 + base_pipeline,
+        );
+        self.pass(
+            &mut encoder,
+            &up,
+            &self.bind(&uniform, &down, &source),
+            4 + base_pipeline,
+        );
         self.pass(
             &mut encoder,
             &final_target,
             &self.bind(&uniform, &full, &up),
-            5,
+            5 + base_pipeline,
         );
         self.queue.submit(Some(encoder.finish()));
         let signal = self.readback(signal)?;
+        report(
+            0.9,
+            "Glass, lighting and bloom complete; reading pixels".into(),
+        );
         let crt = self.readback(&final_target)?;
+        report(1., "Render complete".into());
         Ok(Rendered { clean, signal, crt })
     }
 
@@ -600,5 +719,30 @@ mod tests {
         c.persistence = [0.; 3];
         let a = r.render(&source, &c).unwrap();
         assert_eq!(a.clean, a.signal);
+        c.color_mode = ColorMode::LinearLight;
+        c.mask_antialias = true;
+        let mut progress = vec![];
+        let linear = r
+            .render_with_progress(&source, &c, |p| progress.push(p.fraction))
+            .unwrap();
+        assert_eq!(linear.crt.dimensions(), (641, 361));
+        assert_ne!(linear.crt, a.crt);
+        assert_eq!(progress.first(), Some(&0.));
+        assert_eq!(progress.last(), Some(&1.));
+        assert!(progress.windows(2).all(|w| w[0] <= w[1]));
+        c.color_mode = ColorMode::Reference;
+        let filtered = r.render(&source, &c).unwrap();
+        assert_ne!(filtered.crt, a.crt);
+        if let Ok(dir) = std::env::var("CRTSIM_TEST_OUTPUT") {
+            std::fs::create_dir_all(&dir).unwrap();
+            linear
+                .crt
+                .save(std::path::Path::new(&dir).join("linear-light.png"))
+                .unwrap();
+            filtered
+                .crt
+                .save(std::path::Path::new(&dir).join("filtered-mask.png"))
+                .unwrap();
+        }
     }
 }

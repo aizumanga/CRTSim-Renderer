@@ -1,7 +1,7 @@
 # CRTSim-Renderer
 
 A native, local renderer based on [J. Kyle Pittman's public CRTSim implementation](https://github.com/MinorKeyGames/CRTSim).
-Phase 1 adds a **native desktop still-image application** alongside the command-line renderer.
+Phase 2 expands the **native desktop still-image application** with a persistent preset gallery, credits, progress and optional rendering refinements.
 The goal is to preserve the shared effect and make it useful for images and, later, video.
 It is not an official product or an exact reconstruction of a commercial game's shader.
 
@@ -19,6 +19,30 @@ Video, audio, installers and the unpublished NES palette LUT are not included ye
 See [the implementation plan](docs/PLAN.md) and [validation notes](docs/VALIDATION.md).
 
 ## Desktop app
+
+On first launch, the app honestly describes this AI-assisted project as “what some would call \"vibe-coded slop\", built based on J. Kyle Pittman's public CRTSim”.
+Acknowledging that message is remembered on this computer. **Credits** always reopens the attribution and links to
+[J. Kyle Pittman's itch.io page](https://piratehearts.itch.io/) and [Minor Key Games on Steam](https://store.steampowered.com/developer/MinorKeyGames).
+Please support the original developer by buying and playing their games. This port is unofficial and is not endorsed by him.
+
+**Preset gallery** includes General image, Original CRTSim, Soft television, Clean RGB, Pixel art 240p, Warm analog and Linear light.
+Enter a name and choose **Save current** to add your exact settings to **My presets**; they reappear after restarting.
+To add an existing JSON, load it, then use Save current in the gallery. JSON export remains available for sharing.
+Names are never overwritten; malformed files are skipped with an explanation. Personal JSON files live outside the checkout,
+in the app data directory shown in the gallery. `CRTSIM_DATA_DIR` can override that directory with an absolute path.
+Only explicitly saved presets and the welcome acknowledgement persist; unsaved edits are not automatically saved on exit.
+
+Preview and export show stage-based progress. Warm-up advances after completed GPU batches, followed by surface rendering/readback and PNG saving.
+Percentages represent weighted work stages, not remaining seconds; PNG encoding stays at its stage until the file is completely saved.
+
+**Filter mask when shrinking** uses a mipmapped mask to reduce minification aliasing. New general-image presets enable it;
+Original CRTSim and old JSON files preserve the original sampling. Display resizing can still introduce moiré.
+**Optional color grade** rotates hue and changes chroma in YIQ before the composite simulation. Neutral values leave the prepared signal unchanged.
+It is an artistic grade, not the private NES palette LUT or a full NTSC decoder.
+**Linear light (experimental)** decodes the SDR signal for glass sampling, performs lighting and bloom with RGBA16Float intermediates,
+then encodes the final SDR PNG. Composite/persistence remains gamma-space RGBA8. It uses more GPU memory and changes the look;
+it is not a full linear-light pipeline, HDR export, ICC color management or an exact match to the game.
+Old presets load with reference processing and neutral grading. Newly saved presets require the updated app/CLI.
 
 With stable Rust installed, run from the repository folder:
 
