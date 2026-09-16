@@ -1,7 +1,10 @@
 use anyhow::{ensure, Context, Result};
 use crtsim_core::config::{self, Config};
 use image::{DynamicImage, ImageOutputFormat, RgbaImage};
-use std::{io::{Cursor, Write}, path::Path};
+use std::{
+    io::{Cursor, Write},
+    path::Path,
+};
 
 const PRESET_KEYWORD: &[u8] = b"CRTSim-Renderer-Preset";
 
@@ -61,7 +64,10 @@ pub fn save_png(path: &Path, image: RgbaImage, preset: Option<&Config>) -> Resul
 /// Read the embedded settings from a PNG produced by this application.
 pub fn load_preset_from_image(path: &Path, input: (u32, u32)) -> Result<Config> {
     let bytes = std::fs::read(path).context("Cannot read image file")?;
-    ensure!(bytes.len() <= 512 * 1024 * 1024, "Image file exceeds 512 MB");
+    ensure!(
+        bytes.len() <= 512 * 1024 * 1024,
+        "Image file exceeds 512 MB"
+    );
     let json = find_text_chunk(&bytes, PRESET_KEYWORD)
         .context("This image does not contain a CRTSim-Renderer preset")?;
     ensure!(json.len() <= 1024 * 1024, "Preset metadata exceeds 1 MB");
@@ -73,8 +79,14 @@ pub fn load_preset_from_image(path: &Path, input: (u32, u32)) -> Result<Config> 
 }
 
 fn add_text_chunk(bytes: &mut Vec<u8>, keyword: &[u8], text: &[u8]) -> Result<()> {
-    ensure!(keyword.len() <= 79 && !keyword.contains(&0), "Invalid PNG metadata keyword");
-    ensure!(!text.contains(&0), "Preset metadata contains an unsupported NUL byte");
+    ensure!(
+        keyword.len() <= 79 && !keyword.contains(&0),
+        "Invalid PNG metadata keyword"
+    );
+    ensure!(
+        !text.contains(&0),
+        "Preset metadata contains an unsupported NUL byte"
+    );
     let mut data = Vec::with_capacity(keyword.len() + 1 + text.len());
     data.extend_from_slice(keyword);
     data.push(0);
@@ -83,21 +95,30 @@ fn add_text_chunk(bytes: &mut Vec<u8>, keyword: &[u8], text: &[u8]) -> Result<()
     chunk.extend_from_slice(&(data.len() as u32).to_be_bytes());
     chunk.extend_from_slice(b"tEXt");
     chunk.extend_from_slice(&data);
-    chunk.extend_from_slice(&crc32(&[b"tEXt".as_slice(), data.as_slice()].concat()).to_be_bytes());
-    ensure!(bytes.starts_with(b"\x89PNG\r\n\x1a\n") && bytes.len() >= 12, "Invalid PNG output");
+    chunk.extend_from_slice(
+        &crc32(&[b"tEXt".as_slice(), data.as_slice()].concat()).to_be_bytes(),
+    );
+    ensure!(
+        bytes.starts_with(b"\x89PNG\r\n\x1a\n") && bytes.len() >= 12,
+        "Invalid PNG output"
+    );
     let insert_at = bytes.len() - 12; // IEND is always the final chunk.
     bytes.splice(insert_at..insert_at, chunk);
     Ok(())
 }
 
 fn find_text_chunk<'a>(bytes: &'a [u8], keyword: &[u8]) -> Option<&'a [u8]> {
-    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") { return None; }
+    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return None;
+    }
     let mut offset = 8;
     while offset.checked_add(12)? <= bytes.len() {
         let length = u32::from_be_bytes(bytes[offset..offset + 4].try_into().ok()?) as usize;
         let data_start = offset + 8;
         let data_end = data_start.checked_add(length)?;
-        if data_end.checked_add(4)? > bytes.len() { return None; }
+        if data_end.checked_add(4)? > bytes.len() {
+            return None;
+        }
         if &bytes[offset + 4..offset + 8] == b"tEXt" {
             if let Some(nul) = bytes[data_start..data_end].iter().position(|&b| b == 0) {
                 if &bytes[data_start..data_start + nul] == keyword {
@@ -115,7 +136,11 @@ fn crc32(bytes: &[u8]) -> u32 {
     for &byte in bytes {
         crc ^= u32::from(byte);
         for _ in 0..8 {
-            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xedb8_8320 } else { crc >> 1 };
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0xedb8_8320
+            } else {
+                crc >> 1
+            };
         }
     }
     !crc
