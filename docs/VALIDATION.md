@@ -2,6 +2,22 @@
 
 This is a runnable prototype, not a claim of completed cross-platform visual parity.
 
+## Recorded result
+
+[CI run 35018126875](https://github.com/aizumanga/CRTSim-Renderer/actions/runs/35018126875)
+passed all four jobs for implementation commit `5881e60337066359d78bb1bbd1f39e7b1a0d6b3a`:
+
+- Linux, Windows and macOS: compilation, six unit tests, formatting, strict Clippy and original-asset hashes.
+- Linux software Vulkan: GPU smoke test and all image exports, including 3840x2160 output.
+- The smoke test exercised odd-width readback, repeatable still jobs, distinct artifact phases and disabled-effect identity.
+
+The reference, 720p, 1080p, 4K and automatic-resize images were visually inspected on 2026-09-16.
+They show the expected test-card layout, curved glass, mask, bloom and frame reflections, with no gross channel swap or vertical inversion.
+Fine mask patterns change with output sampling; this inspection does not establish correct minification or pixel equivalence to D3D9.
+The automatic-resize fixture reuses the generated 4K image as input, so its nested CRT appearance is intentional.
+The run's `phase0-render-fixtures` artifact contains the images and resolved settings (14-day retention).
+These are reproducible diagnostics, not approved golden images or a real-GPU performance benchmark.
+
 ## Checks
 
 - `cargo test --workspace --locked`: configuration, aspect, alpha, malformed meshes, attribute preservation, WGSL parsing/validation.
