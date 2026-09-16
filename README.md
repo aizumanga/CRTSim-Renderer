@@ -38,6 +38,8 @@ Only explicitly saved presets and the welcome acknowledgement persist; unsaved e
 Full-resolution export shows stage-based progress; routine live-preview updates stay unobtrusive. Warm-up advances after completed GPU batches,
 followed by surface rendering/readback and PNG saving.
 Percentages represent weighted work stages, not remaining seconds; PNG encoding stays at its stage until the file is completely saved.
+Exported PNGs embed the exact JSON preset in a private PNG text chunk without changing the pixels. Use **Import preset from image…**
+to recover settings from a rendered PNG; ordinary images without this metadata are rejected with an explanatory message.
 
 **Filter mask when shrinking** uses a mipmapped mask to reduce minification aliasing. New general-image presets enable it;
 Original CRTSim and old JSON files preserve the original sampling. Display resizing can still introduce moiré.

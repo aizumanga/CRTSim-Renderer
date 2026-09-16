@@ -59,6 +59,7 @@ This phase does not promise continuous real-time frame rates, cancellable GPU su
 - Included presets and personal JSON presets stored outside the checkout; current settings can be saved directly into the gallery.
 - Export-only progress based on completed warm-up batches plus surface/readback/save stages; live preview changes do not show a progress bar.
 - Settings undo/redo buttons plus `Ctrl+Z` and `Ctrl+Shift+Z` shortcuts; the renderer's adapter name is not displayed in the application window.
+- Exported PNGs embed the exact JSON configuration in a private text chunk; the desktop can inspect/import that preset from an image.
 - Optional mipmapped mask filtering; legacy sampling is retained for old/reference presets.
 - Optional YIQ hue/chroma grade, explicitly not the unpublished NES LUT or a complete NTSC decoder.
 - Experimental linear-light glass/lighting/bloom with float intermediates and SDR output. Composite/history stays in gamma space.

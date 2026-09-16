@@ -88,7 +88,7 @@ pub fn start(
                             },
                         });
                         ctx.request_repaint();
-                        files::save_png(&path, im).map_err(|e| format!("{e:#}"))
+                        files::save_png(&path, im, Some(&config)).map_err(|e| format!("{e:#}"))
                     })
                     .map(|_| path),
                 ),
