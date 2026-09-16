@@ -1,0 +1,16 @@
+[package]
+name = "crtsim-media"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+crtsim-core = { path = "../crtsim-core" }
+image.workspace = true
+serde_json.workspace = true
+tempfile = "3"
+
+[dev-dependencies]
+pollster = "0.3"
+wgpu.workspace = true

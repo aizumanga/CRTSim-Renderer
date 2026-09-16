@@ -813,11 +813,25 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "crtsim-core",
+ "crtsim-media",
  "directories",
  "eframe",
  "image",
  "pollster",
  "rfd",
+ "serde_json",
+ "tempfile",
+ "wgpu",
+]
+
+[[package]]
+name = "crtsim-media"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crtsim-core",
+ "image",
+ "pollster",
  "serde_json",
  "tempfile",
  "wgpu",

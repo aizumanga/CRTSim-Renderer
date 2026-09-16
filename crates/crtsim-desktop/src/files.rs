@@ -2,7 +2,7 @@ use anyhow::{ensure, Context, Result};
 use crtsim_core::config::{self, Config};
 use image::{DynamicImage, ImageOutputFormat, RgbaImage};
 use std::{
-    io::{Cursor, Write},
+    io::{Cursor, Read, Write},
     path::Path,
 };
 
@@ -63,7 +63,13 @@ pub fn save_png(path: &Path, image: RgbaImage, preset: Option<&Config>) -> Resul
 
 /// Read the embedded settings from a PNG produced by this application.
 pub fn load_preset_from_image(path: &Path, input: (u32, u32)) -> Result<Config> {
-    let bytes = std::fs::read(path).context("Cannot read image file")?;
+    let file = std::fs::File::open(path).context("Cannot read image file")?;
+    ensure!(
+        file.metadata()?.len() <= 512 * 1024 * 1024,
+        "Image file exceeds 512 MB"
+    );
+    let mut bytes = Vec::new();
+    file.take(512 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
     ensure!(
         bytes.len() <= 512 * 1024 * 1024,
         "Image file exceeds 512 MB"
@@ -120,6 +126,11 @@ fn find_text_chunk<'a>(bytes: &'a [u8], keyword: &[u8]) -> Option<&'a [u8]> {
         if &bytes[offset + 4..offset + 8] == b"tEXt" {
             if let Some(nul) = bytes[data_start..data_end].iter().position(|&b| b == 0) {
                 if &bytes[data_start..data_start + nul] == keyword {
+                    let expected =
+                        u32::from_be_bytes(bytes[data_end..data_end + 4].try_into().ok()?);
+                    if crc32(&bytes[offset + 4..data_end]) != expected {
+                        return None;
+                    }
                     return Some(&bytes[data_start + nul + 1..data_end]);
                 }
             }
@@ -166,8 +177,23 @@ mod tests {
         let png = dir.path().join("image.png");
         let src = config::test_card();
         save_png(&png, src.clone(), Some(&c)).unwrap();
+        assert_eq!(load_image(&png).unwrap(), src);
         assert_eq!(load_preset_from_image(&png, (1216, 832)).unwrap(), c);
+        let mut damaged = std::fs::read(&png).unwrap();
+        let index = damaged
+            .windows(PRESET_KEYWORD.len())
+            .position(|w| w == PRESET_KEYWORD)
+            .unwrap();
+        damaged[index + PRESET_KEYWORD.len() + 2] ^= 1;
+        assert!(find_text_chunk(&damaged, PRESET_KEYWORD).is_none());
         save_png(&png, RgbaImage::new(1, 1), None).unwrap();
         assert!(load_preset_from_image(&png, (1, 1)).is_err());
+        let original = std::fs::read(&png).unwrap();
+        assert!(save_atomic(&png, |f| {
+            f.write_all(b"incomplete")?;
+            anyhow::bail!("encoding failed")
+        })
+        .is_err());
+        assert_eq!(std::fs::read(&png).unwrap(), original);
     }
 }

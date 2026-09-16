@@ -4,12 +4,25 @@ use eframe::egui;
 use image::RgbaImage;
 use std::{
     path::PathBuf,
-    sync::{mpsc, Arc},
+    sync::{atomic::AtomicBool, mpsc, Arc},
     time::Instant,
 };
 
 pub enum Job {
+    Shutdown,
     Load(PathBuf),
+    LoadVideo {
+        path: PathBuf,
+        time: f64,
+        cancel: Arc<AtomicBool>,
+    },
+    ExportVideo {
+        video: crtsim_media::Video,
+        options: crtsim_media::Options,
+        config: Config,
+        path: PathBuf,
+        cancel: Arc<AtomicBool>,
+    },
     Preview {
         revision: u64,
         input: Arc<RgbaImage>,
@@ -26,6 +39,7 @@ pub enum Event {
         progress: RenderProgress,
     },
     Loaded(Result<(PathBuf, RgbaImage, RgbaImage), String>),
+    VideoLoaded(Result<(crtsim_media::Video, RgbaImage, RgbaImage, f64), String>),
     Preview {
         revision: u64,
         result: Result<(RgbaImage, f32), String>,
@@ -35,13 +49,69 @@ pub enum Event {
 pub fn start(
     ctx: egui::Context,
     backends: wgpu::Backends,
-) -> (mpsc::Sender<Job>, mpsc::Receiver<Event>) {
+) -> (
+    mpsc::Sender<Job>,
+    mpsc::Receiver<Event>,
+    std::thread::JoinHandle<()>,
+) {
     let (send, jobs) = mpsc::channel();
     let (events, receive) = mpsc::channel();
-    std::thread::spawn(move || {
+    let thread = std::thread::spawn(move || {
         let mut renderer: Option<Renderer> = None;
         while let Ok(job) = jobs.recv() {
             let event = match job {
+                Job::Shutdown => break,
+                Job::LoadVideo { path, time, cancel } => Event::VideoLoaded(
+                    (|| -> anyhow::Result<_> {
+                        let video = crtsim_media::probe(&path, &cancel)?;
+                        let image = crtsim_media::preview(&video, time, &cancel)?;
+                        let thumb = image::DynamicImage::ImageRgba8(image.clone())
+                            .thumbnail(2048, 2048)
+                            .to_rgba8();
+                        Ok((video, image, thumb, time))
+                    })()
+                    .map_err(|e| format!("{e:#}")),
+                ),
+                Job::ExportVideo {
+                    video,
+                    options,
+                    config,
+                    path,
+                    cancel,
+                } => {
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                        || -> anyhow::Result<_> {
+                            if renderer.is_none() {
+                                renderer = Some(pollster::block_on(Renderer::new(backends))?);
+                            }
+                            crtsim_media::export(
+                                &video,
+                                &path,
+                                &config,
+                                &options,
+                                renderer.as_ref().unwrap(),
+                                &cancel,
+                                |p| {
+                                    let _ = events.send(Event::Progress {
+                                        progress: RenderProgress {
+                                            fraction: p.fraction,
+                                            stage: p.stage,
+                                        },
+                                    });
+                                    ctx.request_repaint();
+                                },
+                            )?;
+                            Ok(path)
+                        },
+                    ));
+                    Event::Exported(match result {
+                        Ok(result) => result.map_err(|e| format!("{e:#}")),
+                        Err(_) => {
+                            renderer = None;
+                            Err("Video graphics driver failed. Try a smaller resolution.".into())
+                        }
+                    })
+                }
                 Job::Load(path) => Event::Loaded(
                     files::load_image(&path)
                         .map(|im| {
@@ -99,7 +169,7 @@ pub fn start(
             ctx.request_repaint();
         }
     });
-    (send, receive)
+    (send, receive, thread)
 }
 fn render(
     renderer: &mut Option<Renderer>,

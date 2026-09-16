@@ -9,7 +9,10 @@ use eframe::egui::{self, Color32, TextureHandle};
 use image::RgbaImage;
 use std::{
     path::PathBuf,
-    sync::{mpsc, Arc},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc,
+    },
     time::{Duration, Instant},
 };
 use worker::{Event, Job};
@@ -17,6 +20,8 @@ use worker::{Event, Job};
 #[derive(Clone, Copy)]
 enum Dialog {
     Image,
+    Video,
+    ExportVideo,
     ImportPreset,
     LoadPreset,
     SavePreset,
@@ -30,6 +35,12 @@ enum View {
 }
 
 struct App {
+    video: Option<crtsim_media::Video>,
+    video_time: f64,
+    video_options: crtsim_media::Options,
+    cancel: Arc<AtomicBool>,
+    video_job: bool,
+    worker_thread: Option<std::thread::JoinHandle<()>>,
     store: Option<gallery::Store>,
     show_welcome: bool,
     show_credits: bool,
@@ -103,12 +114,9 @@ impl App {
         let input = Arc::new(config::test_card());
         let original = texture(ctx, "original", &input, 2048);
         let config = model::general();
-        let (jobs, events) = worker::start(ctx.clone(), backend);
+        let (jobs, events, worker_thread) = worker::start(ctx.clone(), backend);
         let (dialog_send, dialog_receive) = mpsc::channel();
-        let loading = input_path.is_some();
-        if let Some(path) = input_path {
-            let _ = jobs.send(Job::Load(path));
-        }
+        let loading = false;
         let (store, storage_error) = match gallery::Store::discover() {
             Ok(s) => (Some(s), None),
             Err(e) => (None, Some(format!("App data unavailable: {e:#}"))),
@@ -125,7 +133,13 @@ impl App {
                 Err(e) => gallery_warnings.push(format!("{e:#}")),
             }
         }
-        Self {
+        let mut app = Self {
+            video: None,
+            video_time: 0.,
+            video_options: crtsim_media::Options::default(),
+            cancel: Arc::new(AtomicBool::new(false)),
+            video_job: false,
+            worker_thread: Some(worker_thread),
             store,
             show_welcome,
             show_credits: false,
@@ -165,7 +179,11 @@ impl App {
             smoke,
             smoke_requested: false,
             started: Instant::now(),
+        };
+        if let Some(path) = input_path {
+            app.load(path);
         }
+        app
     }
 
     fn changed(&mut self) {
@@ -188,6 +206,13 @@ impl App {
                 Dialog::Image => rfd::FileDialog::new()
                     .add_filter("Images", &["png", "jpg", "jpeg", "webp", "bmp"])
                     .pick_file(),
+                Dialog::Video => rfd::FileDialog::new()
+                    .add_filter("Video", &["mp4", "mkv", "mov", "webm", "avi", "m4v"])
+                    .pick_file(),
+                Dialog::ExportVideo => rfd::FileDialog::new()
+                    .add_filter("Video", &["mp4", "mkv", "webm"])
+                    .set_file_name("rendered.mp4")
+                    .save_file(),
                 Dialog::ImportPreset => rfd::FileDialog::new()
                     .add_filter("Rendered PNG", &["png"])
                     .pick_file(),
@@ -203,14 +228,57 @@ impl App {
                     .set_file_name("rendered.png")
                     .save_file(),
             };
+            // Native dialogs confirm their selected path. If we append a missing suffix,
+            // confirm the actual destination too, rather than silently replacing another file.
+            let path = path.and_then(|mut path| {
+                let extension = match kind {
+                    Dialog::Export => Some("png"),
+                    Dialog::SavePreset => Some("json"),
+                    Dialog::ExportVideo => Some("mp4"),
+                    _ => None,
+                };
+                if let Some(extension) = extension {
+                    if path.extension().is_none() {
+                        path.set_extension(extension);
+                        if path.exists()
+                            && rfd::MessageDialog::new()
+                                .set_title("Replace file?")
+                                .set_description(format!("Replace {}?", path.display()))
+                                .set_buttons(rfd::MessageButtons::YesNo)
+                                .show()
+                                != rfd::MessageDialogResult::Yes
+                        {
+                            return None;
+                        }
+                    }
+                }
+                Some(path)
+            });
             let _ = send.send((kind, path));
             ctx.request_repaint();
         });
     }
     fn load(&mut self, path: PathBuf) {
+        if path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+            ["mp4", "mkv", "mov", "webm", "avi", "m4v"].contains(&e.to_ascii_lowercase().as_str())
+        }) {
+            self.load_video(path, 0.);
+            return;
+        }
         self.loading = true;
         self.status = format!("Loading {}…", path.display());
         self.send(Job::Load(path));
+    }
+    fn load_video(&mut self, path: PathBuf, time: f64) {
+        self.video_job = true;
+        self.loading = true;
+        self.cancel = Arc::new(AtomicBool::new(false));
+        self.status = "Loading video frame…".into();
+        self.send(Job::LoadVideo {
+            path,
+            time,
+            cancel: self.cancel.clone(),
+        });
     }
     fn send(&mut self, job: Job) {
         if self.jobs.send(job).is_err() {
@@ -219,6 +287,8 @@ impl App {
             self.rendering = false;
             self.loading = false;
             self.exporting = false;
+            self.video_job = false;
+            self.export_progress = None;
             self.dirty = false;
         }
     }
@@ -248,6 +318,26 @@ impl App {
             if let Some(mut path) = path {
                 match kind {
                     Dialog::Image => self.load(path),
+                    Dialog::Video => self.load_video(path, 0.),
+                    Dialog::ExportVideo => {
+                        if let Some(video) = self.video.clone() {
+                            self.exporting = true;
+                            self.video_job = true;
+                            self.cancel = Arc::new(AtomicBool::new(false));
+                            self.export_progress = Some(RenderProgress {
+                                fraction: 0.,
+                                stage: "Queued for video export".into(),
+                            });
+                            self.status = "Exporting video…".into();
+                            self.send(Job::ExportVideo {
+                                video,
+                                options: self.video_options.clone(),
+                                config: self.config.clone(),
+                                path,
+                                cancel: self.cancel.clone(),
+                            });
+                        }
+                    }
                     Dialog::ImportPreset => {
                         match files::load_preset_from_image(&path, self.input.dimensions()) {
                             Ok(c) => {
@@ -307,10 +397,35 @@ impl App {
                     self.export_progress = Some(progress)
                 }
                 Event::Progress { .. } => {}
+                Event::VideoLoaded(result) => {
+                    self.video_job = false;
+                    self.loading = false;
+                    match result {
+                        Ok((video, input, thumb, time)) => {
+                            self.source_name = video
+                                .path
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .into_owned();
+                            self.video = Some(video);
+                            self.video_time = time;
+                            self.original = texture(ctx, "original", &thumb, 2048);
+                            self.input = Arc::new(input);
+                            self.rendered = None;
+                            self.rendered_revision = None;
+                            self.error = None;
+                            self.changed();
+                            self.status = "Video frame loaded".into();
+                        }
+                        Err(e) => self.error = Some(e),
+                    }
+                }
                 Event::Loaded(result) => {
                     self.loading = false;
                     match result {
                         Ok((path, input, thumb)) => {
+                            self.video = None;
                             self.source_name = path
                                 .file_name()
                                 .unwrap_or_default()
@@ -352,11 +467,16 @@ impl App {
                     }
                 }
                 Event::Exported(result) => {
+                    self.video_job = false;
                     self.export_progress = None;
                     self.exporting = false;
                     match result {
                         Ok(path) => {
                             self.status = format!("Saved {}", path.display());
+                            self.error = None;
+                        }
+                        Err(_) if self.cancel.load(Ordering::Relaxed) => {
+                            self.status = "Export cancelled; destination kept unchanged".into();
                             self.error = None;
                         }
                         Err(e) => self.error = Some(e),
@@ -387,7 +507,7 @@ impl App {
         ui.horizontal_wrapped(|ui| {
             ui.strong("CRTSim Renderer");
             ui.separator();
-            let enabled = !self.dialog_open && !self.loading;
+            let enabled = !self.dialog_open && !self.loading && !self.exporting;
             if ui
                 .add_enabled(enabled, egui::Button::new("Preset gallery…"))
                 .clicked()
@@ -402,9 +522,16 @@ impl App {
                 self.dialog(Dialog::Image, ctx);
             }
             if ui
+                .add_enabled(enabled, egui::Button::new("Open video…"))
+                .clicked()
+            {
+                self.dialog(Dialog::Video, ctx);
+            }
+            if ui
                 .add_enabled(enabled, egui::Button::new("Test card"))
                 .clicked()
             {
+                self.video = None;
                 self.input = Arc::new(config::test_card());
                 self.original = texture(ctx, "original", &self.input, 2048);
                 self.source_name = "Built-in test card".into();
@@ -435,12 +562,89 @@ impl App {
             {
                 self.dialog(Dialog::Export, ctx);
             }
+            if ui
+                .add_enabled(
+                    enabled && self.video.is_some(),
+                    egui::Button::new("Export video…"),
+                )
+                .clicked()
+            {
+                self.dialog(Dialog::ExportVideo, ctx);
+            }
             if ui.button("Credits").clicked() {
                 self.show_credits = true;
             }
         });
     }
     fn settings(&mut self, ui: &mut egui::Ui) {
+        if let Some(video) = self.video.clone() {
+            ui.heading("Video");
+            ui.label(format!(
+                "{:.2}s · {:.3} FPS · {}",
+                video.duration,
+                video.fps,
+                if video.audio { "with audio" } else { "silent" }
+            ));
+            if video.hdr {
+                ui.small("HDR source: FFmpeg tone-maps to SDR (zscale/tonemap required).");
+            }
+            ui.add(
+                egui::Slider::new(
+                    &mut self.video_time,
+                    0.0..=(video.duration - 1. / video.fps).max(0.),
+                )
+                .text("Time (s)"),
+            );
+            if ui
+                .add_enabled(
+                    !self.loading && !self.exporting,
+                    egui::Button::new("Preview this frame"),
+                )
+                .clicked()
+            {
+                self.load_video(video.path, self.video_time);
+            }
+            ui.small("Preview is a settled still frame. The timing and audio choices below apply to full-video export.");
+            egui::ComboBox::from_label("Video timing")
+                .selected_text(format!("{:?}", self.video_options.timing))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut self.video_options.timing,
+                        crtsim_media::Timing::Stable,
+                        "Source rate · stable artifacts",
+                    );
+                    ui.selectable_value(
+                        &mut self.video_options.timing,
+                        crtsim_media::Timing::Ntsc60,
+                        "60 Hz · alternating artifacts",
+                    );
+                    ui.selectable_value(
+                        &mut self.video_options.timing,
+                        crtsim_media::Timing::Disabled,
+                        "Source rate · persistence off",
+                    );
+                });
+            egui::ComboBox::from_label("Audio")
+                .selected_text(format!("{:?}", self.video_options.audio))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut self.video_options.audio,
+                        crtsim_media::Audio::Auto,
+                        "Preserve when compatible",
+                    );
+                    ui.selectable_value(
+                        &mut self.video_options.audio,
+                        crtsim_media::Audio::Encode,
+                        "Re-encode AAC / Opus",
+                    );
+                    ui.selectable_value(
+                        &mut self.video_options.audio,
+                        crtsim_media::Audio::Mute,
+                        "Mute",
+                    );
+                });
+            ui.separator();
+        }
         ui.heading("Image & output");
         ui.label(&self.source_name);
         ui.small(format!(
@@ -880,7 +1084,7 @@ fn show_image(ui: &mut egui::Ui, im: &TextureHandle, available: egui::Vec2, fit:
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.receive(ctx);
-        if !self.dialog_open && !self.show_welcome {
+        if !self.dialog_open && !self.show_welcome && !ctx.wants_keyboard_input() {
             let mut ctrl_shift = egui::Modifiers::CTRL;
             ctrl_shift.shift = true;
             let mut command_shift = egui::Modifiers::COMMAND;
@@ -911,7 +1115,7 @@ impl eframe::App for App {
                 }
             }
         }
-        if !self.loading && !self.dialog_open && !self.show_welcome {
+        if !self.loading && !self.dialog_open && !self.show_welcome && !self.exporting {
             let dropped = ctx.input(|i| i.raw.dropped_files.first().and_then(|f| f.path.clone()));
             if let Some(path) = dropped {
                 self.load(path);
@@ -929,6 +1133,10 @@ impl eframe::App for App {
                         .text(format!("Export: {} — {:.0}%", p.stage, p.fraction * 100.))
                         .animate(true),
                 );
+            }
+            if self.video_job && ui.button("Cancel").clicked() {
+                self.cancel.store(true, Ordering::Relaxed);
+                self.status = "Cancelling…".into();
             }
             for error in [self.error.clone(), self.preview_error.clone()]
                 .into_iter()
@@ -1002,6 +1210,16 @@ impl eframe::App for App {
                 }
             }
             ctx.request_repaint_after(Duration::from_millis(100));
+        }
+    }
+}
+
+impl Drop for App {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+        let _ = self.jobs.send(Job::Shutdown);
+        if let Some(thread) = self.worker_thread.take() {
+            let _ = thread.join();
         }
     }
 }

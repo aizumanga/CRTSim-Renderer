@@ -1,8 +1,8 @@
 # CRTSim-Renderer
 
 A native, local renderer based on [J. Kyle Pittman's public CRTSim implementation](https://github.com/MinorKeyGames/CRTSim).
-Phase 2 expands the **native desktop still-image application** with a persistent preset gallery, credits, progress and optional rendering refinements.
-The goal is to preserve the shared effect and make it useful for images and, later, video.
+Phase 3 adds **video input and export with audio** to the native desktop image renderer.
+The goal is to preserve the shared effect and make it useful for images and video.
 It is not an official product or an exact reconstruction of a commercial game's shader.
 
 ## What works in this prototype
@@ -15,7 +15,7 @@ It is not an official product or an exact reconstruction of a commercial game's 
 - Clean/signal/full-CRT debugging and mesh validation/export without a GPU.
 - Native wgpu backends: Vulkan on Linux, DX12 on Windows and Metal on macOS.
 
-Video, audio, installers and the unpublished NES palette LUT are not included yet. Platform compilation does not prove visual parity between drivers.
+Installers and the unpublished NES palette LUT are not included. Platform compilation does not prove visual parity between drivers.
 See [the implementation plan](docs/PLAN.md) and [validation notes](docs/VALIDATION.md).
 
 ## Desktop app
@@ -100,6 +100,34 @@ do not depend on one vendor, but it is not a substitute for runtime tests on sev
 Vulkan/DX12/Metal implementation will show a compatible-adapter error; it is not silently switched to a CPU renderer.
 
 ## Build and try
+
+### Video
+
+Install `ffmpeg` and `ffprobe` on PATH (on Arch: `sudo pacman -S ffmpeg`). The image renderer does not need them.
+For a portable installation, set `CRTSIM_FFMPEG` and `CRTSIM_FFPROBE` to the respective executable paths.
+FFmpeg must include `libx264` for MP4/MKV, `libvpx-vp9` for WebM, and AAC/Opus encoders when converting audio.
+Missing executables/codecs produce an error in the window; nothing is downloaded automatically.
+
+1. Choose **Open video…**, drop a video, or pass its path on the command line.
+2. Select a time and **Preview this frame** to adjust the CRT look. This is a settled still preview, not playback or motion-history preview.
+3. Choose output resolution and video timing: source-rate stable artifacts (default), 60 Hz alternating artifacts, or persistence off.
+4. Choose **Export video…** and a filename ending in `.mp4`, `.mkv` or `.webm`. MP4/MKV use H.264; WebM uses VP9.
+
+Exports retain CRT history between ordered frames. Variable-frame-rate input is normalized to the detected average frame rate,
+or to 60 FPS in 60 Hz mode. Source-rate mode corrects persistence decay by media time; this is an approximation of the spatial feedback effect.
+Audio defaults to copying the first track when compatible, with AAC/Opus fallback; delayed audio is re-encoded to preserve its timing.
+**Re-encode** and **Mute** are also available. Video output dimensions must be even.
+
+The progress bar reports frames, rendering speed and an approximate remaining time. **Cancel** stops video loading/export;
+closing the app also terminates its FFmpeg processes. Existing destinations are replaced only after a successful export.
+Temporary encoded files require space on the destination drive, but decoded frames are streamed rather than saved as PNGs.
+Settings and the source are captured for each export; edits during export apply to the next job.
+
+Output is opaque SDR with software encoding. HDR input uses FFmpeg's `zscale`/`tonemap` filters when available.
+No subtitles, chapters, additional audio tracks, video preset metadata, HDR output or hardware encoder controls are included yet.
+PNG exports still embed importable presets. Full details and validation commands are in [VIDEO_PIPELINE.md](docs/VIDEO_PIPELINE.md).
+
+### Images and CLI
 
 Install stable Rust through [rustup](https://rustup.rs/), then:
 
