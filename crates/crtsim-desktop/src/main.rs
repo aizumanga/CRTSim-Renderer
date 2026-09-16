@@ -418,6 +418,10 @@ impl App {
                             self.changed();
                             self.status = "Video frame loaded".into();
                         }
+                        Err(_) if self.cancel.load(Ordering::Relaxed) => {
+                            self.status = "Video loading cancelled".into();
+                            self.error = None;
+                        }
                         Err(e) => self.error = Some(e),
                     }
                 }
@@ -605,8 +609,12 @@ impl App {
                 self.load_video(video.path, self.video_time);
             }
             ui.small("Preview is a settled still frame. The timing and audio choices below apply to full-video export.");
-            egui::ComboBox::from_label("Video timing")
-                .selected_text(format!("{:?}", self.video_options.timing))
+            egui::ComboBox::from_label("Export timing")
+                .selected_text(match self.video_options.timing {
+                    crtsim_media::Timing::Stable => "Source rate · stable artifacts",
+                    crtsim_media::Timing::Ntsc60 => "60 Hz · alternating artifacts",
+                    crtsim_media::Timing::Disabled => "Source rate · persistence off",
+                })
                 .show_ui(ui, |ui| {
                     ui.selectable_value(
                         &mut self.video_options.timing,
@@ -625,7 +633,11 @@ impl App {
                     );
                 });
             egui::ComboBox::from_label("Audio")
-                .selected_text(format!("{:?}", self.video_options.audio))
+                .selected_text(match self.video_options.audio {
+                    crtsim_media::Audio::Auto => "Preserve when compatible",
+                    crtsim_media::Audio::Encode => "Re-encode AAC / Opus",
+                    crtsim_media::Audio::Mute => "Mute",
+                })
                 .show_ui(ui, |ui| {
                     ui.selectable_value(
                         &mut self.video_options.audio,
@@ -932,7 +944,7 @@ impl App {
                 });
             } else if self.view == View::Original { show_image(ui,&self.original,available,self.fit_preview,self.zoom); }
             else if let Some(ref im) = self.rendered { show_image(ui,im,available,self.fit_preview,self.zoom); }
-            else { ui.label("Open an image or use the test card. Your rendered preview will appear here."); }
+            else { ui.label("Open an image, video or test card. Your rendered preview will appear here."); }
         });
     }
 }
@@ -1253,7 +1265,7 @@ fn main() -> eframe::Result<()> {
                 ))
             }
             "--help" | "-h" => {
-                println!("crtsim-desktop [IMAGE] [--backend auto|vulkan|dx12|metal]\nOpen images, adjust effects, load/save JSON presets and export PNG from the window.");
+                println!("crtsim-desktop [IMAGE_OR_VIDEO] [--backend auto|vulkan|dx12|metal]\nOpen media, adjust effects, load/save presets and export PNG or video from the window.\nVideo requires FFmpeg and ffprobe on PATH.");
                 return Ok(());
             }
             s if s.starts_with('-') => {
@@ -1262,7 +1274,7 @@ fn main() -> eframe::Result<()> {
             }
             _ if input.is_none() => input = Some(PathBuf::from(arg)),
             _ => {
-                eprintln!("Only one image can be opened at startup");
+                eprintln!("Only one image or video can be opened at startup");
                 std::process::exit(2);
             }
         }

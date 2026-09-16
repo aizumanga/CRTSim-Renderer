@@ -45,7 +45,7 @@ cargo test --locked -p crtsim-media --test video ffmpeg_streaming -- --ignored -
 cargo test --locked -p crtsim-media --test video frame_rates -- --ignored --nocapture
 ```
 
-It checks MP4/MKV/WebM, frame counts, stream copy and re-encoding, duration, rates, audio delay, mute, atomic replacement, cancellation and temporary-file cleanup.
+It checks MP4/MKV/WebM, frame counts, stream copy and re-encoding, duration, fixed rates, variable-rate timestamp normalization, audio delay, mute, atomic replacement, cancellation and temporary-file cleanup.
 With a Vulkan adapter, also run:
 
 ```sh

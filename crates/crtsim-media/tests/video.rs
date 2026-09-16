@@ -243,6 +243,72 @@ fn frame_rates_and_audio_offset() {
             result
         );
     }
+    // Remove unevenly spaced frames without retiming them, then normalize using timestamps.
+    let vfr = dir.path().join("variable-rate.mkv");
+    let result = Command::new("ffmpeg")
+        .args(["-v", "error", "-i"])
+        .arg(&source)
+        .args([
+            "-vf",
+            "select='not(eq(mod(n,3),1))'",
+            "-fps_mode",
+            "vfr",
+            "-an",
+            "-c:v",
+            "libx264",
+        ])
+        .arg(&vfr)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let info = crtsim_media::probe(&vfr, &cancel).unwrap();
+    crtsim_media::export_with(
+        &info,
+        &output,
+        &config,
+        &Options::default(),
+        &cancel,
+        |image, _| Ok(image.clone()),
+        |_| {},
+    )
+    .unwrap();
+    let normalized = crtsim_media::probe(&output, &cancel).unwrap();
+    assert!((normalized.duration - 0.4).abs() <= 1. / info.fps + 0.005);
+    let timestamps = Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "frame=best_effort_timestamp_time",
+            "-of",
+            "json",
+        ])
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert!(timestamps.status.success());
+    let parsed: serde_json::Value = serde_json::from_slice(&timestamps.stdout).unwrap();
+    let times: Vec<f64> = parsed["frames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| {
+            f["best_effort_timestamp_time"]
+                .as_str()
+                .unwrap()
+                .parse()
+                .unwrap()
+        })
+        .collect();
+    assert!(times
+        .windows(2)
+        .all(|w| ((w[1] - w[0]) - 1. / normalized.fps).abs() < 0.00001));
     let delayed = dir.path().join("delayed.mkv");
     let result = Command::new("ffmpeg")
         .args(["-v", "error", "-i"])
