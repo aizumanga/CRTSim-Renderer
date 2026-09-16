@@ -39,11 +39,18 @@ and the new GPU API are intentional adaptations. The camera retains a 4:3 physic
 Mask mipmapping/minification and exact D3D9 rasterization differ; visual equivalence must be reviewed before naming the port faithful.
 Reference screenshots from the commercial game are not golden test data.
 
-## Phase 1
+## Phase 1: desktop implementation
 
-Desktop preview using the same core; live settings, before/after comparison, preset files, export dialog, undo/reset and useful errors.
-Preserve source colors by default. Separate content resizing, tube shape, physical mask density and output canvas in the UI.
-Show exact resolved sizes and preview warnings for cropping, insufficient mask sampling and oversized jobs.
+Native eframe desktop preview uses the same core. Image loading, rendering and PNG export run on a background worker.
+Only one preview can be in flight; revision numbers reject stale results and the next request uses the latest settings.
+Preview requests are debounced and wait until a slider drag finishes. Preview resolution is independent of export resolution.
+Exports capture the image and settings when the file dialog completes and publish complete PNGs without overwriting files.
+
+Implemented controls include before/after side-by-side views, zoom, named/custom resolutions, fitting, filtering, pixel aspect,
+all existing shader parameters, temporal warm-up, phase selection, shared JSON presets and settings undo/redo/reset.
+General-image defaults use saturation 1.0; the original reference preset remains explicit. Color management remains future work.
+The UI displays resolved sizes and warnings for cropping, insufficient mask sampling and large jobs.
+This phase does not promise continuous real-time frame rates, cancellable GPU submissions or packaged installers.
 
 ## Later
 

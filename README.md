@@ -1,7 +1,7 @@
 # CRTSim-Renderer
 
 A native, local renderer based on [J. Kyle Pittman's public CRTSim implementation](https://github.com/MinorKeyGames/CRTSim).
-Phase 0 is a **command-line still-image prototype**, not yet a desktop application.
+Phase 1 adds a **native desktop still-image application** alongside the command-line renderer.
 The goal is to preserve the shared effect and make it useful for images and, later, video.
 It is not an official product or an exact reconstruction of a commercial game's shader.
 
@@ -15,8 +15,46 @@ It is not an official product or an exact reconstruction of a commercial game's 
 - Clean/signal/full-CRT debugging and mesh validation/export without a GPU.
 - Native wgpu backends: Vulkan on Linux, DX12 on Windows and Metal on macOS.
 
-No GUI, video, audio, installers or NES palette LUT are included yet. Platform compilation does not prove visual parity between drivers.
+Video, audio, installers and the unpublished NES palette LUT are not included yet. Platform compilation does not prove visual parity between drivers.
 See [the implementation plan](docs/PLAN.md) and [validation notes](docs/VALIDATION.md).
+
+## Desktop app
+
+With stable Rust installed, run from the repository folder:
+
+```sh
+cargo run --release --locked -p crtsim-desktop
+```
+
+Use **Open image** or drag one PNG/JPEG/WebP/BMP into the window. Adjust the controls on the left;
+the preview refreshes after you finish a drag or pause typing. **Export PNG** renders using the export size,
+even when the preview is smaller. The window remains responsive while loading, rendering and exporting.
+Settings changed during an export apply to the next export. Files are never overwritten; choose a new filename.
+
+- **General image** starts with square pixels, smooth resizing, contain fitting and saturation 1.0.
+- **Original CRTSim** restores the public-reference defaults, including 256x224 signal resampling and saturation 1.35.
+- **Original / CRT / Side by side** compares the source with the rendered tube. Comparison is not geometrically aligned because the CRT bends the image.
+- **Fast / Balanced / Export resolution** changes preview canvas resolution only. Use Export resolution and turn off Fit view at 1x zoom to inspect mask sampling.
+- **Load / Save preset** uses the same version-1 JSON format as the CLI. **Undo / Redo / Reset** acts on settings, not source files or exported files.
+- Signal and export size boxes accept named presets or custom `WIDTHxHEIGHT`. Resolved dimensions and crop/mask warnings are shown in the window.
+
+The original-image display is limited to a 2048-pixel thumbnail; export always uses the loaded source.
+Preview rendering shares the CLI core but is a debounced still-image render, not a continuous 60 FPS simulation.
+The CRT mask can look different at different preview sizes; exports retain the requested resolution.
+Preset changes are kept in memory until saved; the app does not silently write settings on exit.
+
+Linux needs working OpenGL for the window and Vulkan for the CRT renderer, plus an X11 or Wayland session.
+The native file picker uses the desktop portal. On Arch/KDE, ensure `xdg-desktop-portal` and `xdg-desktop-portal-kde`
+are installed and working in your logged-in desktop session. Drag-and-drop or passing an image path also works:
+
+```sh
+cargo run --release --locked -p crtsim-desktop -- "image.png" --backend vulkan
+```
+
+Windows uses the system file picker and normally DX12 for rendering; macOS uses its system picker and Metal.
+The window itself uses OpenGL through eframe. macOS runtime support remains provisional until tested on a real Mac.
+For Linux source-build errors about windowing libraries, install your distribution's Wayland and xkbcommon development packages
+(Debian/Ubuntu: `libwayland-dev libxkbcommon-dev libegl1-mesa-dev`; Arch: `wayland libxkbcommon`).
 
 ## Build and try
 

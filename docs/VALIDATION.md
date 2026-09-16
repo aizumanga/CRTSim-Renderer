@@ -2,6 +2,21 @@
 
 This is a runnable prototype, not a claim of completed cross-platform visual parity.
 
+## Phase 1 desktop checks
+
+Five desktop tests cover aspect-preserving preview resolution without changing signal dimensions,
+settings undo/redo, JSON preset round-trips, PNG/preset overwrite protection, rejection of stale preview results,
+and export snapshots preserving the original source and full output resolution while settings change.
+The existing six core tests and upstream asset hashes remain applicable. Local tests, formatting and strict Clippy pass.
+
+CI builds/tests the desktop crate on Linux, Windows and macOS. The Vulkan job also opens an actual window under Xvfb,
+waits for a rendered preview, captures `desktop.png`, and fails on render/screenshot timeout.
+The screenshot is part of the same render-fixtures artifact. Platform run results are recorded in the Phase 1 PR.
+
+Manual acceptance on real desktops still includes native open/save dialogs, drag-and-drop, rapid slider changes,
+high-DPI resizing/zoom, image replacement during rendering, and export of a user image at the selected resolution.
+macOS runtime behavior, Wayland portal integration and real-GPU performance are not established by an Xvfb run.
+
 ## Recorded result
 
 [CI run 35018126875](https://github.com/aizumanga/CRTSim-Renderer/actions/runs/35018126875)
