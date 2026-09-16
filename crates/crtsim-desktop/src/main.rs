@@ -760,7 +760,7 @@ impl App {
             self.config.output_size(self.input.dimensions()),
         ) {
             ui.small(format!(
-                "Signal: {} × {} → PNG: {} × {}",
+                "Signal: {} × {} → Output: {} × {}",
                 signal.0, signal.1, output.0, output.1
             ));
             if output.0 as u64 * output.1 as u64 > 8_300_000 {
@@ -781,7 +781,7 @@ impl App {
                 "Current fit/overscan can crop content and subtitles.",
             );
         }
-        ui.small("Rounded glass may hide extreme corners even with Contain. Alpha is flattened onto black. SDR; no ICC/HDR conversion.");
+        ui.small("Rounded glass may hide extreme corners even with Contain. Alpha is flattened onto black. SDR output; no ICC color management.");
         ui.separator();
         egui::CollapsingHeader::new("Color & signal")
             .default_open(true)
