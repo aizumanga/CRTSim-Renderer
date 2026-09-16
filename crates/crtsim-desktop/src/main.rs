@@ -17,6 +17,7 @@ use worker::{Event, Job};
 #[derive(Clone, Copy)]
 enum Dialog {
     Image,
+    ImportPreset,
     LoadPreset,
     SavePreset,
     Export,
@@ -187,6 +188,9 @@ impl App {
                 Dialog::Image => rfd::FileDialog::new()
                     .add_filter("Images", &["png", "jpg", "jpeg", "webp", "bmp"])
                     .pick_file(),
+                Dialog::ImportPreset => rfd::FileDialog::new()
+                    .add_filter("Rendered PNG", &["png"])
+                    .pick_file(),
                 Dialog::LoadPreset => rfd::FileDialog::new()
                     .add_filter("CRT preset", &["json"])
                     .pick_file(),
@@ -244,6 +248,15 @@ impl App {
             if let Some(mut path) = path {
                 match kind {
                     Dialog::Image => self.load(path),
+                    Dialog::ImportPreset => match files::load_preset_from_image(&path, self.input.dimensions()) {
+                        Ok(c) => {
+                            self.gallery_name = path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+                            self.replace_config(c);
+                            self.status = format!("Imported preset from {}", path.display());
+                            self.error = None;
+                        }
+                        Err(e) => self.error = Some(format!("Cannot import preset: {e:#}")),
+                    },
                     Dialog::LoadPreset => {
                         match files::load_preset(&path, self.input.dimensions()) {
                             Ok(c) => {
@@ -393,6 +406,12 @@ impl App {
                 self.changed();
             }
             if ui
+                .add_enabled(enabled, egui::Button::new("Import preset from image…"))
+                .clicked()
+            {
+                self.dialog(Dialog::ImportPreset, ctx);
+            }
+            if ui
                 .add_enabled(enabled, egui::Button::new("Load preset…"))
                 .clicked()
             {
@@ -430,11 +449,7 @@ impl App {
                     self.changed();
                 }
             }
-            if ui
-                .button("Redo")
-                .on_hover_text("Ctrl+Shift+Z")
-                .clicked()
-            {
+            if ui.button("Redo").on_hover_text("Ctrl+Shift+Z").clicked() {
                 if let Some(c) = self.history.redo(&self.config) {
                     self.config = c;
                     self.changed();
@@ -865,13 +880,8 @@ impl eframe::App for App {
             let mut command_shift = egui::Modifiers::COMMAND;
             command_shift.shift = true;
             let redo = ctx.input_mut(|i| {
-                i.consume_shortcut(&egui::KeyboardShortcut::new(
-                    ctrl_shift,
-                    egui::Key::Z,
-                )) || i.consume_shortcut(&egui::KeyboardShortcut::new(
-                    command_shift,
-                    egui::Key::Z,
-                ))
+                i.consume_shortcut(&egui::KeyboardShortcut::new(ctrl_shift, egui::Key::Z))
+                    || i.consume_shortcut(&egui::KeyboardShortcut::new(command_shift, egui::Key::Z))
             });
             let undo = !redo
                 && ctx.input_mut(|i| {
@@ -978,7 +988,7 @@ impl eframe::App for App {
                     let im =
                         RgbaImage::from_raw(image.width() as u32, image.height() as u32, bytes)
                             .unwrap();
-                    if let Err(e) = files::save_png(path, im) {
+                    if let Err(e) = files::save_png(path, im, None) {
                         eprintln!("{e:#}");
                         std::process::exit(1);
                     }
