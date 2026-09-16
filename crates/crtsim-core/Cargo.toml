@@ -1,0 +1,18 @@
+[package]
+name = "crtsim-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+bytemuck.workspace = true
+image.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+wgpu.workspace = true
+glam = "0.27"
+
+[dev-dependencies]
+naga = { version = "0.19", features = ["wgsl-in"] }
+pollster = "0.3"
