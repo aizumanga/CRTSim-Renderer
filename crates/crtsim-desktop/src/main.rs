@@ -644,9 +644,7 @@ impl App {
                 self.theme.apply(ctx);
                 if let Some(store) = &self.store {
                     if let Err(e) = store.set_theme(self.theme) {
-                        self.error = Some(format!(
-                            "Could not remember the selected theme: {e:#}"
-                        ));
+                        self.error = Some(format!("Could not remember the selected theme: {e:#}"));
                     }
                 }
             }
