@@ -1,5 +1,16 @@
 # Portable releases (Phase 4)
 
+## v0.1.1 hardening
+
+- Video sequences reuse their signal, surface, bloom, depth and readback GPU resources instead of reallocating them for every frame.
+- PNG exports can be cancelled between bounded GPU batches and before the atomic destination replacement.
+- Videos use a valid container frame count immediately when one is available; formats without one retain the exact decoded-frame fallback.
+- Video RGB-to-YUV conversion and stream metadata explicitly use limited-range BT.709.
+- Export checks the required H.264 or VP9 encoder before starting and reports the executable or missing encoder clearly.
+- JSON preset loading now uses one version-aware entry point so future migrations can be implemented consistently.
+
+The preset schema remains version 1 and is compatible with v0.1.0 files.
+
 The **Portable packages** workflow builds each pull request and manual workflow run into downloadable Actions artifacts.
 A `v*` tag builds the same packages and creates a **draft** GitHub release after all three packaging jobs succeed.
 Review and publish the draft manually. This workflow does not create tags or merge pull requests.

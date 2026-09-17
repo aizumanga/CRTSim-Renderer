@@ -154,7 +154,7 @@ fn main() -> Result<()> {
                 ensure!(!dir.exists(), "debug directory must be new");
             }
             let mut c = if let Some(path) = config {
-                serde_json::from_slice::<Config>(&fs::read(path)?)?
+                Config::from_json_slice(&fs::read(path)?)?
             } else {
                 Config::default()
             };

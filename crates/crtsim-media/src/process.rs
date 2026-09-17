@@ -13,6 +13,7 @@ use std::{
 
 pub struct Process {
     child: Arc<Mutex<Child>>,
+    program: String,
     stop: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
     monitor: Option<JoinHandle<()>>,
@@ -23,6 +24,7 @@ pub struct Process {
 impl Process {
     pub fn spawn(command: &mut Command, cancel: &Arc<AtomicBool>) -> Result<Self> {
         super::check_cancel(cancel)?;
+        let program = command.get_program().to_string_lossy().into_owned();
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -34,7 +36,11 @@ impl Process {
         }
         let mut child = command
             .spawn()
-            .context("Cannot start FFmpeg/ffprobe. Install both and add them to PATH")?;
+            .with_context(|| {
+                format!(
+                    "Cannot start {program}. Install FFmpeg and ffprobe, add them to PATH, or set CRTSIM_FFMPEG and CRTSIM_FFPROBE"
+                )
+            })?;
         let mut stderr = child.stderr.take().unwrap();
         let log = Arc::new(Mutex::new(Vec::new()));
         let log_copy = log.clone();
@@ -64,6 +70,7 @@ impl Process {
         });
         Ok(Self {
             child,
+            program,
             stop,
             cancel: cancel.clone(),
             monitor: Some(monitor),
@@ -90,7 +97,8 @@ impl Process {
         }
         if !status.success() {
             bail!(
-                "FFmpeg failed: {}",
+                "{} failed: {}",
+                self.program,
                 String::from_utf8_lossy(&self.log.lock().unwrap())
             );
         }

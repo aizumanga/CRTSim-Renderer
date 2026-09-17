@@ -132,6 +132,19 @@ pub fn validate_size((w, h): (u32, u32)) -> Result<()> {
     Ok(())
 }
 impl Config {
+    /// One version-aware entry point for presets. Future migrations belong here instead of
+    /// being duplicated across the CLI, desktop JSON loader and embedded metadata readers.
+    pub fn from_json_slice(bytes: &[u8]) -> Result<Self> {
+        let value: serde_json::Value = serde_json::from_slice(bytes)?;
+        let version = value.get("version").and_then(serde_json::Value::as_u64);
+        if let Some(version) = version {
+            ensure!(version == 1, "unsupported config version {version}");
+        }
+        let config: Self = serde_json::from_value(value)?;
+        config.validate()?;
+        Ok(config)
+    }
+
     pub fn validate(&self) -> Result<()> {
         ensure!(self.version == 1, "unsupported config version");
         ensure!(self.warmup <= 240, "warmup must be <=240 ticks");
@@ -303,7 +316,7 @@ mod tests {
     use super::*;
     #[test]
     fn old_presets_keep_reference_behavior_and_neutral_grade_is_exact() {
-        let c: Config = serde_json::from_str("{\"version\":1,\"signal\":\"native\"}").unwrap();
+        let c = Config::from_json_slice(b"{\"version\":1,\"signal\":\"native\"}").unwrap();
         assert_eq!(c.color_mode, ColorMode::Reference);
         assert!(!c.mask_antialias);
         let src = test_card();
@@ -318,6 +331,18 @@ mod tests {
         .unwrap();
         assert!(gray.pixels().all(|p| p[0] == p[1] && p[1] == p[2]));
         assert_ne!(prepare(&src, &Config { hue: 30., ..c }).unwrap(), src);
+    }
+
+    #[test]
+    fn versioned_loader_accepts_legacy_defaults_and_rejects_future_configs() {
+        assert_eq!(
+            Config::from_json_slice(b"{\"signal\":\"native\"}")
+                .unwrap()
+                .version,
+            1
+        );
+        let error = Config::from_json_slice(b"{\"version\":2}").unwrap_err();
+        assert!(error.to_string().contains("unsupported config version 2"));
     }
     #[test]
     fn presets_and_limits() {

@@ -314,6 +314,7 @@ impl App {
             return;
         }
         self.exporting = true;
+        self.cancel = Arc::new(AtomicBool::new(false));
         self.export_progress = Some(RenderProgress {
             fraction: 0.,
             stage: "Queued for export".into(),
@@ -326,6 +327,7 @@ impl App {
             input: self.input.clone(),
             config: self.config.clone(),
             path,
+            cancel: self.cancel.clone(),
         });
     }
     fn receive(&mut self, ctx: &egui::Context) {
@@ -1279,7 +1281,7 @@ impl eframe::App for App {
                         .animate(true),
                 );
             }
-            if self.video_job && ui.button("Cancel").clicked() {
+            if (self.video_job || self.exporting) && ui.button("Cancel").clicked() {
                 self.cancel.store(true, Ordering::Relaxed);
                 self.status = "Cancelling…".into();
             }
@@ -1483,8 +1485,14 @@ mod tests {
         app.config.bloom = 0.;
         app.input = Arc::new(RgbaImage::new(1, 1));
         match receive.recv().unwrap() {
-            Job::Export { input, config, .. } => {
+            Job::Export {
+                input,
+                config,
+                cancel,
+                ..
+            } => {
                 assert!(Arc::ptr_eq(&input, &source));
+                assert!(Arc::ptr_eq(&cancel, &app.cancel));
                 assert_eq!(config, expected);
                 assert_eq!(
                     config.output_size(input.dimensions()).unwrap(),
