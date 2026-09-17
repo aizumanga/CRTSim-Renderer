@@ -172,15 +172,23 @@ impl Store {
     }
     fn description(&self, name: &str) -> Result<String> {
         let path = self.root.join("presets").join(format!("{name}.txt"));
-        if !path.exists() { return Ok(String::new()); }
-        ensure!(path.metadata()?.len() <= 4096, "Description exceeds 4096 bytes");
+        if !path.exists() {
+            return Ok(String::new());
+        }
+        ensure!(
+            path.metadata()?.len() <= 4096,
+            "Description exceeds 4096 bytes"
+        );
         Ok(std::fs::read_to_string(path)?)
     }
     pub fn set_description(&self, name: &str, description: &str) -> Result<()> {
         validate_name(name)?;
         ensure!(description.len() <= 4096, "Description exceeds 4096 bytes");
         let dir = self.root.join("presets");
-        ensure!(dir.join(format!("{name}.json")).is_file(), "Preset no longer exists");
+        ensure!(
+            dir.join(format!("{name}.json")).is_file(),
+            "Preset no longer exists"
+        );
         // Keep the JSON compatible with older versions and the CLI.
         crate::files::save_atomic(&dir.join(format!("{name}.txt")), |file| {
             use std::io::Write;
@@ -251,9 +259,13 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].config, c);
         assert_eq!(entries[0].description, "");
-        s.set_description("My CRT", "Soft mask — for animation\nMy own look").unwrap();
+        s.set_description("My CRT", "Soft mask — for animation\nMy own look")
+            .unwrap();
         let updated = reopened.scan().unwrap().0;
-        assert_eq!(updated[0].description, "Soft mask — for animation\nMy own look");
+        assert_eq!(
+            updated[0].description,
+            "Soft mask — for animation\nMy own look"
+        );
         assert_eq!(updated[0].config, c);
         assert!(s.set_description("../outside", "oops").is_err());
         assert!(s.set_description("My CRT", &"x".repeat(4097)).is_err());

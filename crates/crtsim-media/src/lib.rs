@@ -77,15 +77,25 @@ pub fn import_preset(path: &Path, input: (u32, u32), cancel: &Arc<AtomicBool>) -
     let mut process = Process::spawn(&mut cmd, cancel)?;
     drop(process.stdin());
     let mut bytes = Vec::new();
-    process.stdout().take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
-    ensure!(bytes.len() <= 1024 * 1024, "Video preset metadata exceeds 1 MB");
+    process
+        .stdout()
+        .take(1024 * 1024 + 1)
+        .read_to_end(&mut bytes)?;
+    ensure!(
+        bytes.len() <= 1024 * 1024,
+        "Video preset metadata exceeds 1 MB"
+    );
     process.wait()?;
     parse_preset(&serde_json::from_slice(&bytes)?, input)
 }
 
 fn parse_preset(root: &Value, input: (u32, u32)) -> Result<Preset> {
-    let comment = root["format"]["tags"].as_object()
-        .and_then(|tags| tags.iter().find(|(key, _)| key.eq_ignore_ascii_case("comment")))
+    let comment = root["format"]["tags"]
+        .as_object()
+        .and_then(|tags| {
+            tags.iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case("comment"))
+        })
         .and_then(|(_, value)| value.as_str())
         .and_then(|text| text.strip_prefix(PRESET_PREFIX))
         .context("This video does not contain a CRTSim-Renderer preset")?;
@@ -100,8 +110,16 @@ fn parse_preset(root: &Value, input: (u32, u32)) -> Result<Preset> {
 /// Count decoded frames only when opening a video; subsequent frame seeks reuse this count.
 pub fn frame_count(video: &Video, cancel: &Arc<AtomicBool>) -> Result<u64> {
     let mut cmd = command("ffprobe");
-    cmd.args(["-select_streams", &video.stream.to_string(), "-count_frames",
-        "-show_entries", "stream=nb_read_frames", "-of", "json"]).arg(&video.path);
+    cmd.args([
+        "-select_streams",
+        &video.stream.to_string(),
+        "-count_frames",
+        "-show_entries",
+        "stream=nb_read_frames",
+        "-of",
+        "json",
+    ])
+    .arg(&video.path);
     let mut process = Process::spawn(&mut cmd, cancel)?;
     drop(process.stdin());
     let mut bytes = Vec::new();
@@ -109,8 +127,10 @@ pub fn frame_count(video: &Video, cancel: &Arc<AtomicBool>) -> Result<u64> {
     ensure!(bytes.len() <= 65536, "Frame count response is too large");
     process.wait()?;
     let root: Value = serde_json::from_slice(&bytes)?;
-    let count = root["streams"][0]["nb_read_frames"].as_str()
-        .and_then(|s| s.parse::<u64>().ok()).context("Cannot count video frames")?;
+    let count = root["streams"][0]["nb_read_frames"]
+        .as_str()
+        .and_then(|s| s.parse::<u64>().ok())
+        .context("Cannot count video frames")?;
     ensure!(count > 0, "Video contains no decoded frames");
     Ok(count)
 }
@@ -381,10 +401,18 @@ pub fn export_with(
     let c = render_config(config, options, fps);
     // Store the user's original controls plus timing, not the decay-adjusted config:
     // reimporting the latter would apply the timing correction a second time.
-    let metadata = format!("{PRESET_PREFIX}{}", serde_json::to_string(&Preset {
-        version: 1, config: config.clone(), video_options: options.clone(),
-    })?);
-    ensure!(metadata.len() <= 16384, "Video preset metadata exceeds 16 KB");
+    let metadata = format!(
+        "{PRESET_PREFIX}{}",
+        serde_json::to_string(&Preset {
+            version: 1,
+            config: config.clone(),
+            video_options: options.clone(),
+        })?
+    );
+    ensure!(
+        metadata.len() <= 16384,
+        "Video preset metadata exceeds 16 KB"
+    );
     let mut encode_cmd = command("ffmpeg");
     encode_cmd.args([
         "-y",
@@ -510,7 +538,14 @@ pub fn export_with(
                 cmd.args(["-af", &filter]);
             }
         }
-        cmd.args(["-t", &duration.to_string(), "-map_metadata", "-1", "-metadata", &format!("comment={metadata}")]);
+        cmd.args([
+            "-t",
+            &duration.to_string(),
+            "-map_metadata",
+            "-1",
+            "-metadata",
+            &format!("comment={metadata}"),
+        ]);
         if extension == "mp4" {
             cmd.args(["-movflags", "+faststart"]);
         }
@@ -599,7 +634,11 @@ mod tests {
         data["version"] = 1.into();
         data["config"]["output"] = "0x0".into();
         assert!(parse_preset(&tagged(&data), (64, 48)).is_err());
-        assert!(parse_preset(&serde_json::json!({"format":{"tags":{"comment":"ordinary comment"}}}), (64,48)).is_err());
+        assert!(parse_preset(
+            &serde_json::json!({"format":{"tags":{"comment":"ordinary comment"}}}),
+            (64, 48)
+        )
+        .is_err());
     }
 
     #[test]

@@ -370,16 +370,42 @@ fn exact_frame_navigation_including_variable_rate() {
     let source = dir.path().join("frames.mkv");
     fixture(&source, "30");
     let vfr = dir.path().join("vfr.mkv");
-    let result = Command::new("ffmpeg").args(["-v", "error", "-i"]).arg(&source)
-        .args(["-vf", "select='not(eq(mod(n,3),1))'", "-fps_mode", "vfr", "-an", "-c:v", "ffv1"])
-        .arg(&vfr).output().unwrap();
+    let result = Command::new("ffmpeg")
+        .args(["-v", "error", "-i"])
+        .arg(&source)
+        .args([
+            "-vf",
+            "select='not(eq(mod(n,3),1))'",
+            "-fps_mode",
+            "vfr",
+            "-an",
+            "-c:v",
+            "ffv1",
+        ])
+        .arg(&vfr)
+        .output()
+        .unwrap();
     assert!(result.status.success());
     let cancel = Arc::new(AtomicBool::new(false));
     for path in [&source, &vfr] {
         let info = crtsim_media::probe(path, &cancel).unwrap();
-        let all = Command::new("ffmpeg").args(["-v", "error", "-i"]).arg(path)
-            .args(["-map", "0:v:0", "-an", "-fps_mode", "passthrough", "-pix_fmt", "rgba", "-f", "rawvideo", "pipe:1"])
-            .output().unwrap();
+        let all = Command::new("ffmpeg")
+            .args(["-v", "error", "-i"])
+            .arg(path)
+            .args([
+                "-map",
+                "0:v:0",
+                "-an",
+                "-fps_mode",
+                "passthrough",
+                "-pix_fmt",
+                "rgba",
+                "-f",
+                "rawvideo",
+                "pipe:1",
+            ])
+            .output()
+            .unwrap();
         assert!(all.status.success());
         let frame_bytes = 64 * 48 * 4;
         let count = crtsim_media::frame_count(&info, &cancel).unwrap();

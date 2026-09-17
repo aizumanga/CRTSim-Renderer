@@ -1,3 +1,8 @@
 /target/
 /output/
 __pycache__/
+
+/dist/
+/package-smoke/
+/linuxdeploy.AppImage
+/formatting.patch

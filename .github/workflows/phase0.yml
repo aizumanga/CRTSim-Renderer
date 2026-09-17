@@ -69,6 +69,9 @@ jobs:
         run: |
           xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-desktop -- --backend vulkan --smoke-test output/desktop.png
           xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-desktop -- --smoke-test output/welcome.png --smoke-welcome
+          mkdir -p "$CRTSIM_DATA_DIR/presets"
+          cp output/general.json "$CRTSIM_DATA_DIR/presets/Animation CRT.json"
+          echo 'A personal description for animation, with a soft mask and gentle bloom.' > "$CRTSIM_DATA_DIR/presets/Animation CRT.txt"
           xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-desktop -- --backend vulkan --smoke-test output/gallery.png --smoke-gallery
           xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-desktop -- output/video-input.mkv --backend vulkan --smoke-test output/video-desktop.png
       - uses: actions/upload-artifact@v4

@@ -7,6 +7,6 @@ export CRTSIM_HOST_LD_LIBRARY_PATH="${LD_LIBRARY_PATH-}"
 export LD_LIBRARY_PATH="$app_root/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 if [ "${1-}" = "--cli" ]; then
     shift
-    exec "$app_root/usr/bin/crtsim-cli" "$@"
+    exec "$app_root/usr/bin/crtsim" "$@"
 fi
 exec "$app_root/usr/bin/crtsim-desktop" "$@"

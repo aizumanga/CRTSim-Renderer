@@ -25,7 +25,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Linux dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update -qq && sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libegl1-mesa-dev mesa-vulkan-drivers xvfb
+        run: sudo apt-get update -qq && sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libegl1-mesa-dev mesa-vulkan-drivers xvfb ffmpeg
       - name: Static Windows C runtime
         if: runner.os == 'Windows'
         shell: bash
@@ -59,7 +59,7 @@ jobs:
           chmod +x linuxdeploy.AppImage
           sha256sum linuxdeploy.AppImage > dist/linuxdeploy-tool.sha256
           export OUTPUT="$PWD/dist/CRTSim-Renderer-${PACKAGE_VERSION}-linux-x86_64.AppImage"
-          ./linuxdeploy.AppImage --appdir dist/AppDir --executable target/release/crtsim-desktop --executable target/release/crtsim-cli --desktop-file packaging/crtsim-renderer.desktop --icon-file packaging/crtsim-renderer.svg --library /usr/lib/x86_64-linux-gnu/libxkbcommon-x11.so.0 --library /usr/lib/x86_64-linux-gnu/libwayland-client.so.0 --custom-apprun packaging/AppRun --output appimage
+          ./linuxdeploy.AppImage --appdir dist/AppDir --executable target/release/crtsim-desktop --executable target/release/crtsim --desktop-file packaging/crtsim-renderer.desktop --icon-file packaging/crtsim-renderer.svg --library /usr/lib/x86_64-linux-gnu/libxkbcommon-x11.so.0 --library /usr/lib/x86_64-linux-gnu/libwayland-client.so.0 --custom-apprun packaging/AppRun --output appimage
       - name: Smoke-test packaged Linux AppImage
         if: runner.os == 'Linux'
         env:
@@ -71,6 +71,8 @@ jobs:
           mkdir -p package-smoke
           ./dist/*.AppImage --cli inspect-meshes
           xvfb-run -a -s '-screen 0 1440x1000x24' ./dist/*.AppImage --backend vulkan --smoke-test "$PWD/package-smoke/desktop.png"
+          ffmpeg -v error -f lavfi -i testsrc2=size=64x48:rate=30 -t 0.2 -c:v libx264 package-smoke/input.mkv
+          xvfb-run -a -s '-screen 0 1440x1000x24' ./dist/*.AppImage "$PWD/package-smoke/input.mkv" --backend vulkan --smoke-test "$PWD/package-smoke/video.png"
       - name: Package checksums
         shell: bash
         run: python -c "from pathlib import Path; import hashlib; p=Path('dist'); fs=sorted(f for f in p.iterdir() if f.is_file() and (f.suffix in ('.zip','.AppImage') or f.name.endswith('.tar.gz'))); (p/'SHA256SUMS-${{ matrix.platform }}.txt').write_text(''.join(hashlib.sha256(f.read_bytes()).hexdigest()+'  '+f.name+'\n' for f in fs))"

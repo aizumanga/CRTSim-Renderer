@@ -68,18 +68,31 @@ pub fn start(
         while let Ok(job) = jobs.recv() {
             let event = match job {
                 Job::Shutdown => break,
-                Job::ImportPreset { path, input, cancel } => Event::PresetImported(
+                Job::ImportPreset {
+                    path,
+                    input,
+                    cancel,
+                } => Event::PresetImported(
                     (|| -> anyhow::Result<_> {
-                        if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("png")) {
+                        if path
+                            .extension()
+                            .is_some_and(|e| e.eq_ignore_ascii_case("png"))
+                        {
                             let config = files::load_preset_from_image(&path, input)?;
                             Ok((path, config, None))
                         } else {
                             let preset = crtsim_media::import_preset(&path, input, &cancel)?;
                             Ok((path, preset.config, Some(preset.video_options)))
                         }
-                    })().map_err(|e| format!("{e:#}")),
+                    })()
+                    .map_err(|e| format!("{e:#}")),
                 ),
-                Job::LoadVideo { path, frame, cached, cancel } => Event::VideoLoaded(
+                Job::LoadVideo {
+                    path,
+                    frame,
+                    cached,
+                    cancel,
+                } => Event::VideoLoaded(
                     (|| -> anyhow::Result<_> {
                         let (video, count) = match cached {
                             Some(cached) => cached,

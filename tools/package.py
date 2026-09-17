@@ -1,8 +1,6 @@
 """Package already-built release binaries and their notices. Run from the repository root."""
 import argparse
-import hashlib
 import json
-import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -22,8 +20,9 @@ name = f'CRTSim-Renderer-{args.version}-{args.platform}'
 stage = dist / name
 stage.mkdir()  # Refuse stale/reused staging folders.
 exe = '.exe' if args.platform.startswith('windows') else ''
-for binary in ['crtsim-desktop', 'crtsim-cli']:
+for binary in ['crtsim-desktop', 'crtsim']:
     shutil.copy2(root / 'target' / 'release' / (binary + exe), stage)
+    subprocess.run([str(stage / (binary + exe)), '--help'], check=True, stdout=subprocess.DEVNULL)
 for doc in ['README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md']:
     shutil.copy2(root / doc, stage)
 shutil.copytree(root / 'docs', stage / 'docs')
@@ -79,10 +78,10 @@ else:
 if args.platform == 'linux-x86_64':
     appdir = dist / 'AppDir'
     (appdir / 'usr/bin').mkdir(parents=True)
-    for binary in ['crtsim-desktop', 'crtsim-cli']:
+    for binary in ['crtsim-desktop', 'crtsim']:
         shutil.copy2(stage / binary, appdir / 'usr/bin')
     shutil.copytree(stage, appdir / 'usr/share/doc/crtsim-renderer')
-    for binary in ['crtsim-desktop', 'crtsim-cli']:
+    for binary in ['crtsim-desktop', 'crtsim']:
         (appdir / 'usr/share/doc/crtsim-renderer' / binary).unlink()
     shutil.copy2(root / 'packaging/AppRun', appdir / 'AppRun')
     (appdir / 'AppRun').chmod(0o755)

@@ -209,14 +209,23 @@ impl App {
         std::thread::spawn(move || {
             let path = match kind {
                 Dialog::File => rfd::FileDialog::new()
-                    .add_filter("Images and videos", &["png", "jpg", "jpeg", "webp", "bmp", "mp4", "mkv", "mov", "webm", "avi", "m4v"])
+                    .add_filter(
+                        "Images and videos",
+                        &[
+                            "png", "jpg", "jpeg", "webp", "bmp", "mp4", "mkv", "mov", "webm",
+                            "avi", "m4v",
+                        ],
+                    )
                     .pick_file(),
                 Dialog::ExportVideo => rfd::FileDialog::new()
                     .add_filter("Video", &["mp4", "mkv", "webm"])
                     .set_file_name("rendered.mp4")
                     .save_file(),
                 Dialog::ImportPreset => rfd::FileDialog::new()
-                    .add_filter("Rendered image/video", &["png", "mp4", "mkv", "webm", "mov", "m4v", "avi"])
+                    .add_filter(
+                        "Rendered image/video",
+                        &["png", "mp4", "mkv", "webm", "mov", "m4v", "avi"],
+                    )
                     .pick_file(),
                 Dialog::LoadPreset => rfd::FileDialog::new()
                     .add_filter("CRT preset", &["json"])
@@ -279,7 +288,11 @@ impl App {
         self.send(Job::LoadVideo {
             path,
             frame,
-            cached: if reuse { self.video.clone().map(|v| (v, self.video_frames)) } else { None },
+            cached: if reuse {
+                self.video.clone().map(|v| (v, self.video_frames))
+            } else {
+                None
+            },
             cancel: self.cancel.clone(),
         });
     }
@@ -345,7 +358,11 @@ impl App {
                         self.video_job = true;
                         self.cancel = Arc::new(AtomicBool::new(false));
                         self.status = "Reading preset metadata…".into();
-                        self.send(Job::ImportPreset { path, input: self.input.dimensions(), cancel: self.cancel.clone() });
+                        self.send(Job::ImportPreset {
+                            path,
+                            input: self.input.dimensions(),
+                            cancel: self.cancel.clone(),
+                        });
                     }
                     Dialog::LoadPreset => {
                         match files::load_preset(&path, self.input.dimensions()) {
@@ -396,9 +413,15 @@ impl App {
                     self.video_job = false;
                     match result {
                         Ok((path, config, options)) => {
-                            self.gallery_name = path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+                            self.gallery_name = path
+                                .file_stem()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .into_owned();
                             self.replace_config(config);
-                            if let Some(options) = options { self.video_options = options; }
+                            if let Some(options) = options {
+                                self.video_options = options;
+                            }
                             self.status = format!("Imported preset from {}", path.display());
                             self.error = None;
                         }
@@ -532,7 +555,10 @@ impl App {
                 self.refresh_gallery();
                 self.show_gallery = true;
             }
-            if ui.add_enabled(enabled, egui::Button::new("Open File…")).clicked() {
+            if ui
+                .add_enabled(enabled, egui::Button::new("Open File…"))
+                .clicked()
+            {
                 self.dialog(Dialog::File, ctx);
             }
             if ui
@@ -547,7 +573,10 @@ impl App {
                 self.changed();
             }
             if ui
-                .add_enabled(enabled, egui::Button::new("Import preset from Image/Video…"))
+                .add_enabled(
+                    enabled,
+                    egui::Button::new("Import preset from Image/Video…"),
+                )
                 .clicked()
             {
                 self.dialog(Dialog::ImportPreset, ctx);
@@ -565,14 +594,22 @@ impl App {
                 self.dialog(Dialog::SavePreset, ctx);
             }
             if ui
-                .add_enabled(enabled && !self.exporting, egui::Button::new(if self.video.is_some() { "Export frame…" } else { "Export PNG…" }))
+                .add_enabled(
+                    enabled && !self.exporting,
+                    egui::Button::new(if self.video.is_some() {
+                        "Export frame…"
+                    } else {
+                        "Export PNG…"
+                    }),
+                )
                 .clicked()
             {
                 self.dialog(Dialog::Export, ctx);
             }
-            if self.video.is_some() && ui
-                .add_enabled(enabled, egui::Button::new("Export video…"))
-                .clicked()
+            if self.video.is_some()
+                && ui
+                    .add_enabled(enabled, egui::Button::new("Export video…"))
+                    .clicked()
             {
                 self.dialog(Dialog::ExportVideo, ctx);
             }
@@ -920,7 +957,10 @@ impl App {
             ui.colored_label(Color32::YELLOW, "Preview is out of date.");
         }
         let controls_height = if self.video.is_some() { 106. } else { 0. };
-        let available = egui::vec2(ui.available_width(), (ui.available_height() - controls_height).max(1.));
+        let available = egui::vec2(
+            ui.available_width(),
+            (ui.available_height() - controls_height).max(1.),
+        );
         egui::ScrollArea::both().max_height(available.y).auto_shrink([false,false]).show(ui,|ui| {
             if self.view == View::Compare {
                 ui.horizontal_top(|ui| {
@@ -936,40 +976,59 @@ impl App {
     }
 
     fn video_controls(&mut self, ui: &mut egui::Ui) {
-        let Some(video) = self.video.clone() else { return; };
+        let Some(video) = self.video.clone() else {
+            return;
+        };
         let last = self.video_frames.saturating_sub(1);
         let enabled = !self.loading && !self.exporting && !self.dialog_open && !self.show_gallery;
         let mut seek = false;
         ui.separator();
         ui.add_enabled_ui(enabled, |ui| {
             ui.horizontal_wrapped(|ui| {
-                if ui.add_enabled(self.video_frame > 0, egui::Button::new("Previous frame")).clicked() {
+                if ui
+                    .add_enabled(self.video_frame > 0, egui::Button::new("Previous frame"))
+                    .clicked()
+                {
                     self.selected_frame = self.video_frame.saturating_sub(1);
                     seek = true;
                 }
-                if ui.add_enabled(self.video_frame < last, egui::Button::new("Next frame")).clicked() {
+                if ui
+                    .add_enabled(self.video_frame < last, egui::Button::new("Next frame"))
+                    .clicked()
+                {
                     self.selected_frame = (self.video_frame + 1).min(last);
                     seek = true;
                 }
                 ui.label("Frame");
                 let mut display_frame = self.selected_frame + 1;
-                let number = ui.add(egui::DragValue::new(&mut display_frame).clamp_range(1..=self.video_frames).speed(1));
+                let number = ui.add(
+                    egui::DragValue::new(&mut display_frame)
+                        .clamp_range(1..=self.video_frames)
+                        .speed(1),
+                );
                 self.selected_frame = display_frame.saturating_sub(1).min(last);
-                seek |= number.drag_stopped() || (number.lost_focus() && self.selected_frame != self.video_frame);
+                seek |= number.drag_stopped()
+                    || (number.lost_focus() && self.selected_frame != self.video_frame);
                 ui.label(format!("/ {}", self.video_frames));
-                if ui.button("Go").clicked() { seek = true; }
+                if ui.button("Go").clicked() {
+                    seek = true;
+                }
             });
             ui.scope(|ui| {
                 ui.spacing_mut().slider_width = (ui.available_width() - 20.).max(100.);
-                let response = ui.add(egui::Slider::new(&mut self.selected_frame, 0..=last).show_value(false));
-                seek |= response.drag_stopped() || (response.changed() && !ui.input(|i| i.pointer.any_down()));
+                let response =
+                    ui.add(egui::Slider::new(&mut self.selected_frame, 0..=last).show_value(false));
+                seek |= response.drag_stopped()
+                    || (response.changed() && !ui.input(|i| i.pointer.any_down()));
             });
             if !ui.ctx().wants_keyboard_input() {
                 if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft)) {
-                    self.selected_frame = self.video_frame.saturating_sub(1); seek = true;
+                    self.selected_frame = self.video_frame.saturating_sub(1);
+                    seek = true;
                 }
                 if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight)) {
-                    self.selected_frame = (self.video_frame + 1).min(last); seek = true;
+                    self.selected_frame = (self.video_frame + 1).min(last);
+                    seek = true;
                 }
             }
         });
@@ -977,7 +1036,6 @@ impl App {
         if seek && enabled && self.selected_frame != self.video_frame {
             self.load_video(video.path, self.selected_frame, true);
         }
-
     }
 }
 
@@ -1034,11 +1092,11 @@ impl App {
                             ui.group(|ui| {
                                 ui.horizontal(|ui| {
                                     if ui.selectable_label(self.config == entry.config, &entry.name).clicked() { selected = Some(entry.config.clone()); }
-                                    ui.small(if entry.description.is_empty() { "No description" } else { &entry.description });
                                     if entry.user && ui.small_button("Edit description").clicked() {
                                         edit = Some((entry.name.clone(), entry.description.clone()));
                                     }
                                 });
+                                ui.add(egui::Label::new(if entry.description.is_empty() { "No description" } else { &entry.description }).wrap(true));
                             });
                         }
                         if count == 0 { ui.label("No personal presets yet. Adjust an image and save your first look above."); }
@@ -1047,22 +1105,40 @@ impl App {
             });
         });
         self.show_gallery = open;
-        if let Some(edit) = edit { self.description_edit = Some(edit); }
+        if let Some(edit) = edit {
+            self.description_edit = Some(edit);
+        }
         if let Some((name, mut description)) = self.description_edit.clone() {
             let mut editing = true;
             let mut save = false;
             egui::Window::new(format!("Description — {name}"))
-                .open(&mut editing).collapsible(false).default_width(400.).show(ctx, |ui| {
-                    ui.add(egui::TextEdit::multiline(&mut description).desired_rows(4).desired_width(f32::INFINITY));
+                .open(&mut editing)
+                .collapsible(false)
+                .default_width(400.)
+                .show(ctx, |ui| {
+                    ui.add(
+                        egui::TextEdit::multiline(&mut description)
+                            .desired_rows(4)
+                            .desired_width(f32::INFINITY),
+                    );
                     ui.small("Up to 4096 bytes. Leave blank to remove the description.");
                     save = ui.button("Save description").clicked();
-                    if let Some(error) = &self.error { ui.colored_label(Color32::LIGHT_RED, error); }
+                    if let Some(error) = &self.error {
+                        ui.colored_label(Color32::LIGHT_RED, error);
+                    }
                 });
             if save {
-                let result = self.store.as_ref().ok_or_else(|| anyhow::anyhow!("Personal storage unavailable"))
+                let result = self
+                    .store
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("Personal storage unavailable"))
                     .and_then(|store| store.set_description(&name, &description));
                 match result {
-                    Ok(()) => { self.refresh_gallery(); self.error = None; editing = false; }
+                    Ok(()) => {
+                        self.refresh_gallery();
+                        self.error = None;
+                        editing = false;
+                    }
                     Err(e) => self.error = Some(format!("Cannot save description: {e:#}")),
                 }
             }
