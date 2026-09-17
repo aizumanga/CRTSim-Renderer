@@ -1,11 +1,12 @@
 mod files;
 mod gallery;
 mod model;
+mod theme;
 mod worker;
 
 use crtsim_core::config::{self, ColorMode, Config, Filter, Fit, Phase};
 use crtsim_core::RenderProgress;
-use eframe::egui::{self, Color32, TextureHandle};
+use eframe::egui::{self, TextureHandle};
 use image::RgbaImage;
 use std::{
     path::PathBuf,
@@ -43,6 +44,7 @@ struct App {
     video_job: bool,
     worker_thread: Option<std::thread::JoinHandle<()>>,
     store: Option<gallery::Store>,
+    theme: theme::Theme,
     show_welcome: bool,
     show_credits: bool,
     show_gallery: bool,
@@ -109,20 +111,27 @@ impl App {
         input_path: Option<PathBuf>,
         smoke: Option<PathBuf>,
     ) -> Self {
-        ctx.set_visuals(egui::Visuals::dark());
-        let mut style = (*ctx.style()).clone();
-        style.spacing.item_spacing = egui::vec2(8., 8.);
-        ctx.set_style(style);
         let input = Arc::new(config::test_card());
         let original = texture(ctx, "original", &input, 2048);
         let config = model::general();
         let (jobs, events, worker_thread) = worker::start(ctx.clone(), backend);
         let (dialog_send, dialog_receive) = mpsc::channel();
         let loading = false;
-        let (store, storage_error) = match gallery::Store::discover() {
+        let (store, mut storage_error) = match gallery::Store::discover() {
             Ok(s) => (Some(s), None),
             Err(e) => (None, Some(format!("App data unavailable: {e:#}"))),
         };
+        let theme = match store.as_ref().map(gallery::Store::theme) {
+            Some(Ok(Some(theme))) => theme,
+            Some(Ok(None)) | None => theme::Theme::default(),
+            Some(Err(e)) => {
+                storage_error = Some(format!(
+                    "Could not load the saved theme: {e:#}. Using CRT Dark."
+                ));
+                theme::Theme::default()
+            }
+        };
+        theme.apply(ctx);
         let show_welcome = smoke.is_none() && store.as_ref().is_none_or(|s| s.welcome_needed());
         let mut gallery_entries = gallery::builtins();
         let mut gallery_warnings = vec![];
@@ -145,6 +154,7 @@ impl App {
             video_job: false,
             worker_thread: Some(worker_thread),
             store,
+            theme,
             show_welcome,
             show_credits: false,
             show_gallery: false,
@@ -547,6 +557,9 @@ impl App {
     }
     fn toolbar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.horizontal_wrapped(|ui| {
+            let (mark, _) = ui.allocate_exact_size(egui::vec2(10., 10.), egui::Sense::hover());
+            ui.painter()
+                .circle_filled(mark.center(), 4., self.theme.accent());
             ui.strong("CRTSim Renderer");
             ui.separator();
             let enabled = !self.dialog_open && !self.loading && !self.exporting;
@@ -617,6 +630,25 @@ impl App {
             }
             if ui.button("Credits").clicked() {
                 self.show_credits = true;
+            }
+            ui.separator();
+            let mut selected = self.theme;
+            egui::ComboBox::from_id_source("appearance-theme")
+                .selected_text(format!("Theme · {}", self.theme.name()))
+                .show_ui(ui, |ui| {
+                    for theme in theme::Theme::ALL {
+                        ui.selectable_value(&mut selected, theme, theme.name())
+                            .on_hover_text(theme.description());
+                    }
+                });
+            if selected != self.theme {
+                self.theme = selected;
+                self.theme.apply(ctx);
+                if let Some(store) = &self.store {
+                    if let Err(e) = store.set_theme(self.theme) {
+                        self.error = Some(format!("Could not remember the selected theme: {e:#}"));
+                    }
+                }
             }
         });
     }
@@ -789,19 +821,19 @@ impl App {
             ));
             if output.0 as u64 * output.1 as u64 > 8_300_000 {
                 ui.colored_label(
-                    Color32::YELLOW,
+                    ui.visuals().warn_fg_color,
                     "Large output: more memory and rendering time.",
                 );
             }
         } else {
             ui.colored_label(
-                Color32::YELLOW,
+                ui.visuals().warn_fg_color,
                 "Choose a preset or enter a valid WIDTHxHEIGHT.",
             );
         }
         if matches!(self.config.fit, Fit::Cover | Fit::Reference) || self.config.overscan > 1. {
             ui.colored_label(
-                Color32::YELLOW,
+                ui.visuals().warn_fg_color,
                 "Current fit/overscan can crop content and subtitles.",
             );
         }
@@ -939,7 +971,7 @@ impl App {
                 if w as f32 / self.config.mask_repeats[0] < 6.
                     || h as f32 / self.config.mask_repeats[1] < 3.
                 {
-                    ui.colored_label(Color32::YELLOW,"Dense mask at this preview size: aliasing / moiré is possible. Try a higher preview resolution or lower mask density.");
+                    ui.colored_label(ui.visuals().warn_fg_color,"Dense mask at this preview size: aliasing / moiré is possible. Try a higher preview resolution or lower mask density.");
                 }
             }
         }
@@ -956,7 +988,7 @@ impl App {
             });
         }
         if self.rendered.is_some() && self.rendered_revision != Some(self.revision) {
-            ui.colored_label(Color32::YELLOW, "Preview is out of date.");
+            ui.colored_label(ui.visuals().warn_fg_color, "Preview is out of date.");
         }
         let controls_height = if self.video.is_some() { 106. } else { 0. };
         let available = egui::vec2(
@@ -1081,8 +1113,8 @@ impl App {
                 });
                 ui.small("Load an existing JSON, then choose Save current to add it to My presets. Existing names are never overwritten.");
                 if let Some(ref store) = self.store { ui.small(format!("Personal presets: {}",store.root.join("presets").display())); }
-                else { ui.colored_label(Color32::YELLOW,"Personal storage is unavailable. JSON import/export and built-in presets still work."); }
-                if let Some(ref error) = self.error { ui.colored_label(Color32::LIGHT_RED,error); }
+                else { ui.colored_label(ui.visuals().warn_fg_color,"Personal storage is unavailable. JSON import/export and built-in presets still work."); }
+                if let Some(ref error) = self.error { ui.colored_label(ui.visuals().error_fg_color,error); }
                 if !self.gallery_warnings.is_empty() { egui::CollapsingHeader::new("Skipped preset files").show(ui,|ui| { for warning in &self.gallery_warnings { ui.label(warning); } }); }
                 ui.separator();
                 egui::ScrollArea::vertical().max_height(360.).show(ui, |ui| {
@@ -1126,7 +1158,7 @@ impl App {
                     ui.small("Up to 4096 bytes. Leave blank to remove the description.");
                     save = ui.button("Save description").clicked();
                     if let Some(error) = &self.error {
-                        ui.colored_label(Color32::LIGHT_RED, error);
+                        ui.colored_label(ui.visuals().error_fg_color, error);
                     }
                 });
             if save {
@@ -1290,7 +1322,7 @@ impl eframe::App for App {
                 .flatten()
             {
                 ui.horizontal_wrapped(|ui| {
-                    ui.colored_label(Color32::LIGHT_RED, error);
+                    ui.colored_label(ui.visuals().error_fg_color, error);
                     if ui.button("Dismiss").clicked() {
                         self.error = None;
                         self.preview_error = None;

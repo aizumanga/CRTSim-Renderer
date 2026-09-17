@@ -35,7 +35,13 @@ Descriptions are saved beside gallery JSON files as UTF-8 `.txt` files; the JSON
 To add an existing JSON, load it, then use Save current in the gallery. JSON export remains available for sharing.
 Names are never overwritten; malformed files are skipped with an explanation. Personal JSON files live outside the checkout,
 in the app data directory shown in the gallery. `CRTSIM_DATA_DIR` can override that directory with an absolute path.
-Only explicitly saved presets and the welcome acknowledgement persist; unsaved edits are not automatically saved on exit.
+Only explicitly saved presets, the welcome acknowledgement and the selected interface theme persist;
+unsaved rendering edits are not automatically saved on exit.
+
+The desktop includes five interface themes: **CRT Dark**, **Paper Light**, **Luna Blue**, **Classic Platinum**
+and **Sky Diary**. The two classic desktop palettes are operating-system-inspired rather than pixel-perfect replicas.
+Sky Diary adapts the blue/pink window language of the aizumanga-neocities site without its animated background effects.
+Themes change the application chrome only: render presets, previews and exported pixels are unaffected.
 
 Full-resolution export shows stage-based progress and can be cancelled; routine live-preview updates stay unobtrusive. Warm-up advances after completed GPU batches,
 followed by surface rendering/readback and PNG saving.
