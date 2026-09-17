@@ -35,8 +35,9 @@ Descriptions are saved beside gallery JSON files as UTF-8 `.txt` files; the JSON
 To add an existing JSON, load it, then use Save current in the gallery. JSON export remains available for sharing.
 Names are never overwritten; malformed files are skipped with an explanation. Personal JSON files live outside the checkout,
 in the app data directory shown in the gallery. `CRTSIM_DATA_DIR` can override that directory with an absolute path.
-Only explicitly saved presets, the welcome acknowledgement and the selected interface theme persist;
-unsaved rendering edits are not automatically saved on exit.
+The desktop also saves a recoverable session every two seconds and on exit. **Project** opens/saves `.crtsim`
+projects and lists the ten most recent projects. Recovery restores edits and leaves the export queue paused.
+See the [v0.2 workflow guide](docs/WORKFLOW.md) for playback, framing, LUTs, projects and batch exports.
 
 The desktop includes five interface themes: **CRT Dark**, **Paper Light**, **Luna Blue**, **Classic Platinum**
 and **Sky Diary**. The two classic desktop palettes are operating-system-inspired rather than pixel-perfect replicas.
@@ -73,16 +74,16 @@ already exists; after confirmation, the app writes a complete temporary file and
 
 - **General image** starts with square pixels, smooth resizing, contain fitting and saturation 1.0.
 - **Original CRTSim** restores the public-reference defaults, including 256x224 signal resampling and saturation 1.35.
-- **Original / CRT / Side by side** compares the source with the rendered tube. Comparison is not geometrically aligned because the CRT bends the image.
+- **Original / CRT / Compare** compares the source with the rendered tube. Drag the comparison divider. The CRT bends the image, so the two views are not geometrically registered.
 - **Fast / Balanced / Export resolution** changes preview canvas resolution only. Use Export resolution and turn off Fit view at 1x zoom to inspect mask sampling.
 - **Load / Save preset** uses the same version-1 JSON format as the CLI. **Undo / Redo / Reset** acts on settings, not source files or exported files.
   `Ctrl+Z` and `Ctrl+Shift+Z` provide undo and redo shortcuts (`Command` equivalents are also accepted on macOS).
 - Signal and export size boxes accept named presets or custom `WIDTHxHEIGHT`. Resolved dimensions and crop/mask warnings are shown in the window.
 
 The original-image display is limited to a 2048-pixel thumbnail; export always uses the loaded source.
-Preview rendering shares the CLI core but is a debounced still-image render, not a continuous 60 FPS simulation.
+Still previews are debounced; video playback streams frames with persistent CRT history and a short buffer.
 The CRT mask can look different at different preview sizes; exports retain the requested resolution.
-Preset changes are kept in memory until saved; the app does not silently write settings on exit.
+Recovery does not overwrite explicitly saved presets or project files.
 
 Linux needs working OpenGL for the window and Vulkan for the CRT renderer, plus an X11 or Wayland session.
 X11 also needs the xkbcommon X11 library (`libxkbcommon-x11` on Arch, `libxkbcommon-x11-0` on Debian/Ubuntu).
@@ -120,14 +121,14 @@ Missing executables/codecs produce an error in the window; nothing is downloaded
 1. Choose **Open File…**, drop a video, or pass its path on the command line.
 2. Use **Previous frame / Next frame**, arrow keys, the frame number field or the wide slider beneath the preview.
    Selection loads when you release the slider or choose **Go**. Frame numbers start at 1 and follow actual decoded frames, including VFR sources.
-   **Export frame** saves the currently displayed source frame as a full-resolution CRT PNG. This is a settled still preview, not motion-history playback.
+   **Play / Pause** (Space) starts buffered playback with CRT history. **Export frame** saves the displayed source frame as a full-resolution, settled CRT PNG.
    When a valid container frame count exists it is used immediately. Other files require one decoded-frame count on open. Exact seeks decode by ordinal from the start and can take time on long videos; loading/seeking is cancellable.
 3. Choose output resolution and video timing: source-rate stable artifacts (default), 60 Hz alternating artifacts, or persistence off.
 4. Choose **Export video…** and a filename ending in `.mp4`, `.mkv` or `.webm`. MP4/MKV use H.264; WebM uses VP9.
 
 Exports retain CRT history between ordered frames. Variable-frame-rate input is normalized to the detected average frame rate,
 or to 60 FPS in 60 Hz mode. Source-rate mode corrects persistence decay by media time; this is an approximation of the spatial feedback effect.
-Audio defaults to copying the first track when compatible, with AAC/Opus fallback; delayed audio is re-encoded to preserve its timing.
+Audio defaults to copying compatible tracks, with AAC/Opus fallback; delayed tracks are re-encoded to preserve their timing.
 **Re-encode** and **Mute** are also available. Video output dimensions must be even.
 
 The progress bar reports frames, rendering speed and an approximate remaining time. **Cancel** stops image export, video loading and video export;
@@ -135,8 +136,8 @@ closing the app also terminates its FFmpeg processes. Existing destinations are 
 Temporary encoded files require space on the destination drive, but decoded frames are streamed rather than saved as PNGs.
 Settings and the source are captured for each export; edits during export apply to the next job.
 
-Output is opaque SDR with software encoding. Video is explicitly converted from full-range RGB to limited-range BT.709 and tagged accordingly. HDR input uses FFmpeg's `zscale`/`tonemap` filters when available.
-No subtitles, chapters, additional audio tracks, HDR output or hardware encoder controls are included yet.
+Output is opaque SDR with software or optional hardware H.264 encoding. Video is explicitly converted from full-range RGB to limited-range BT.709 and tagged accordingly. HDR input uses FFmpeg's `zscale`/`tonemap` filters when available; HDR output remains outside this version.
+Audio tracks, supported subtitles, chapters and source metadata are preserved by default; MKV also supports attachments. See the [workflow guide](docs/WORKFLOW.md) for container limits and quality profiles.
 MP4/MKV/WebM exports embed an importable preset in a container comment, including the original controls and video timing/audio settings.
 PNG exports still embed importable presets. Full details and validation commands are in [VIDEO_PIPELINE.md](docs/VIDEO_PIPELINE.md).
 

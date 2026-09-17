@@ -3,6 +3,7 @@ mod gallery;
 mod model;
 mod theme;
 mod worker;
+mod workflow;
 
 use crtsim_core::config::{self, ColorMode, Config, Filter, Fit, Phase};
 use crtsim_core::RenderProgress;
@@ -20,6 +21,9 @@ use worker::{Event, Job};
 
 #[derive(Clone, Copy)]
 enum Dialog {
+    OpenProject,
+    SaveProject,
+    Lut,
     File,
     ExportVideo,
     ImportPreset,
@@ -35,6 +39,8 @@ enum View {
 }
 
 struct App {
+    workflow: workflow::State,
+    ui_context: egui::Context,
     video: Option<crtsim_media::Video>,
     video_frame: u64,
     selected_frame: u64,
@@ -145,6 +151,8 @@ impl App {
             }
         }
         let mut app = Self {
+            workflow: workflow::State::default(),
+            ui_context: ctx.clone(),
             video: None,
             video_frame: 0,
             selected_frame: 0,
@@ -195,6 +203,7 @@ impl App {
             smoke_requested: false,
             started: Instant::now(),
         };
+        app.init_workflow(input_path.is_some());
         if let Some(path) = input_path {
             app.load(path);
         }
@@ -202,6 +211,7 @@ impl App {
     }
 
     fn changed(&mut self) {
+        self.stop_playback();
         self.revision += 1;
         self.dirty = true;
         self.changed_at = Instant::now();
@@ -213,11 +223,22 @@ impl App {
         self.changed();
     }
     fn dialog(&mut self, kind: Dialog, ctx: &egui::Context) {
+        self.stop_playback();
         self.dialog_open = true;
         let send = self.dialog_send.clone();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
             let path = match kind {
+                Dialog::OpenProject => rfd::FileDialog::new()
+                    .add_filter("CRT project", &["crtsim"])
+                    .pick_file(),
+                Dialog::SaveProject => rfd::FileDialog::new()
+                    .add_filter("CRT project", &["crtsim"])
+                    .set_file_name("project.crtsim")
+                    .save_file(),
+                Dialog::Lut => rfd::FileDialog::new()
+                    .add_filter("3D color LUT", &["cube"])
+                    .pick_file(),
                 Dialog::File => rfd::FileDialog::new()
                     .add_filter(
                         "Images and videos",
@@ -253,6 +274,7 @@ impl App {
             // confirm the actual destination too, rather than silently replacing another file.
             let path = path.and_then(|mut path| {
                 let extension = match kind {
+                    Dialog::SaveProject => Some("crtsim"),
                     Dialog::Export => Some("png"),
                     Dialog::SavePreset => Some("json"),
                     Dialog::ExportVideo => Some("mp4"),
@@ -280,6 +302,14 @@ impl App {
         });
     }
     fn load(&mut self, path: PathBuf) {
+        self.stop_playback();
+        if path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("crtsim"))
+        {
+            self.open_project(path);
+            return;
+        }
         if path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
             ["mp4", "mkv", "mov", "webm", "avi", "m4v"].contains(&e.to_ascii_lowercase().as_str())
         }) {
@@ -291,6 +321,7 @@ impl App {
         self.send(Job::Load(path));
     }
     fn load_video(&mut self, path: PathBuf, frame: u64, reuse: bool) {
+        self.stop_playback();
         self.video_job = true;
         self.loading = true;
         self.cancel = Arc::new(AtomicBool::new(false));
@@ -319,6 +350,7 @@ impl App {
         }
     }
     fn export(&mut self, path: PathBuf) {
+        self.stop_playback();
         if let Err(e) = model::preview_config(&self.config, self.input.dimensions(), None) {
             self.error = Some(format!("{e:#}"));
             return;
@@ -345,6 +377,34 @@ impl App {
             self.dialog_open = false;
             if let Some(mut path) = path {
                 match kind {
+                    Dialog::OpenProject => self.open_project(path),
+                    Dialog::SaveProject => self.save_project_file(path),
+                    Dialog::Lut => {
+                        let result = (|| -> anyhow::Result<_> {
+                            anyhow::ensure!(
+                                path.metadata()?.len() <= 16 * 1024 * 1024,
+                                "LUT exceeds 16 MB"
+                            );
+                            let name = path
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .into_owned();
+                            crtsim_core::workflow::Lut::parse_cube(
+                                name,
+                                &std::fs::read_to_string(path)?,
+                            )
+                        })();
+                        match result {
+                            Ok(lut) => {
+                                let mut c = self.config.clone();
+                                c.lut = Some(Arc::new(lut));
+                                self.replace_config(c);
+                                self.status = "LUT imported".into();
+                            }
+                            Err(e) => self.error = Some(format!("Cannot import LUT: {e:#}")),
+                        }
+                    }
                     Dialog::File => self.load(path),
                     Dialog::ExportVideo => {
                         if let Some(video) = self.video.clone() {
@@ -448,6 +508,8 @@ impl App {
                     self.loading = false;
                     match result {
                         Ok((video, input, thumb, frame, count)) => {
+                            self.workflow.source = Some(video.path.clone());
+                            self.workflow.play_time = frame as f64 / video.fps;
                             self.source_name = video
                                 .path
                                 .file_name()
@@ -465,18 +527,27 @@ impl App {
                             self.error = None;
                             self.changed();
                             self.status = "Video frame loaded".into();
+                            if let Some(p) = self.workflow.pending_project.take() {
+                                self.apply_project(p);
+                            }
                         }
                         Err(_) if self.cancel.load(Ordering::Relaxed) => {
                             self.status = "Video loading cancelled".into();
+                            self.workflow.pending_project = None;
                             self.error = None;
                         }
-                        Err(e) => self.error = Some(e),
+                        Err(e) => {
+                            self.workflow.pending_project = None;
+                            self.error = Some(e);
+                        }
                     }
                 }
                 Event::Loaded(result) => {
                     self.loading = false;
                     match result {
                         Ok((path, input, thumb)) => {
+                            self.workflow.source =
+                                Some(path.canonicalize().unwrap_or_else(|_| path.clone()));
                             self.video = None;
                             self.source_name = path
                                 .file_name()
@@ -490,8 +561,14 @@ impl App {
                             self.error = None;
                             self.changed();
                             self.status = "Image loaded".into();
+                            if let Some(p) = self.workflow.pending_project.take() {
+                                self.apply_project(p);
+                            }
                         }
-                        Err(e) => self.error = Some(e),
+                        Err(e) => {
+                            self.workflow.pending_project = None;
+                            self.error = Some(e);
+                        }
                     }
                 }
                 Event::Preview { revision, result } => {
@@ -519,6 +596,7 @@ impl App {
                     }
                 }
                 Event::Exported(result) => {
+                    self.queue_finished(&result);
                     self.video_job = false;
                     self.export_progress = None;
                     self.exporting = false;
@@ -538,7 +616,7 @@ impl App {
         }
     }
     fn request_preview(&mut self) {
-        if self.rendering || self.loading || self.exporting {
+        if self.rendering || self.loading || self.exporting || self.workflow.playback.is_some() {
             return;
         }
         self.history.commit(&self.config);
@@ -563,6 +641,7 @@ impl App {
             ui.strong("CRTSim Renderer");
             ui.separator();
             let enabled = !self.dialog_open && !self.loading && !self.exporting;
+            ui.add_enabled_ui(enabled, |ui| self.project_menu(ui, ctx));
             if ui
                 .add_enabled(enabled, egui::Button::new("Preset gallery…"))
                 .clicked()
@@ -581,6 +660,7 @@ impl App {
                 .clicked()
             {
                 self.video = None;
+                self.workflow.source = None;
                 self.input = Arc::new(config::test_card());
                 self.original = texture(ctx, "original", &self.input, 2048);
                 self.source_name = "Built-in test card".into();
@@ -628,9 +708,6 @@ impl App {
             {
                 self.dialog(Dialog::ExportVideo, ctx);
             }
-            if ui.button("Credits").clicked() {
-                self.show_credits = true;
-            }
             ui.separator();
             let mut selected = self.theme;
             egui::ComboBox::from_id_source("appearance-theme")
@@ -650,9 +727,13 @@ impl App {
                     }
                 }
             }
+            if ui.button("Credits").clicked() {
+                self.show_credits = true;
+            }
         });
     }
     fn settings(&mut self, ui: &mut egui::Ui) {
+        let previous_options = self.video_options.clone();
         if let Some(video) = self.video.clone() {
             ui.heading("Video");
             ui.label(format!(
@@ -711,7 +792,11 @@ impl App {
                         "Mute",
                     );
                 });
+            self.export_settings(ui);
             ui.separator();
+        }
+        if previous_options != self.video_options {
+            self.stop_playback();
         }
         ui.heading("Image & output");
         ui.label(&self.source_name);
@@ -750,6 +835,7 @@ impl App {
             }
         });
         let before = self.config.clone();
+        self.workflow_settings(ui);
         egui::ComboBox::from_label("Color processing")
             .selected_text(match self.config.color_mode {
                 ColorMode::Reference => "Original gamma",
@@ -929,7 +1015,7 @@ impl App {
         ui.horizontal_wrapped(|ui| {
             ui.selectable_value(&mut self.view, View::Crt, "CRT");
             ui.selectable_value(&mut self.view, View::Original, "Original");
-            ui.selectable_value(&mut self.view, View::Compare, "Side by side");
+            ui.selectable_value(&mut self.view, View::Compare, "Compare · drag divider");
             ui.separator();
             ui.checkbox(&mut self.live, "Live preview");
             if ui
@@ -997,11 +1083,7 @@ impl App {
         );
         egui::ScrollArea::both().max_height(available.y).auto_shrink([false,false]).show(ui,|ui| {
             if self.view == View::Compare {
-                ui.horizontal_top(|ui| {
-                    let area = egui::vec2((available.x-16.).max(1.)/2.,(available.y-24.).max(1.));
-                    ui.vertical(|ui| { ui.label("Original"); show_image(ui,&self.original,area,self.fit_preview,self.zoom); });
-                    if let Some(ref im) = self.rendered { ui.vertical(|ui| { ui.label("CRT"); show_image(ui,im,area,self.fit_preview,self.zoom); }); }
-                });
+                if let Some(ref im)=self.rendered {workflow::compare(ui,&self.original,im,available,self.fit_preview,self.zoom,&mut self.workflow.comparison);}
             } else if self.view == View::Original { show_image(ui,&self.original,available,self.fit_preview,self.zoom); }
             else if let Some(ref im) = self.rendered { show_image(ui,im,available,self.fit_preview,self.zoom); }
             else { ui.label("Open an image, video or test card. Your rendered preview will appear here."); }
@@ -1019,6 +1101,27 @@ impl App {
         ui.separator();
         ui.add_enabled_ui(enabled, |ui| {
             ui.horizontal_wrapped(|ui| {
+                if ui
+                    .button(if self.workflow.playback.is_some() {
+                        "Pause"
+                    } else {
+                        "Play"
+                    })
+                    .clicked()
+                {
+                    if self.workflow.playback.is_some() {
+                        self.stop_playback();
+                    } else {
+                        self.start_playback();
+                    }
+                }
+                if ui
+                    .checkbox(&mut self.workflow.preview_audio, "Preview audio")
+                    .changed()
+                {
+                    self.stop_playback();
+                }
+                ui.label(format!("{:.2}s", self.workflow.play_time));
                 if ui
                     .add_enabled(self.video_frame > 0, egui::Button::new("Previous frame"))
                     .clicked()
@@ -1056,6 +1159,13 @@ impl App {
                     || (response.changed() && !ui.input(|i| i.pointer.any_down()));
             });
             if !ui.ctx().wants_keyboard_input() {
+                if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space)) {
+                    if self.workflow.playback.is_some() {
+                        self.stop_playback();
+                    } else {
+                        self.start_playback();
+                    }
+                }
                 if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft)) {
                     self.selected_frame = self.video_frame.saturating_sub(1);
                     seek = true;
@@ -1262,6 +1372,7 @@ fn show_image(ui: &mut egui::Ui, im: &TextureHandle, available: egui::Vec2, fit:
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.workflow_ui(ctx);
         self.receive(ctx);
         if !self.dialog_open && !self.show_welcome && !ctx.wants_keyboard_input() {
             let mut ctrl_shift = egui::Modifiers::CTRL;
@@ -1395,6 +1506,8 @@ impl eframe::App for App {
 
 impl Drop for App {
     fn drop(&mut self) {
+        self.stop_playback();
+        self.save_session();
         self.cancel.store(true, Ordering::Relaxed);
         let _ = self.jobs.send(Job::Shutdown);
         if let Some(thread) = self.worker_thread.take() {

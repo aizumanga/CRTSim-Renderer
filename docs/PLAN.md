@@ -84,14 +84,22 @@ This phase does not promise continuous real-time frame rates, cancellable GPU su
 - PNG and MP4/MKV/WebM preset import; video container metadata stores original controls plus timing/audio options.
 - Real-time video playback remains deferred. Exact decoded-frame seeks handle VFR without approximate timestamp steps but may be slower on long footage.
 
-## v0.2 groundwork
+## v0.2 workflow features
 
 - Interface themes are v0.2 groundwork: dark and light defaults, two classic operating-system-inspired palettes,
   and a restrained Sky Diary palette adapted from the aizumanga-neocities site. They remain separate from render presets and output.
+- Buffered video playback, persistent CRT history, short temporal preroll and optional ffplay preview audio.
+- Crop, source zoom/pan/rotation, selectable flattened transparency backgrounds and bezel-free rendering.
+- Draggable before/after comparison, versioned projects, automatic recovery and recent projects.
+- Persistent sequential batch queue with captured settings, cancellation, retry and reordering.
+- Four quality profiles and optional hardware H.264 encoders with preflight checks.
+- Embedded 3D .cube LUT import, shared by still/video rendering and the CLI JSON format.
+- Container-aware audio/subtitle/attachment, chapter and source-metadata preservation.
+- Usage and explicit limits: [WORKFLOW.md](WORKFLOW.md). Earlier phase descriptions above describe their original milestones.
 
 ## Later work
 
-- Full color management, optional LUT import, batch jobs, wider tube geometry remain later work.
+- Full ICC color management and wider tube geometry remain later work.
 - No default synthetic interlacing, VHS noise, sprite flicker or room reflection.
 
 ## Sources

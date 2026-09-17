@@ -9,6 +9,21 @@ use std::{
 };
 
 pub enum Job {
+    Playback {
+        video: crtsim_media::Video,
+        start: f64,
+        config: Config,
+        options: crtsim_media::Options,
+        cancel: Arc<AtomicBool>,
+        frames: mpsc::SyncSender<Result<PlaybackFrame, String>>,
+    },
+    Batch {
+        source: PathBuf,
+        config: Config,
+        options: crtsim_media::Options,
+        path: PathBuf,
+        cancel: Arc<AtomicBool>,
+    },
     Shutdown,
     Load(PathBuf),
     ImportPreset {
@@ -41,6 +56,11 @@ pub enum Job {
         cancel: Arc<AtomicBool>,
     },
 }
+pub struct PlaybackFrame {
+    pub time: f64,
+    pub source: RgbaImage,
+    pub crt: RgbaImage,
+}
 pub enum Event {
     Progress {
         progress: RenderProgress,
@@ -69,6 +89,142 @@ pub fn start(
         while let Ok(job) = jobs.recv() {
             let event = match job {
                 Job::Shutdown => break,
+                Job::Playback {
+                    video,
+                    start,
+                    config,
+                    options,
+                    cancel,
+                    frames,
+                } => {
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                        || -> anyhow::Result<()> {
+                            if renderer.is_none() {
+                                renderer = Some(pollster::block_on(Renderer::new(backends))?);
+                            }
+                            crtsim_media::playback(
+                                &video,
+                                start,
+                                &config,
+                                &options,
+                                renderer.as_ref().unwrap(),
+                                &cancel,
+                                |time, source, crt| {
+                                    let mut item = Ok(PlaybackFrame { time, source, crt });
+                                    loop {
+                                        anyhow::ensure!(
+                                            !cancel.load(std::sync::atomic::Ordering::Relaxed),
+                                            "Playback cancelled"
+                                        );
+                                        match frames.try_send(item) {
+                                            Ok(()) => {
+                                                ctx.request_repaint();
+                                                return Ok(());
+                                            }
+                                            Err(mpsc::TrySendError::Full(back)) => {
+                                                item = back;
+                                                std::thread::sleep(
+                                                    std::time::Duration::from_millis(5),
+                                                );
+                                            }
+                                            Err(mpsc::TrySendError::Disconnected(_)) => {
+                                                anyhow::bail!("Playback stopped")
+                                            }
+                                        }
+                                    }
+                                },
+                            )
+                        },
+                    ));
+                    let error = match result {
+                        Ok(Ok(())) => None,
+                        Ok(Err(e)) => Some(format!("{e:#}")),
+                        Err(_) => {
+                            renderer = None;
+                            Some("Playback graphics driver failed".into())
+                        }
+                    };
+                    if let Some(error) = error {
+                        // Keep the terminal error behind already buffered frames without blocking shutdown.
+                        while !cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                            match frames.try_send(Err(error.clone())) {
+                                Err(mpsc::TrySendError::Full(_)) => {
+                                    std::thread::sleep(std::time::Duration::from_millis(5))
+                                }
+                                _ => break,
+                            }
+                        }
+                    }
+                    ctx.request_repaint();
+                    continue;
+                }
+                Job::Batch {
+                    source,
+                    config,
+                    options,
+                    path,
+                    cancel,
+                } => {
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                        || -> Result<PathBuf, String> {
+                            if crate::workflow::is_video(&source) {
+                                let video = crtsim_media::probe(&source, &cancel)
+                                    .map_err(|e| format!("{e:#}"))?;
+                                if renderer.is_none() {
+                                    renderer = Some(
+                                        pollster::block_on(Renderer::new(backends))
+                                            .map_err(|e| format!("{e:#}"))?,
+                                    );
+                                }
+                                crtsim_media::export(
+                                    &video,
+                                    &path,
+                                    &config,
+                                    &options,
+                                    renderer.as_ref().unwrap(),
+                                    &cancel,
+                                    |p| {
+                                        let _ = events.send(Event::Progress {
+                                            progress: RenderProgress {
+                                                fraction: p.fraction,
+                                                stage: p.stage,
+                                            },
+                                        });
+                                        ctx.request_repaint();
+                                    },
+                                )
+                                .map_err(|e| format!("{e:#}"))?;
+                            } else {
+                                let input =
+                                    files::load_image(&source).map_err(|e| format!("{e:#}"))?;
+                                let im = render(
+                                    &mut renderer,
+                                    backends,
+                                    &input,
+                                    &config,
+                                    Some(&cancel),
+                                    |p| {
+                                        let _ = events.send(Event::Progress { progress: p });
+                                        ctx.request_repaint();
+                                    },
+                                )?;
+                                if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                                    return Err("Export cancelled".into());
+                                }
+                                files::save_png(&path, im, Some(&config))
+                                    .map_err(|e| format!("{e:#}"))?;
+                            }
+                            Ok(path)
+                        },
+                    ));
+                    Event::Exported(match result {
+                        Ok(result) => result,
+                        Err(_) => {
+                            renderer = None;
+                            Err("Batch graphics driver failed. Try a smaller resolution.".into())
+                        }
+                    })
+                }
                 Job::ImportPreset {
                     path,
                     input,
