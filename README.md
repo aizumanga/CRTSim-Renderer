@@ -37,7 +37,7 @@ Names are never overwritten; malformed files are skipped with an explanation. Pe
 in the app data directory shown in the gallery. `CRTSIM_DATA_DIR` can override that directory with an absolute path.
 Only explicitly saved presets and the welcome acknowledgement persist; unsaved edits are not automatically saved on exit.
 
-Full-resolution export shows stage-based progress; routine live-preview updates stay unobtrusive. Warm-up advances after completed GPU batches,
+Full-resolution export shows stage-based progress and can be cancelled; routine live-preview updates stay unobtrusive. Warm-up advances after completed GPU batches,
 followed by surface rendering/readback and PNG saving.
 Percentages represent weighted work stages, not remaining seconds; PNG encoding stays at its stage until the file is completely saved.
 Exported PNGs embed the exact JSON preset in a private PNG text chunk without changing the pixels. Use **Import preset from Image/Video…**
@@ -115,7 +115,7 @@ Missing executables/codecs produce an error in the window; nothing is downloaded
 2. Use **Previous frame / Next frame**, arrow keys, the frame number field or the wide slider beneath the preview.
    Selection loads when you release the slider or choose **Go**. Frame numbers start at 1 and follow actual decoded frames, including VFR sources.
    **Export frame** saves the currently displayed source frame as a full-resolution CRT PNG. This is a settled still preview, not motion-history playback.
-   Counting frames on open and decoding from the start for exact seeks can take time on long videos; both are cancellable.
+   When a valid container frame count exists it is used immediately. Other files require one decoded-frame count on open. Exact seeks decode by ordinal from the start and can take time on long videos; loading/seeking is cancellable.
 3. Choose output resolution and video timing: source-rate stable artifacts (default), 60 Hz alternating artifacts, or persistence off.
 4. Choose **Export video…** and a filename ending in `.mp4`, `.mkv` or `.webm`. MP4/MKV use H.264; WebM uses VP9.
 
@@ -124,12 +124,12 @@ or to 60 FPS in 60 Hz mode. Source-rate mode corrects persistence decay by media
 Audio defaults to copying the first track when compatible, with AAC/Opus fallback; delayed audio is re-encoded to preserve its timing.
 **Re-encode** and **Mute** are also available. Video output dimensions must be even.
 
-The progress bar reports frames, rendering speed and an approximate remaining time. **Cancel** stops video loading/export;
+The progress bar reports frames, rendering speed and an approximate remaining time. **Cancel** stops image export, video loading and video export;
 closing the app also terminates its FFmpeg processes. Existing destinations are replaced only after a successful export.
 Temporary encoded files require space on the destination drive, but decoded frames are streamed rather than saved as PNGs.
 Settings and the source are captured for each export; edits during export apply to the next job.
 
-Output is opaque SDR with software encoding. HDR input uses FFmpeg's `zscale`/`tonemap` filters when available.
+Output is opaque SDR with software encoding. Video is explicitly converted from full-range RGB to limited-range BT.709 and tagged accordingly. HDR input uses FFmpeg's `zscale`/`tonemap` filters when available.
 No subtitles, chapters, additional audio tracks, HDR output or hardware encoder controls are included yet.
 MP4/MKV/WebM exports embed an importable preset in a container comment, including the original controls and video timing/audio settings.
 PNG exports still embed importable presets. Full details and validation commands are in [VIDEO_PIPELINE.md](docs/VIDEO_PIPELINE.md).

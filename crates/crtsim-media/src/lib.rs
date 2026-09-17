@@ -32,6 +32,8 @@ pub struct Video {
     pub audio_offset: f64,
     pub hdr: bool,
     pub stream: u64,
+    /// Container-provided decoded-frame count. Missing for many streaming/Matroska sources.
+    pub frames: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
@@ -69,6 +71,14 @@ pub struct Preset {
     pub video_options: Options,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PresetWire {
+    version: u32,
+    config: Value,
+    video_options: Options,
+}
+
 /// Container comments survive MP4, Matroska and WebM muxing, unlike arbitrary MP4 keys.
 pub fn import_preset(path: &Path, input: (u32, u32), cancel: &Arc<AtomicBool>) -> Result<Preset> {
     let mut cmd = command("ffprobe");
@@ -99,9 +109,14 @@ fn parse_preset(root: &Value, input: (u32, u32)) -> Result<Preset> {
         .and_then(|(_, value)| value.as_str())
         .and_then(|text| text.strip_prefix(PRESET_PREFIX))
         .context("This video does not contain a CRTSim-Renderer preset")?;
-    let preset: Preset = serde_json::from_str(comment).context("Invalid video preset metadata")?;
-    ensure!(preset.version == 1, "Unsupported video preset version");
-    preset.config.validate()?;
+    let wire: PresetWire =
+        serde_json::from_str(comment).context("Invalid video preset metadata")?;
+    ensure!(wire.version == 1, "Unsupported video preset version");
+    let preset = Preset {
+        version: wire.version,
+        config: Config::from_json_slice(&serde_json::to_vec(&wire.config)?)?,
+        video_options: wire.video_options,
+    };
     preset.config.signal_size(input)?;
     preset.config.output_size(input)?;
     Ok(preset)
@@ -109,6 +124,10 @@ fn parse_preset(root: &Value, input: (u32, u32)) -> Result<Preset> {
 
 /// Count decoded frames only when opening a video; subsequent frame seeks reuse this count.
 pub fn frame_count(video: &Video, cancel: &Arc<AtomicBool>) -> Result<u64> {
+    check_cancel(cancel)?;
+    if let Some(frames) = video.frames.filter(|frames| *frames > 0) {
+        return Ok(frames);
+    }
     let mut cmd = command("ffprobe");
     cmd.args([
         "-select_streams",
@@ -177,6 +196,13 @@ fn rate(text: &str) -> Option<f64> {
     let (a, b) = text.split_once('/').or_else(|| text.split_once(':'))?;
     let result = a.parse::<f64>().ok()? / b.parse::<f64>().ok()?;
     (result.is_finite() && result > 0.).then_some(result)
+}
+
+fn positive_integer(value: &Value) -> Option<u64> {
+    value
+        .as_u64()
+        .or_else(|| value.as_str()?.parse().ok())
+        .filter(|value| *value > 0)
 }
 
 pub fn probe(path: &Path, cancel: &Arc<AtomicBool>) -> Result<Video> {
@@ -265,7 +291,33 @@ fn parse_probe(path: PathBuf, root: &Value) -> Result<Video> {
             Some("smpte2084" | "arib-std-b67")
         ),
         stream: v["index"].as_u64().context("Missing video stream index")?,
+        frames: positive_integer(&v["nb_frames"]),
     })
+}
+
+fn require_encoder(name: &str, cancel: &Arc<AtomicBool>) -> Result<()> {
+    let mut cmd = command("ffmpeg");
+    cmd.args(["-hide_banner", "-encoders"]);
+    let mut process = Process::spawn(&mut cmd, cancel)?;
+    drop(process.stdin());
+    let mut bytes = Vec::new();
+    process
+        .stdout()
+        .take(2 * 1024 * 1024 + 1)
+        .read_to_end(&mut bytes)?;
+    ensure!(
+        bytes.len() <= 2 * 1024 * 1024,
+        "FFmpeg encoder list is too large"
+    );
+    process.wait()?;
+    let available = String::from_utf8_lossy(&bytes)
+        .lines()
+        .any(|line| line.split_whitespace().nth(1) == Some(name));
+    ensure!(
+        available,
+        "This FFmpeg installation does not provide the required {name} video encoder"
+    );
+    Ok(())
 }
 
 fn decode_command(video: &Video, fps: Option<&str>, time: f64, frame: Option<u64>) -> Command {
@@ -375,6 +427,14 @@ pub fn export_with(
         ["mp4", "mkv", "webm"].contains(&extension.as_str()),
         "Choose an MP4, MKV or WebM filename"
     );
+    require_encoder(
+        if extension == "webm" {
+            "libvpx-vp9"
+        } else {
+            "libx264"
+        },
+        cancel,
+    )?;
     if output.exists() {
         ensure!(
             output.canonicalize()? != video.path,
@@ -444,7 +504,22 @@ pub fn export_with(
     } else {
         encode_cmd.args(["libx264", "-crf", "18", "-preset", "medium"]);
     }
-    encode_cmd.args(["-pix_fmt", "yuv420p"]).arg(&silent);
+    // Renderer bytes are full-range RGB with BT.709/sRGB primaries. Make the RGB-to-YUV
+    // matrix and legal range explicit, then tag the encoded stream for consistent playback.
+    encode_cmd
+        .args([
+            "-vf",
+            "scale=in_range=full:out_range=tv:in_color_matrix=bt709:out_color_matrix=bt709,format=yuv420p",
+            "-color_primaries",
+            "bt709",
+            "-color_trc",
+            "bt709",
+            "-colorspace",
+            "bt709",
+            "-color_range",
+            "tv",
+        ])
+        .arg(&silent);
     let mut encoder = Process::spawn(&mut encode_cmd, cancel)?;
     let mut input = encoder.stdin();
     let mut decoder = Process::spawn(&mut decode_command(video, Some(rate), 0., None), cancel)?;
@@ -603,7 +678,9 @@ pub fn export(
         config,
         options,
         cancel,
-        |frame, config| renderer.render_video_frame(frame, config, &mut sequence),
+        |frame, config| {
+            renderer.render_video_frame_with_cancel(frame, config, &mut sequence, cancel)
+        },
         progress,
     )
 }
@@ -620,6 +697,12 @@ mod tests {
         let mut metadata = serde_json::json!({"streams": [{"index":0,"codec_type":"video","width":720,"height":480,"sample_aspect_ratio":"8:9","avg_frame_rate":"30000/1001","duration":"1.0","side_data_list":[{"rotation":90}]}]});
         let info = parse_probe("x.mkv".into(), &metadata).unwrap();
         assert_eq!(info.size, (480, 640));
+        assert_eq!(info.frames, None);
+        metadata["streams"][0]["nb_frames"] = "42".into();
+        assert_eq!(
+            parse_probe("x.mkv".into(), &metadata).unwrap().frames,
+            Some(42)
+        );
         metadata["streams"][0]["duration"] = "NaN".into();
         assert!(parse_probe("x.mkv".into(), &metadata).is_err());
     }

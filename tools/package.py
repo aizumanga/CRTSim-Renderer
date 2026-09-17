@@ -62,7 +62,7 @@ if args.platform == 'macos-arm64':
         plistlib.dump({'CFBundleName': 'CRTSim Renderer', 'CFBundleDisplayName': 'CRTSim Renderer',
                       'CFBundleIdentifier': 'org.crtsim.renderer', 'CFBundleExecutable': 'crtsim-desktop',
                       'CFBundlePackageType': 'APPL', 'CFBundleVersion': '1',
-                      'CFBundleShortVersionString': '0.1.0', 'NSHighResolutionCapable': True}, output)
+                      'CFBundleShortVersionString': '0.1.1', 'NSHighResolutionCapable': True}, output)
     # Ad-hoc signing permits execution on Apple Silicon; it is not Developer ID signing/notarization.
     subprocess.run(['codesign', '--force', '--deep', '--sign', '-', str(app.parent)], check=True)
 if exe:

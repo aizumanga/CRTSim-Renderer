@@ -21,8 +21,7 @@ pub fn load_image(path: &Path) -> Result<RgbaImage> {
 }
 pub fn load_preset(path: &Path, input: (u32, u32)) -> Result<Config> {
     ensure!(path.metadata()?.len() <= 1024 * 1024, "Preset exceeds 1 MB");
-    let c: Config = serde_json::from_slice(&std::fs::read(path)?)?;
-    c.validate()?;
+    let c = Config::from_json_slice(&std::fs::read(path)?)?;
     c.signal_size(input)?;
     c.output_size(input)?;
     Ok(c)
@@ -80,8 +79,7 @@ pub fn load_preset_from_image(path: &Path, input: (u32, u32)) -> Result<Config> 
     let json = find_text_chunk(&bytes, PRESET_KEYWORD)
         .context("This image does not contain a CRTSim-Renderer preset")?;
     ensure!(json.len() <= 1024 * 1024, "Preset metadata exceeds 1 MB");
-    let c: Config = serde_json::from_slice(json).context("Embedded preset metadata is invalid")?;
-    c.validate()?;
+    let c = Config::from_json_slice(json).context("Embedded preset metadata is invalid")?;
     c.signal_size(input)?;
     c.output_size(input)?;
     Ok(c)

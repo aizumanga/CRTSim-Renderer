@@ -8,7 +8,7 @@ Environment overrides `CRTSIM_FFMPEG` and `CRTSIM_FFPROBE` support executable pa
 1. Probe the first non-cover-art video stream and first audio track. Validate dimensions, duration, frame rate, pixel aspect and right-angle rotation.
 2. Normalize decoded video timestamps to zero, sample them at the selected constant frame rate, apply HDR-to-SDR tone mapping when required, and normalize rotation/pixel aspect.
 3. Read one RGBA frame at a time. A `Sequence` owns two feedback textures and a simulation tick counter on one renderer. Warm-up occurs only on the first frame; later frames retain history.
-4. Stream rendered RGBA to the encoder at the same rational frame rate. H.264 CRF 18/medium is used for MP4/MKV; VP9 CRF 24 for WebM. Output is 8-bit yuv420p and needs even dimensions.
+4. Stream rendered RGBA to the encoder at the same rational frame rate. H.264 CRF 18/medium is used for MP4/MKV; VP9 CRF 24 for WebM. Full-range RGB is explicitly converted to limited-range BT.709, tagged as BT.709, and stored as 8-bit yuv420p. Output dimensions must be even.
 5. Remux the encoded video with the source's first audio track. Auto mode tries stream copy when the track has no material start offset, then falls back to AAC/Opus if the container rejects it. Explicit re-encoding also works. Audio with an offset is trimmed or padded against the video start before encoding.
 6. Publish a complete temporary output using atomic replacement. Any error or cancellation leaves an existing destination untouched.
 
@@ -21,9 +21,9 @@ Each export starts a fresh sequence, independent of all previews and prior jobs.
 
 Each FFmpeg process has a bounded stderr collector and a monitor that can kill the process while frame pipe I/O is blocked.
 Dropping a process kills and reaps it; closing the desktop sets cancellation and joins the worker.
-GPU work already submitted must finish before the worker can return. Frames are never queued without bounds.
+GPU work already submitted must finish before the worker can return. PNG cancellation is checked between bounded warm-up batches and before saving. Frames are never queued without bounds.
 Only a silent encoded clip and the final encoded container are stored temporarily, on the destination filesystem.
-Surface render targets currently allocate per frame while temporal targets persist. Performance is not guaranteed to be real time.
+Signal, surface, bloom, depth, readback and temporal targets persist for the duration of a video sequence. Performance is not guaranteed to be real time.
 
 ## Scope and limits
 
@@ -59,7 +59,7 @@ Native Windows/macOS dialogs, physical-GPU throughput and long-form A/V synchron
 ## Frame navigation and embedded presets
 
 Desktop frame controls operate on decoded frame ordinals, starting at 1 in the UI.
-FFprobe counts frames once on opening; the worker reuses that count while navigating.
+The container's frame count is reused when present and valid. Otherwise FFprobe counts decoded frames once on opening; the worker reuses that count while navigating.
 FFmpeg selects the requested decoded frame from the start of the stream, preserving exact ordering for CFR and VFR.
 This favors accuracy over seek speed. Long clips may take time; loading/seeking can be cancelled.
 Frame PNG export renders the currently loaded frame as a settled still, without reconstructing motion history.

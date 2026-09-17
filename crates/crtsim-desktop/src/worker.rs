@@ -38,6 +38,7 @@ pub enum Job {
         input: Arc<RgbaImage>,
         config: Config,
         path: PathBuf,
+        cancel: Arc<AtomicBool>,
     },
 }
 pub enum Event {
@@ -175,7 +176,7 @@ pub fn start(
                     config,
                 } => {
                     let started = Instant::now();
-                    let result = render(&mut renderer, backends, &input, &config, |_| {})
+                    let result = render(&mut renderer, backends, &input, &config, None, |_| {})
                         .map(|im| (im, started.elapsed().as_secs_f32()));
                     Event::Preview { revision, result }
                 }
@@ -183,13 +184,24 @@ pub fn start(
                     input,
                     config,
                     path,
+                    cancel,
                 } => Event::Exported(
-                    render(&mut renderer, backends, &input, &config, |mut progress| {
-                        progress.fraction *= 0.9;
-                        let _ = events.send(Event::Progress { progress });
-                        ctx.request_repaint();
-                    })
+                    render(
+                        &mut renderer,
+                        backends,
+                        &input,
+                        &config,
+                        Some(&cancel),
+                        |mut progress| {
+                            progress.fraction *= 0.9;
+                            let _ = events.send(Event::Progress { progress });
+                            ctx.request_repaint();
+                        },
+                    )
                     .and_then(|im| {
+                        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                            return Err("Render cancelled".into());
+                        }
                         let _ = events.send(Event::Progress {
                             progress: RenderProgress {
                                 fraction: 0.95,
@@ -215,6 +227,7 @@ fn render(
     backends: wgpu::Backends,
     input: &RgbaImage,
     c: &Config,
+    cancel: Option<&AtomicBool>,
     mut progress: impl FnMut(RenderProgress),
 ) -> Result<RgbaImage, String> {
     // Surface backend validation/device errors in the window, leaving settings usable.
@@ -227,7 +240,14 @@ fn render(
             *renderer = Some(pollster::block_on(Renderer::new(backends))?);
         }
         let renderer = renderer.as_ref().unwrap();
-        let image = renderer.render_with_progress(input, c, &mut progress)?.crt;
+        let image = match cancel {
+            Some(cancel) => {
+                renderer
+                    .render_with_progress_and_cancel(input, c, cancel, &mut progress)?
+                    .crt
+            }
+            None => renderer.render_with_progress(input, c, &mut progress)?.crt,
+        };
         Ok(image)
     }));
     match result {

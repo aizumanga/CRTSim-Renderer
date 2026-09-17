@@ -107,6 +107,10 @@ fn ffmpeg_streaming_audio_timing_and_cancellation() {
         let result = inspect(&output);
         let streams = result["streams"].as_array().unwrap();
         let video = streams.iter().find(|s| s["codec_type"] == "video").unwrap();
+        assert_eq!(video["color_space"], "bt709");
+        assert_eq!(video["color_transfer"], "bt709");
+        assert_eq!(video["color_primaries"], "bt709");
+        assert_eq!(video["color_range"], "tv");
         assert_eq!(
             video["nb_read_frames"]
                 .as_str()

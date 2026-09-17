@@ -5,6 +5,7 @@ use anyhow::{ensure, Context, Result};
 use bytemuck::{Pod, Zeroable};
 use config::{ColorMode, Config, Phase};
 use image::RgbaImage;
+use std::sync::atomic::{AtomicBool, Ordering};
 use wgpu::util::DeviceExt;
 
 pub const SHADER: &str = include_str!("../../../shaders/crtsim.wgsl");
@@ -33,6 +34,104 @@ struct Target {
     view: wgpu::TextureView,
     width: u32,
     height: u32,
+}
+
+struct Readback {
+    buffer: wgpu::Buffer,
+    pitch: u32,
+    width: u32,
+    height: u32,
+}
+
+impl Readback {
+    fn new(device: &wgpu::Device, (width, height): (u32, u32)) -> Self {
+        let pitch = (width * 4).div_ceil(256) * 256;
+        Self {
+            buffer: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("readback"),
+                size: u64::from(pitch) * u64::from(height),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }),
+            pitch,
+            width,
+            height,
+        }
+    }
+}
+
+struct Workspace {
+    source: Target,
+    full: Target,
+    down: Target,
+    up: Target,
+    final_target: Target,
+    _depth: wgpu::Texture,
+    depth_view: wgpu::TextureView,
+    readback: Readback,
+    signal_size: (u32, u32),
+    output_size: (u32, u32),
+    surface_format: wgpu::TextureFormat,
+}
+
+impl Workspace {
+    fn new(
+        device: &wgpu::Device,
+        signal_size: (u32, u32),
+        output_size: (u32, u32),
+        surface_format: wgpu::TextureFormat,
+    ) -> Self {
+        let source = Target::new(device, "clean signal", signal_size);
+        let full = Target::with_format(device, "screen and frame", output_size, surface_format, 1);
+        let down = Target::with_format(
+            device,
+            "bloom downsample",
+            ((output_size.0 / 16).max(1), (output_size.1 / 16).max(1)),
+            surface_format,
+            1,
+        );
+        let up = Target::with_format(device, "bloom upsample", output_size, surface_format, 1);
+        let final_target = Target::new(device, "output", output_size);
+        let depth = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("depth"),
+            size: wgpu::Extent3d {
+                width: output_size.0,
+                height: output_size.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let depth_view = depth.create_view(&Default::default());
+        Self {
+            source,
+            full,
+            down,
+            up,
+            final_target,
+            _depth: depth,
+            depth_view,
+            readback: Readback::new(device, output_size),
+            signal_size,
+            output_size,
+            surface_format,
+        }
+    }
+
+    fn matches(
+        &self,
+        signal_size: (u32, u32),
+        output_size: (u32, u32),
+        surface_format: wgpu::TextureFormat,
+    ) -> bool {
+        self.signal_size == signal_size
+            && self.output_size == output_size
+            && self.surface_format == surface_format
+    }
 }
 impl Target {
     fn new(device: &wgpu::Device, name: &str, (width, height): (u32, u32)) -> Self {
@@ -136,6 +235,7 @@ pub struct Rendered {
 #[derive(Default)]
 pub struct Sequence {
     history: Option<[Target; 2]>,
+    workspace: Option<Workspace>,
     tick: u64,
 }
 
@@ -433,7 +533,25 @@ impl Renderer {
         c: &Config,
         progress: impl FnMut(RenderProgress),
     ) -> Result<Rendered> {
-        self.render_sequence(input, c, &mut Sequence::default(), true, progress)
+        self.render_sequence(input, c, &mut Sequence::default(), true, || false, progress)
+    }
+
+    /// A cancellable still export. Cancellation is checked between bounded GPU batches.
+    pub fn render_with_progress_and_cancel(
+        &self,
+        input: &RgbaImage,
+        c: &Config,
+        cancel: &AtomicBool,
+        progress: impl FnMut(RenderProgress),
+    ) -> Result<Rendered> {
+        self.render_sequence(
+            input,
+            c,
+            &mut Sequence::default(),
+            true,
+            || cancel.load(Ordering::Relaxed),
+            progress,
+        )
     }
 
     /// One ordered video frame. Warm-up applies once, then history and phase persist.
@@ -443,7 +561,28 @@ impl Renderer {
         c: &Config,
         sequence: &mut Sequence,
     ) -> Result<RgbaImage> {
-        Ok(self.render_sequence(input, c, sequence, false, |_| {})?.crt)
+        Ok(self
+            .render_sequence(input, c, sequence, false, || false, |_| {})?
+            .crt)
+    }
+
+    pub fn render_video_frame_with_cancel(
+        &self,
+        input: &RgbaImage,
+        c: &Config,
+        sequence: &mut Sequence,
+        cancel: &AtomicBool,
+    ) -> Result<RgbaImage> {
+        Ok(self
+            .render_sequence(
+                input,
+                c,
+                sequence,
+                false,
+                || cancel.load(Ordering::Relaxed),
+                |_| {},
+            )?
+            .crt)
     }
 
     fn render_sequence(
@@ -452,8 +591,10 @@ impl Renderer {
         c: &Config,
         sequence: &mut Sequence,
         debug: bool,
+        mut cancelled: impl FnMut() -> bool,
         mut progress: impl FnMut(RenderProgress),
     ) -> Result<Rendered> {
+        ensure!(!cancelled(), "Render cancelled");
         let mut report = |fraction, stage: String| progress(RenderProgress { fraction, stage });
         report(0., "Preparing image".into());
         c.validate()?;
@@ -479,8 +620,14 @@ impl Renderer {
             "estimated working set exceeds Phase 0 budget; choose a smaller preset"
         );
         let clean = config::prepare(input, c)?;
-        let source = Target::new(&self.device, "clean signal", sig);
-        source.upload(&self.queue, &clean);
+        let workspace = sequence
+            .workspace
+            .get_or_insert_with(|| Workspace::new(&self.device, sig, out, surface_format));
+        ensure!(
+            workspace.matches(sig, out, surface_format),
+            "Start a new video sequence after changing signal size, output size or color mode"
+        );
+        workspace.source.upload(&self.queue, &clean);
         report(0.05, "Image prepared".into());
         let first = sequence.history.is_none();
         let history = sequence.history.get_or_insert_with(|| {
@@ -493,31 +640,11 @@ impl Renderer {
             (history[0].width, history[0].height) == sig,
             "Start a new video sequence after changing signal size"
         );
-        let full = Target::with_format(&self.device, "screen and frame", out, surface_format, 1);
-        let down = Target::with_format(
-            &self.device,
-            "bloom downsample",
-            ((out.0 / 16).max(1), (out.1 / 16).max(1)),
-            surface_format,
-            1,
-        );
-        let up = Target::with_format(&self.device, "bloom upsample", out, surface_format, 1);
-        let final_target = Target::new(&self.device, "output", out);
-        let depth = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("depth"),
-            size: wgpu::Extent3d {
-                width: out.0,
-                height: out.1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Depth32Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let depth_view = depth.create_view(&Default::default());
+        let source = &workspace.source;
+        let full = &workspace.full;
+        let down = &workspace.down;
+        let up = &workspace.up;
+        let final_target = &workspace.final_target;
         let fov = c.fov.to_radians();
         let distance = 1. / (fov * 0.5).tan();
         let camera = glam::Vec3::new(-distance, 0., 0.);
@@ -579,6 +706,7 @@ impl Renderer {
         // Separate immutable uniform per tick avoids queue.write_buffer ordering bugs.
         let count = if first { c.warmup + 1 } else { 1 };
         for step in 0..count {
+            ensure!(!cancelled(), "Render cancelled");
             let tick = sequence.tick;
             p.signal[3] = match c.phase {
                 Phase::Stable => 0.5,
@@ -593,7 +721,7 @@ impl Renderer {
                     contents: bytemuck::bytes_of(&p),
                     usage: wgpu::BufferUsages::UNIFORM,
                 });
-            let bindings = self.bind(&uniform, &source, &history[(1 - tick % 2) as usize]);
+            let bindings = self.bind(&uniform, source, &history[(1 - tick % 2) as usize]);
             self.pass(&mut encoder, &history[(tick % 2) as usize], &bindings, 0);
             // Report completed GPU work, not just command encoding. Small batches keep overhead bounded.
             sequence.tick += 1;
@@ -615,7 +743,7 @@ impl Renderer {
                 contents: bytemuck::bytes_of(&p),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
-        let bindings = self.bind(&uniform, signal, &source);
+        let bindings = self.bind(&uniform, signal, source);
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("curved glass and frame"),
@@ -628,7 +756,7 @@ impl Renderer {
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &depth_view,
+                    view: &workspace.depth_view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.),
                         store: wgpu::StoreOp::Store,
@@ -648,23 +776,24 @@ impl Renderer {
         }
         self.pass(
             &mut encoder,
-            &down,
-            &self.bind(&uniform, &full, &source),
+            down,
+            &self.bind(&uniform, full, source),
             3 + base_pipeline,
         );
         self.pass(
             &mut encoder,
-            &up,
-            &self.bind(&uniform, &down, &source),
+            up,
+            &self.bind(&uniform, down, source),
             4 + base_pipeline,
         );
         self.pass(
             &mut encoder,
-            &final_target,
-            &self.bind(&uniform, &full, &up),
+            final_target,
+            &self.bind(&uniform, full, up),
             5 + base_pipeline,
         );
         self.queue.submit(Some(encoder.finish()));
+        ensure!(!cancelled(), "Render cancelled");
         let signal = if debug {
             self.readback(signal)?
         } else {
@@ -674,27 +803,29 @@ impl Renderer {
             0.9,
             "Glass, lighting and bloom complete; reading pixels".into(),
         );
-        let crt = self.readback(&final_target)?;
+        let crt = self.readback_into(final_target, &mut workspace.readback)?;
         report(1., "Render complete".into());
         Ok(Rendered { clean, signal, crt })
     }
 
     fn readback(&self, target: &Target) -> Result<RgbaImage> {
-        let pitch = (target.width * 4).div_ceil(256) * 256;
-        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("readback"),
-            size: u64::from(pitch) * u64::from(target.height),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        let mut readback = Readback::new(&self.device, (target.width, target.height));
+        self.readback_into(target, &mut readback)
+    }
+
+    fn readback_into(&self, target: &Target, readback: &mut Readback) -> Result<RgbaImage> {
+        ensure!(
+            (readback.width, readback.height) == (target.width, target.height),
+            "readback dimensions do not match render target"
+        );
         let mut encoder = self.device.create_command_encoder(&Default::default());
         encoder.copy_texture_to_buffer(
             target.texture.as_image_copy(),
             wgpu::ImageCopyBuffer {
-                buffer: &buffer,
+                buffer: &readback.buffer,
                 layout: wgpu::ImageDataLayout {
                     offset: 0,
-                    bytes_per_row: Some(pitch),
+                    bytes_per_row: Some(readback.pitch),
                     rows_per_image: Some(target.height),
                 },
             },
@@ -705,7 +836,7 @@ impl Renderer {
             },
         );
         self.queue.submit(Some(encoder.finish()));
-        let slice = buffer.slice(..);
+        let slice = readback.buffer.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx.send(r);
@@ -714,11 +845,11 @@ impl Renderer {
         rx.recv()??;
         let mapped = slice.get_mapped_range();
         let mut pixels = Vec::with_capacity((target.width * target.height * 4) as usize);
-        for row in mapped.chunks_exact(pitch as usize) {
+        for row in mapped.chunks_exact(readback.pitch as usize) {
             pixels.extend_from_slice(&row[..target.width as usize * 4]);
         }
         drop(mapped);
-        buffer.unmap();
+        readback.buffer.unmap();
         RgbaImage::from_raw(target.width, target.height, pixels).context("invalid readback length")
     }
 }
@@ -768,6 +899,13 @@ mod tests {
             ..Config::default()
         };
         let source = config::test_card();
+        let cancel = AtomicBool::new(true);
+        assert!(r
+            .render_with_progress_and_cancel(&source, &c, &cancel, |_| {})
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("cancelled"));
         let a = r.render(&source, &c).unwrap();
         let b = r.render(&source, &c).unwrap();
         assert_eq!(a.crt.dimensions(), (641, 361));
