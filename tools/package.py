@@ -67,7 +67,8 @@ if args.platform == 'macos-arm64':
     subprocess.run(['codesign', '--force', '--deep', '--sign', '-', str(app.parent)], check=True)
 if exe:
     archive = dist / (name + '.zip')
-    with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as output:
+    # Cargo sources can carry Unix-epoch timestamps, older than ZIP's 1980 minimum.
+    with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, strict_timestamps=False) as output:
         for path in sorted(stage.rglob('*')):
             if path.is_file():
                 output.write(path, path.relative_to(dist))

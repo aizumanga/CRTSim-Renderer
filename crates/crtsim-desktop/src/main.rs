@@ -1032,7 +1032,7 @@ impl App {
                 }
             }
         });
-        ui.small(format!("Showing frame {} · ← / → step frames · Export frame saves this settled CRT still as PNG.", self.video_frame + 1));
+        ui.small(format!("Showing frame {} · Left/Right arrow keys step frames · Export frame saves this settled CRT still as PNG.", self.video_frame + 1));
         if seek && enabled && self.selected_frame != self.video_frame {
             self.load_video(video.path, self.selected_frame, true);
         }
