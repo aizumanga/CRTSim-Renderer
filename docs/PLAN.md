@@ -74,9 +74,19 @@ This phase does not promise continuous real-time frame rates, cancellable GPU su
 - Decay correction remains an approximation of the spatial feedback filter. Integration tests cover 24/25/30/50/59.94/60 FPS and audio offsets.
 - SDR output; HDR inputs require FFmpeg tone mapping. Variable-rate inputs normalize to CFR. See [VIDEO_PIPELINE.md](VIDEO_PIPELINE.md).
 
+## Phase 4: portable releases
+
+- Windows x86_64 portable ZIP with desktop/CLI; installer deferred.
+- Linux x86_64 AppImage and portable tarball, built on Ubuntu 22.04.
+- Provisional Apple Silicon macOS app/tarball, ad-hoc signed only; Developer ID signing/notarization requires credentials and hardware testing.
+- PR/manual build artifacts and tag-triggered draft releases, notices, dependency licenses, checksums and packaged Linux runtime smoke test.
+- Usability additions: editable personal-preset descriptions, unified Open File, media-specific exports, exact frame selection beneath the preview.
+- PNG and MP4/MKV/WebM preset import; video container metadata stores original controls plus timing/audio options.
+- Real-time video playback remains deferred. Exact decoded-frame seeks handle VFR without approximate timestamp steps but may be slower on long footage.
+
 ## Later work
 
-- Full color management, optional LUT import, batch jobs, wider tube geometry and packaging remain later work.
+- Full color management, optional LUT import, batch jobs, wider tube geometry remain later work.
 - No default synthetic interlacing, VHS noise, sprite flicker or room reflection.
 
 ## Sources

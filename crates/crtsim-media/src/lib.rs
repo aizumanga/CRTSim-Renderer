@@ -8,6 +8,7 @@ use crtsim_core::{
 };
 use image::RgbaImage;
 use process::Process;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     io::{Read, Write},
@@ -33,7 +34,8 @@ pub struct Video {
     pub stream: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum Timing {
     #[default]
     Stable,
@@ -41,7 +43,8 @@ pub enum Timing {
     Disabled,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum Audio {
     #[default]
     Auto,
@@ -49,10 +52,67 @@ pub enum Audio {
     Mute,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Options {
     pub timing: Timing,
     pub audio: Audio,
+}
+
+const PRESET_PREFIX: &str = "CRTSim-Renderer-Preset:";
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Preset {
+    pub version: u32,
+    pub config: Config,
+    pub video_options: Options,
+}
+
+/// Container comments survive MP4, Matroska and WebM muxing, unlike arbitrary MP4 keys.
+pub fn import_preset(path: &Path, input: (u32, u32), cancel: &Arc<AtomicBool>) -> Result<Preset> {
+    let mut cmd = command("ffprobe");
+    cmd.args(["-show_entries", "format_tags=comment", "-of", "json"])
+        .arg(path.canonicalize().context("Cannot open video")?);
+    let mut process = Process::spawn(&mut cmd, cancel)?;
+    drop(process.stdin());
+    let mut bytes = Vec::new();
+    process.stdout().take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
+    ensure!(bytes.len() <= 1024 * 1024, "Video preset metadata exceeds 1 MB");
+    process.wait()?;
+    parse_preset(&serde_json::from_slice(&bytes)?, input)
+}
+
+fn parse_preset(root: &Value, input: (u32, u32)) -> Result<Preset> {
+    let comment = root["format"]["tags"].as_object()
+        .and_then(|tags| tags.iter().find(|(key, _)| key.eq_ignore_ascii_case("comment")))
+        .and_then(|(_, value)| value.as_str())
+        .and_then(|text| text.strip_prefix(PRESET_PREFIX))
+        .context("This video does not contain a CRTSim-Renderer preset")?;
+    let preset: Preset = serde_json::from_str(comment).context("Invalid video preset metadata")?;
+    ensure!(preset.version == 1, "Unsupported video preset version");
+    preset.config.validate()?;
+    preset.config.signal_size(input)?;
+    preset.config.output_size(input)?;
+    Ok(preset)
+}
+
+/// Count decoded frames only when opening a video; subsequent frame seeks reuse this count.
+pub fn frame_count(video: &Video, cancel: &Arc<AtomicBool>) -> Result<u64> {
+    let mut cmd = command("ffprobe");
+    cmd.args(["-select_streams", &video.stream.to_string(), "-count_frames",
+        "-show_entries", "stream=nb_read_frames", "-of", "json"]).arg(&video.path);
+    let mut process = Process::spawn(&mut cmd, cancel)?;
+    drop(process.stdin());
+    let mut bytes = Vec::new();
+    process.stdout().take(65537).read_to_end(&mut bytes)?;
+    ensure!(bytes.len() <= 65536, "Frame count response is too large");
+    process.wait()?;
+    let root: Value = serde_json::from_slice(&bytes)?;
+    let count = root["streams"][0]["nb_read_frames"].as_str()
+        .and_then(|s| s.parse::<u64>().ok()).context("Cannot count video frames")?;
+    ensure!(count > 0, "Video contains no decoded frames");
+    Ok(count)
 }
 
 #[derive(Clone, Debug)]
@@ -74,6 +134,11 @@ fn command(program: &str) -> Command {
         "CRTSIM_FFPROBE"
     };
     let mut command = Command::new(std::env::var_os(key).unwrap_or_else(|| program.into()));
+    if std::env::var_os("CRTSIM_APPIMAGE").is_some() {
+        if let Some(original) = std::env::var_os("CRTSIM_HOST_LD_LIBRARY_PATH") {
+            command.env("LD_LIBRARY_PATH", original);
+        }
+    }
     command.args(["-v", "error"]);
     if program == "ffmpeg" {
         command.arg("-nostdin");
@@ -183,7 +248,7 @@ fn parse_probe(path: PathBuf, root: &Value) -> Result<Video> {
     })
 }
 
-fn decode_command(video: &Video, fps: Option<&str>, time: f64) -> Command {
+fn decode_command(video: &Video, fps: Option<&str>, time: f64, frame: Option<u64>) -> Command {
     let mut cmd = command("ffmpeg");
     // Seeking is input-relative and preview-only; full exports always start at zero.
     if time > 0. {
@@ -197,6 +262,11 @@ fn decode_command(video: &Video, fps: Option<&str>, time: f64) -> Command {
         "-dn",
     ]);
     let mut filters = vec!["setpts=PTS-STARTPTS".to_string()];
+    if let Some(frame) = frame {
+        // Select by decoded frame ordinal, including VFR sources. Decode from the start
+        // to avoid timestamp rounding and keyframe seeks skipping or repeating frames.
+        filters.push(format!("select=eq(n\\,{frame})"));
+    }
     if let Some(fps) = fps {
         filters.push(format!("fps={fps}:start_time=0:round=near"));
     }
@@ -220,12 +290,22 @@ pub fn preview(video: &Video, time: f64, cancel: &Arc<AtomicBool>) -> Result<Rgb
         time.is_finite() && time >= 0. && time < video.duration,
         "Preview time is outside the video"
     );
-    let mut child = Process::spawn(&mut decode_command(video, None, time), cancel)?;
+    let mut child = Process::spawn(&mut decode_command(video, None, time, None), cancel)?;
     drop(child.stdin());
     let mut bytes = vec![0; video.size.0 as usize * video.size.1 as usize * 4];
     let read = child.stdout().read_exact(&mut bytes);
     child.wait()?;
     read.context("FFmpeg did not return a complete preview frame")?;
+    RgbaImage::from_raw(video.size.0, video.size.1, bytes).context("Invalid preview pixels")
+}
+
+pub fn preview_frame(video: &Video, frame: u64, cancel: &Arc<AtomicBool>) -> Result<RgbaImage> {
+    let mut child = Process::spawn(&mut decode_command(video, None, 0., Some(frame)), cancel)?;
+    drop(child.stdin());
+    let mut bytes = vec![0; video.size.0 as usize * video.size.1 as usize * 4];
+    let read = child.stdout().read_exact(&mut bytes);
+    child.wait()?;
+    read.context("FFmpeg did not return the requested frame")?;
     RgbaImage::from_raw(video.size.0, video.size.1, bytes).context("Invalid preview pixels")
 }
 
@@ -299,6 +379,12 @@ pub fn export_with(
         video.fps
     };
     let c = render_config(config, options, fps);
+    // Store the user's original controls plus timing, not the decay-adjusted config:
+    // reimporting the latter would apply the timing correction a second time.
+    let metadata = format!("{PRESET_PREFIX}{}", serde_json::to_string(&Preset {
+        version: 1, config: config.clone(), video_options: options.clone(),
+    })?);
+    ensure!(metadata.len() <= 16384, "Video preset metadata exceeds 16 KB");
     let mut encode_cmd = command("ffmpeg");
     encode_cmd.args([
         "-y",
@@ -333,7 +419,7 @@ pub fn export_with(
     encode_cmd.args(["-pix_fmt", "yuv420p"]).arg(&silent);
     let mut encoder = Process::spawn(&mut encode_cmd, cancel)?;
     let mut input = encoder.stdin();
-    let mut decoder = Process::spawn(&mut decode_command(video, Some(rate), 0.), cancel)?;
+    let mut decoder = Process::spawn(&mut decode_command(video, Some(rate), 0., None), cancel)?;
     drop(decoder.stdin());
     let mut decoded = decoder.stdout();
     let mut frame = RgbaImage::new(video.size.0, video.size.1);
@@ -424,7 +510,7 @@ pub fn export_with(
                 cmd.args(["-af", &filter]);
             }
         }
-        cmd.args(["-t", &duration.to_string(), "-map_metadata", "-1"]);
+        cmd.args(["-t", &duration.to_string(), "-map_metadata", "-1", "-metadata", &format!("comment={metadata}")]);
         if extension == "mp4" {
             cmd.args(["-movflags", "+faststart"]);
         }
@@ -501,6 +587,19 @@ mod tests {
         assert_eq!(info.size, (480, 640));
         metadata["streams"][0]["duration"] = "NaN".into();
         assert!(parse_probe("x.mkv".into(), &metadata).is_err());
+    }
+
+    #[test]
+    fn metadata_rejects_unknown_versions_invalid_settings_and_unrelated_comments() {
+        let mut data = serde_json::json!({"version": 1, "config": Config::default(), "video_options": Options::default()});
+        let tagged = |data: &Value| serde_json::json!({"format": {"tags": {"COMMENT": format!("{PRESET_PREFIX}{data}")}}});
+        assert!(parse_preset(&tagged(&data), (64, 48)).is_ok());
+        data["version"] = 2.into();
+        assert!(parse_preset(&tagged(&data), (64, 48)).is_err());
+        data["version"] = 1.into();
+        data["config"]["output"] = "0x0".into();
+        assert!(parse_preset(&tagged(&data), (64, 48)).is_err());
+        assert!(parse_preset(&serde_json::json!({"format":{"tags":{"comment":"ordinary comment"}}}), (64,48)).is_err());
     }
 
     #[test]

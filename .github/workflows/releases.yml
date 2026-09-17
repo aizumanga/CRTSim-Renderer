@@ -1,0 +1,111 @@
+name: Portable packages
+on:
+  pull_request:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            platform: linux-x86_64
+          - os: windows-latest
+            platform: windows-x86_64
+          - os: macos-14
+            platform: macos-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libegl1-mesa-dev mesa-vulkan-drivers xvfb
+      - name: Static Windows C runtime
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo 'RUSTFLAGS=-C target-feature=+crt-static' >> "$GITHUB_ENV"
+      - name: Build and test
+        run: |
+          cargo test --workspace --locked
+          cargo build --release --locked -p crtsim-desktop -p crtsim-cli
+      - name: Package binaries and licenses
+        shell: bash
+        env:
+          PACKAGE_PLATFORM: ${{ matrix.platform }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          if [ "$REF_TYPE" = tag ]; then
+            version="$REF_NAME"
+          else
+            version="preview-${GITHUB_SHA:0:8}"
+          fi
+          echo "PACKAGE_VERSION=$version" >> "$GITHUB_ENV"
+          python tools/package.py --platform "$PACKAGE_PLATFORM" --version "$version"
+      - name: Build Linux AppImage
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          ARCH: x86_64
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: |
+          curl --fail --location --retry 3 -o linuxdeploy.AppImage https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy.AppImage
+          sha256sum linuxdeploy.AppImage > dist/linuxdeploy-tool.sha256
+          export OUTPUT="$PWD/dist/CRTSim-Renderer-${PACKAGE_VERSION}-linux-x86_64.AppImage"
+          ./linuxdeploy.AppImage --appdir dist/AppDir --executable target/release/crtsim-desktop --executable target/release/crtsim-cli --desktop-file packaging/crtsim-renderer.desktop --icon-file packaging/crtsim-renderer.svg --library /usr/lib/x86_64-linux-gnu/libxkbcommon-x11.so.0 --library /usr/lib/x86_64-linux-gnu/libwayland-client.so.0 --custom-apprun packaging/AppRun --output appimage
+      - name: Smoke-test packaged Linux AppImage
+        if: runner.os == 'Linux'
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+          XDG_RUNTIME_DIR: /tmp
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          WINIT_UNIX_BACKEND: x11
+        run: |
+          mkdir -p package-smoke
+          ./dist/*.AppImage --cli inspect-meshes
+          xvfb-run -a -s '-screen 0 1440x1000x24' ./dist/*.AppImage --backend vulkan --smoke-test "$PWD/package-smoke/desktop.png"
+      - name: Package checksums
+        shell: bash
+        run: python -c "from pathlib import Path; import hashlib; p=Path('dist'); fs=sorted(f for f in p.iterdir() if f.is_file() and (f.suffix in ('.zip','.AppImage') or f.name.endswith('.tar.gz'))); (p/'SHA256SUMS-${{ matrix.platform }}.txt').write_text(''.join(hashlib.sha256(f.read_bytes()).hexdigest()+'  '+f.name+'\n' for f in fs))"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CRTSim-Renderer-${{ matrix.platform }}
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/*.AppImage
+            dist/*.txt
+            dist/*.sha256
+            package-smoke/*.png
+          if-no-files-found: error
+          retention-days: 14
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: CRTSim-Renderer-*
+          path: packages
+          merge-multiple: true
+      - name: Create or update draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "CRTSim Renderer $RELEASE_TAG" --notes 'Portable desktop and CLI packages. See the included README and docs/RELEASES.md. Video requires a separate FFmpeg/ffprobe installation. macOS is ad-hoc signed only, without Apple Developer ID signing or notarization.'
+          fi
+          gh release upload "$RELEASE_TAG" packages/*.zip packages/*.tar.gz packages/*.AppImage packages/SHA256SUMS-*.txt --clobber

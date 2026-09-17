@@ -31,7 +31,7 @@ Surface render targets currently allocate per frame while temporal targets persi
 - Only local files with a finite probed duration (up to seven days) and a usable 1–240 FPS rate are accepted. Existing core dimension/memory limits apply.
 - Sources are normalized to square pixels before the CRT preset's own pixel-aspect setting. Rotation is limited to multiples of 90 degrees.
 - HDR transfer flags trigger `zscale`/`tonemap`; the installed FFmpeg must provide those filters. ICC management, Dolby Vision reconstruction and HDR output are outside this version.
-- Subtitles, chapters, additional audio tracks, container source metadata and video-embedded presets are omitted. PNG preset metadata remains supported.
+- Subtitles, chapters, additional audio tracks and container source metadata are omitted. Renderer presets are embedded in PNG and exported video.
 - Software encoders only. Video export is exposed through the desktop and media library; the existing image CLI remains unchanged.
 - The original video cannot be its own export destination. Native save dialogs confirm other replacements.
 
@@ -55,3 +55,17 @@ cargo test --locked -p crtsim-media --test video video_gpu -- --ignored --nocapt
 
 CI runs both suites with software Vulkan, exports a short audio/video sample, and captures the desktop with video controls visible.
 Native Windows/macOS dialogs, physical-GPU throughput and long-form A/V synchronization still require manual testing.
+
+## Frame navigation and embedded presets
+
+Desktop frame controls operate on decoded frame ordinals, starting at 1 in the UI.
+FFprobe counts frames once on opening; the worker reuses that count while navigating.
+FFmpeg selects the requested decoded frame from the start of the stream, preserving exact ordering for CFR and VFR.
+This favors accuracy over seek speed. Long clips may take time; loading/seeking can be cancelled.
+Frame PNG export renders the currently loaded frame as a settled still, without reconstructing motion history.
+
+MP4/MKV/WebM exports write `CRTSim-Renderer-Preset:` plus versioned JSON into the container comment.
+The JSON contains the original Config and video Options (timing/audio), not the adjusted persistence coefficients.
+The importer validates the schema, version and dimensions, runs ffprobe on a background worker and limits the response to 1 MB.
+Container tags are matched case-insensitively because Matroska/WebM uppercases comment names.
+The metadata contains no source filename/path. Audio fallback and mute retain it; external services/editors may strip it.

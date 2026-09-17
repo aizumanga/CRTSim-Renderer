@@ -28,7 +28,7 @@ pub fn load_preset(path: &Path, input: (u32, u32)) -> Result<Config> {
     Ok(c)
 }
 /// Publish only a complete file, atomically replacing a destination approved by the save dialog.
-fn save_atomic(path: &Path, write: impl FnOnce(&mut std::fs::File) -> Result<()>) -> Result<()> {
+pub fn save_atomic(path: &Path, write: impl FnOnce(&mut std::fs::File) -> Result<()>) -> Result<()> {
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())

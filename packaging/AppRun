@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+app_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# The renderer needs bundled UI libraries. Host FFmpeg must use the host's own libraries.
+export CRTSIM_APPIMAGE=1
+export CRTSIM_HOST_LD_LIBRARY_PATH="${LD_LIBRARY_PATH-}"
+export LD_LIBRARY_PATH="$app_root/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+if [ "${1-}" = "--cli" ]; then
+    shift
+    exec "$app_root/usr/bin/crtsim-cli" "$@"
+fi
+exec "$app_root/usr/bin/crtsim-desktop" "$@"

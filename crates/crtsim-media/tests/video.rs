@@ -70,6 +70,7 @@ fn ffmpeg_streaming_audio_timing_and_cancellation() {
     let info = crtsim_media::probe(&source, &cancel).unwrap();
     assert_eq!(info.size, (64, 48));
     assert!(info.audio);
+    assert!(crtsim_media::import_preset(&source, info.size, &cancel).is_err());
     assert_eq!(
         crtsim_media::preview(&info, 0.1, &cancel)
             .unwrap()
@@ -98,6 +99,9 @@ fn ffmpeg_streaming_audio_timing_and_cancellation() {
             |p| stages.push(p.fraction),
         )
         .unwrap();
+        let preset = crtsim_media::import_preset(&output, info.size, &cancel).unwrap();
+        assert_eq!(preset.config, config);
+        assert_eq!(preset.video_options, options);
         assert_eq!(stages.last(), Some(&1.));
         assert!(stages.windows(2).all(|w| w[0] <= w[1]));
         let result = inspect(&output);
@@ -357,4 +361,36 @@ fn frame_rates_and_audio_offset() {
         energy(&samples[8000..12000]) > 0.01,
         "delayed audio was lost"
     );
+}
+
+#[test]
+#[ignore = "requires FFmpeg and ffprobe"]
+fn exact_frame_navigation_including_variable_rate() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("frames.mkv");
+    fixture(&source, "30");
+    let vfr = dir.path().join("vfr.mkv");
+    let result = Command::new("ffmpeg").args(["-v", "error", "-i"]).arg(&source)
+        .args(["-vf", "select='not(eq(mod(n,3),1))'", "-fps_mode", "vfr", "-an", "-c:v", "ffv1"])
+        .arg(&vfr).output().unwrap();
+    assert!(result.status.success());
+    let cancel = Arc::new(AtomicBool::new(false));
+    for path in [&source, &vfr] {
+        let info = crtsim_media::probe(path, &cancel).unwrap();
+        let all = Command::new("ffmpeg").args(["-v", "error", "-i"]).arg(path)
+            .args(["-map", "0:v:0", "-an", "-fps_mode", "passthrough", "-pix_fmt", "rgba", "-f", "rawvideo", "pipe:1"])
+            .output().unwrap();
+        assert!(all.status.success());
+        let frame_bytes = 64 * 48 * 4;
+        let count = crtsim_media::frame_count(&info, &cancel).unwrap();
+        assert_eq!(count as usize, all.stdout.len() / frame_bytes);
+        for index in [0, 1, count - 1, 2, 0] {
+            let selected = crtsim_media::preview_frame(&info, index, &cancel).unwrap();
+            let start = index as usize * frame_bytes;
+            assert_eq!(selected.as_raw(), &all.stdout[start..start + frame_bytes]);
+        }
+        cancel.store(true, Ordering::Relaxed);
+        assert!(crtsim_media::preview_frame(&info, 0, &cancel).is_err());
+        cancel.store(false, Ordering::Relaxed);
+    }
 }

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=CRTSim Renderer
+Comment=Render images and video through a CRT simulation
+Exec=crtsim-desktop %f
+Icon=crtsim-renderer
+Terminal=false
+Categories=Graphics;Video;AudioVideo;
+MimeType=image/png;image/jpeg;image/webp;image/bmp;video/mp4;video/x-matroska;video/webm;

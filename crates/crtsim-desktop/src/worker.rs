@@ -11,9 +11,15 @@ use std::{
 pub enum Job {
     Shutdown,
     Load(PathBuf),
+    ImportPreset {
+        path: PathBuf,
+        input: (u32, u32),
+        cancel: Arc<AtomicBool>,
+    },
     LoadVideo {
         path: PathBuf,
-        time: f64,
+        frame: u64,
+        cached: Option<(crtsim_media::Video, u64)>,
         cancel: Arc<AtomicBool>,
     },
     ExportVideo {
@@ -39,7 +45,8 @@ pub enum Event {
         progress: RenderProgress,
     },
     Loaded(Result<(PathBuf, RgbaImage, RgbaImage), String>),
-    VideoLoaded(Result<(crtsim_media::Video, RgbaImage, RgbaImage, f64), String>),
+    VideoLoaded(Result<(crtsim_media::Video, RgbaImage, RgbaImage, u64, u64), String>),
+    PresetImported(Result<(PathBuf, Config, Option<crtsim_media::Options>), String>),
     Preview {
         revision: u64,
         result: Result<(RgbaImage, f32), String>,
@@ -61,14 +68,33 @@ pub fn start(
         while let Ok(job) = jobs.recv() {
             let event = match job {
                 Job::Shutdown => break,
-                Job::LoadVideo { path, time, cancel } => Event::VideoLoaded(
+                Job::ImportPreset { path, input, cancel } => Event::PresetImported(
                     (|| -> anyhow::Result<_> {
-                        let video = crtsim_media::probe(&path, &cancel)?;
-                        let image = crtsim_media::preview(&video, time, &cancel)?;
+                        if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("png")) {
+                            let config = files::load_preset_from_image(&path, input)?;
+                            Ok((path, config, None))
+                        } else {
+                            let preset = crtsim_media::import_preset(&path, input, &cancel)?;
+                            Ok((path, preset.config, Some(preset.video_options)))
+                        }
+                    })().map_err(|e| format!("{e:#}")),
+                ),
+                Job::LoadVideo { path, frame, cached, cancel } => Event::VideoLoaded(
+                    (|| -> anyhow::Result<_> {
+                        let (video, count) = match cached {
+                            Some(cached) => cached,
+                            None => {
+                                let video = crtsim_media::probe(&path, &cancel)?;
+                                let count = crtsim_media::frame_count(&video, &cancel)?;
+                                (video, count)
+                            }
+                        };
+                        anyhow::ensure!(frame < count, "Frame is outside the video");
+                        let image = crtsim_media::preview_frame(&video, frame, &cancel)?;
                         let thumb = image::DynamicImage::ImageRgba8(image.clone())
                             .thumbnail(2048, 2048)
                             .to_rgba8();
-                        Ok((video, image, thumb, time))
+                        Ok((video, image, thumb, frame, count))
                     })()
                     .map_err(|e| format!("{e:#}")),
                 ),
