@@ -241,9 +241,11 @@ fn render(
         }
         let renderer = renderer.as_ref().unwrap();
         let image = match cancel {
-            Some(cancel) => renderer
-                .render_with_progress_and_cancel(input, c, cancel, &mut progress)?
-                .crt,
+            Some(cancel) => {
+                renderer
+                    .render_with_progress_and_cancel(input, c, cancel, &mut progress)?
+                    .crt
+            }
             None => renderer.render_with_progress(input, c, &mut progress)?.crt,
         };
         Ok(image)

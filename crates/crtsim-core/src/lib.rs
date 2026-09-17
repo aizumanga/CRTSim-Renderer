@@ -82,13 +82,7 @@ impl Workspace {
         surface_format: wgpu::TextureFormat,
     ) -> Self {
         let source = Target::new(device, "clean signal", signal_size);
-        let full = Target::with_format(
-            device,
-            "screen and frame",
-            output_size,
-            surface_format,
-            1,
-        );
+        let full = Target::with_format(device, "screen and frame", output_size, surface_format, 1);
         let down = Target::with_format(
             device,
             "bloom downsample",
@@ -96,13 +90,7 @@ impl Workspace {
             surface_format,
             1,
         );
-        let up = Target::with_format(
-            device,
-            "bloom upsample",
-            output_size,
-            surface_format,
-            1,
-        );
+        let up = Target::with_format(device, "bloom upsample", output_size, surface_format, 1);
         let final_target = Target::new(device, "output", output_size);
         let depth = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("depth"),
@@ -545,14 +533,7 @@ impl Renderer {
         c: &Config,
         progress: impl FnMut(RenderProgress),
     ) -> Result<Rendered> {
-        self.render_sequence(
-            input,
-            c,
-            &mut Sequence::default(),
-            true,
-            || false,
-            progress,
-        )
+        self.render_sequence(input, c, &mut Sequence::default(), true, || false, progress)
     }
 
     /// A cancellable still export. Cancellation is checked between bounded GPU batches.
@@ -639,9 +620,9 @@ impl Renderer {
             "estimated working set exceeds Phase 0 budget; choose a smaller preset"
         );
         let clean = config::prepare(input, c)?;
-        let workspace = sequence.workspace.get_or_insert_with(|| {
-            Workspace::new(&self.device, sig, out, surface_format)
-        });
+        let workspace = sequence
+            .workspace
+            .get_or_insert_with(|| Workspace::new(&self.device, sig, out, surface_format));
         ensure!(
             workspace.matches(sig, out, surface_format),
             "Start a new video sequence after changing signal size, output size or color mode"

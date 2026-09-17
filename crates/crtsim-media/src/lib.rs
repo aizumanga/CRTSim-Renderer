@@ -301,12 +301,18 @@ fn require_encoder(name: &str, cancel: &Arc<AtomicBool>) -> Result<()> {
     let mut process = Process::spawn(&mut cmd, cancel)?;
     drop(process.stdin());
     let mut bytes = Vec::new();
-    process.stdout().take(2 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
-    ensure!(bytes.len() <= 2 * 1024 * 1024, "FFmpeg encoder list is too large");
+    process
+        .stdout()
+        .take(2 * 1024 * 1024 + 1)
+        .read_to_end(&mut bytes)?;
+    ensure!(
+        bytes.len() <= 2 * 1024 * 1024,
+        "FFmpeg encoder list is too large"
+    );
     process.wait()?;
-    let available = String::from_utf8_lossy(&bytes).lines().any(|line| {
-        line.split_whitespace().nth(1) == Some(name)
-    });
+    let available = String::from_utf8_lossy(&bytes)
+        .lines()
+        .any(|line| line.split_whitespace().nth(1) == Some(name));
     ensure!(
         available,
         "This FFmpeg installation does not provide the required {name} video encoder"
