@@ -131,6 +131,14 @@ pub struct Rendered {
     pub crt: RgbaImage,
 }
 
+/// Feedback belongs to a single sequence on this renderer. Start a new sequence after seeking
+/// or changing settings. Reuse it only with the same device and signal dimensions.
+#[derive(Default)]
+pub struct Sequence {
+    history: Option<[Target; 2]>,
+    tick: u64,
+}
+
 #[derive(Clone, Debug)]
 pub struct RenderProgress {
     /// Completed, weighted stages; not an estimate of elapsed time.
@@ -423,6 +431,27 @@ impl Renderer {
         &self,
         input: &RgbaImage,
         c: &Config,
+        progress: impl FnMut(RenderProgress),
+    ) -> Result<Rendered> {
+        self.render_sequence(input, c, &mut Sequence::default(), true, progress)
+    }
+
+    /// One ordered video frame. Warm-up applies once, then history and phase persist.
+    pub fn render_video_frame(
+        &self,
+        input: &RgbaImage,
+        c: &Config,
+        sequence: &mut Sequence,
+    ) -> Result<RgbaImage> {
+        Ok(self.render_sequence(input, c, sequence, false, |_| {})?.crt)
+    }
+
+    fn render_sequence(
+        &self,
+        input: &RgbaImage,
+        c: &Config,
+        sequence: &mut Sequence,
+        debug: bool,
         mut progress: impl FnMut(RenderProgress),
     ) -> Result<Rendered> {
         let mut report = |fraction, stage: String| progress(RenderProgress { fraction, stage });
@@ -453,10 +482,17 @@ impl Renderer {
         let source = Target::new(&self.device, "clean signal", sig);
         source.upload(&self.queue, &clean);
         report(0.05, "Image prepared".into());
-        let history = [
-            Target::new(&self.device, "history A", sig),
-            Target::new(&self.device, "history B", sig),
-        ];
+        let first = sequence.history.is_none();
+        let history = sequence.history.get_or_insert_with(|| {
+            [
+                Target::new(&self.device, "history A", sig),
+                Target::new(&self.device, "history B", sig),
+            ]
+        });
+        ensure!(
+            (history[0].width, history[0].height) == sig,
+            "Start a new video sequence after changing signal size"
+        );
         let full = Target::with_format(&self.device, "screen and frame", out, surface_format, 1);
         let down = Target::with_format(
             &self.device,
@@ -524,7 +560,7 @@ impl Renderer {
                 label: Some("still job"),
             });
         // Explicitly reset both feedback surfaces; each job is independent.
-        for t in &history {
+        for t in history.iter().filter(|_| first) {
             let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("reset history"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -541,7 +577,9 @@ impl Renderer {
             });
         }
         // Separate immutable uniform per tick avoids queue.write_buffer ordering bugs.
-        for tick in 0..=c.warmup {
+        let count = if first { c.warmup + 1 } else { 1 };
+        for step in 0..count {
+            let tick = sequence.tick;
             p.signal[3] = match c.phase {
                 Phase::Stable => 0.5,
                 Phase::A => 0.,
@@ -558,17 +596,18 @@ impl Renderer {
             let bindings = self.bind(&uniform, &source, &history[(1 - tick % 2) as usize]);
             self.pass(&mut encoder, &history[(tick % 2) as usize], &bindings, 0);
             // Report completed GPU work, not just command encoding. Small batches keep overhead bounded.
-            if (tick + 1) % 8 == 0 || tick == c.warmup {
+            sequence.tick += 1;
+            if (step + 1) % 8 == 0 || step + 1 == count {
                 self.queue.submit(Some(encoder.finish()));
                 self.device.poll(wgpu::Maintain::Wait);
                 report(
-                    0.05 + 0.75 * (tick + 1) as f32 / (c.warmup + 1) as f32,
-                    format!("Warm-up {}/{}", tick + 1, c.warmup + 1),
+                    0.05 + 0.75 * (step + 1) as f32 / count as f32,
+                    format!("Simulation {}/{}", step + 1, count),
                 );
                 encoder = self.device.create_command_encoder(&Default::default());
             }
         }
-        let signal = &history[(c.warmup % 2) as usize];
+        let signal = &history[((sequence.tick - 1) % 2) as usize];
         let uniform = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -626,7 +665,11 @@ impl Renderer {
             5 + base_pipeline,
         );
         self.queue.submit(Some(encoder.finish()));
-        let signal = self.readback(signal)?;
+        let signal = if debug {
+            self.readback(signal)?
+        } else {
+            RgbaImage::new(0, 0)
+        };
         report(
             0.9,
             "Glass, lighting and bloom complete; reading pixels".into(),
@@ -692,6 +735,29 @@ mod tests {
         )
         .validate(&module)
         .unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires a Vulkan adapter"]
+    fn video_history_survives_between_frames_and_resets_for_new_sequence() {
+        let r = pollster::block_on(Renderer::new(wgpu::Backends::VULKAN)).unwrap();
+        let c = Config {
+            output: "160x120".into(),
+            signal: "32x32".into(),
+            warmup: 0,
+            persistence: [0.9; 3],
+            ..Config::default()
+        };
+        let white = RgbaImage::from_pixel(32, 32, image::Rgba([255; 4]));
+        let black = RgbaImage::from_pixel(32, 32, image::Rgba([0, 0, 0, 255]));
+        let mut sequence = Sequence::default();
+        r.render_video_frame(&white, &c, &mut sequence).unwrap();
+        let trailing = r.render_video_frame(&black, &c, &mut sequence).unwrap();
+        let reset = r
+            .render_video_frame(&black, &c, &mut Sequence::default())
+            .unwrap();
+        assert_ne!(trailing, reset, "history was reset between video frames");
+        assert_eq!(reset, r.render(&black, &c).unwrap().crt);
     }
     #[test]
     #[ignore = "requires an explicitly provisioned GPU or software Vulkan driver"]

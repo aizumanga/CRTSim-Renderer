@@ -65,12 +65,28 @@ This phase does not promise continuous real-time frame rates, cancellable GPU su
 - Experimental linear-light glass/lighting/bloom with float intermediates and SDR output. Composite/history stays in gamma space.
 - Existing frame lighting, reflection attributes, mask density, geometry and resolution controls remain shared with the CLI.
 
-## Phase 3 and later
+## Phase 3: video implementation
 
-- Video streaming through FFmpeg with audio remux, cancellation and timestamp-based simulation.
-- Independent simulation clock, fixed 60 Hz mode and a stable-artifact source-rate mode. Do not advance persistence according to wall-clock export speed.
-- Decay correction alone is not an exact correction for the spatial feedback filter; test 24/25/30/50/59.94/60 FPS and seeking/preroll.
-- Full color management, optional LUT import, batch jobs, wider tube geometry and packaging remain later work.
+- FFmpeg/ffprobe subprocesses: bounded frame streaming, persistent GPU history, software H.264/VP9 output and first-track audio remux with AAC/Opus fallback.
+- Cancellable loading/export, process reaping and atomic output replacement; no temporary PNG sequences.
+- Source-rate stable artifacts with time-corrected decay, fixed 60 Hz alternating mode, and persistence-off mode. Simulation advances by media time, not export speed.
+- Video inspection, selected-frame still preview and export controls in the desktop. Live playback and temporal preroll preview are deferred and explicitly labeled in the UI.
+- Decay correction remains an approximation of the spatial feedback filter. Integration tests cover 24/25/30/50/59.94/60 FPS and audio offsets.
+- SDR output; HDR inputs require FFmpeg tone mapping. Variable-rate inputs normalize to CFR. See [VIDEO_PIPELINE.md](VIDEO_PIPELINE.md).
+
+## Phase 4: portable releases
+
+- Windows x86_64 portable ZIP with desktop/CLI; installer deferred.
+- Linux x86_64 AppImage and portable tarball, built on Ubuntu 22.04.
+- Provisional Apple Silicon macOS app/tarball, ad-hoc signed only; Developer ID signing/notarization requires credentials and hardware testing.
+- PR/manual build artifacts and tag-triggered draft releases, notices, dependency licenses, checksums and packaged Linux runtime smoke test.
+- Usability additions: editable personal-preset descriptions, unified Open File, media-specific exports, exact frame selection beneath the preview.
+- PNG and MP4/MKV/WebM preset import; video container metadata stores original controls plus timing/audio options.
+- Real-time video playback remains deferred. Exact decoded-frame seeks handle VFR without approximate timestamp steps but may be slower on long footage.
+
+## Later work
+
+- Full color management, optional LUT import, batch jobs, wider tube geometry remain later work.
 - No default synthetic interlacing, VHS noise, sprite flicker or room reflection.
 
 ## Sources

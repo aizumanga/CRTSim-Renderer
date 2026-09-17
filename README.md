@@ -1,8 +1,9 @@
 # CRTSim-Renderer
 
 A native, local renderer based on [J. Kyle Pittman's public CRTSim implementation](https://github.com/MinorKeyGames/CRTSim).
-Phase 2 expands the **native desktop still-image application** with a persistent preset gallery, credits, progress and optional rendering refinements.
-The goal is to preserve the shared effect and make it useful for images and, later, video.
+The desktop renders **images and video with audio**, with portable release builds for Windows, Linux and provisional macOS.
+See [portable downloads and setup](docs/RELEASES.md).
+The goal is to preserve the shared effect and make it useful for images and video.
 It is not an official product or an exact reconstruction of a commercial game's shader.
 
 ## What works in this prototype
@@ -15,7 +16,7 @@ It is not an official product or an exact reconstruction of a commercial game's 
 - Clean/signal/full-CRT debugging and mesh validation/export without a GPU.
 - Native wgpu backends: Vulkan on Linux, DX12 on Windows and Metal on macOS.
 
-Video, audio, installers and the unpublished NES palette LUT are not included yet. Platform compilation does not prove visual parity between drivers.
+Installers and the unpublished NES palette LUT are not included. Platform compilation does not prove visual parity between drivers.
 See [the implementation plan](docs/PLAN.md) and [validation notes](docs/VALIDATION.md).
 
 ## Desktop app
@@ -29,7 +30,8 @@ The welcome and credits also link to Pittman's
 an interesting technical account of how the effect developed.
 
 **Preset gallery** includes General image, Original CRTSim, Soft television, Clean RGB, Pixel art 240p, Warm analog and Linear light.
-Enter a name and choose **Save current** to add your exact settings to **My presets**; they reappear after restarting.
+Enter a name and choose **Save current** to add your exact settings to **My presets**; they reappear after restarting. Use **Edit description** on any personal preset to add, change or clear its description.
+Descriptions are saved beside gallery JSON files as UTF-8 `.txt` files; the JSON stays CLI-compatible.
 To add an existing JSON, load it, then use Save current in the gallery. JSON export remains available for sharing.
 Names are never overwritten; malformed files are skipped with an explanation. Personal JSON files live outside the checkout,
 in the app data directory shown in the gallery. `CRTSIM_DATA_DIR` can override that directory with an absolute path.
@@ -38,8 +40,9 @@ Only explicitly saved presets and the welcome acknowledgement persist; unsaved e
 Full-resolution export shows stage-based progress; routine live-preview updates stay unobtrusive. Warm-up advances after completed GPU batches,
 followed by surface rendering/readback and PNG saving.
 Percentages represent weighted work stages, not remaining seconds; PNG encoding stays at its stage until the file is completely saved.
-Exported PNGs embed the exact JSON preset in a private PNG text chunk without changing the pixels. Use **Import preset from image…**
-to recover settings from a rendered PNG; ordinary images without this metadata are rejected with an explanatory message.
+Exported PNGs embed the exact JSON preset in a private PNG text chunk without changing the pixels. Use **Import preset from Image/Video…**
+to recover settings from a rendered PNG, MP4, MKV or WebM. Video metadata also restores timing/audio choices.
+Files without this metadata are rejected with an explanatory message; third-party transcoding or uploads may strip it.
 
 **Filter mask when shrinking** uses a mipmapped mask to reduce minification aliasing. New general-image presets enable it;
 Original CRTSim and old JSON files preserve the original sampling. Display resizing can still introduce moiré.
@@ -56,7 +59,7 @@ With stable Rust installed, run from the repository folder:
 cargo run --release --locked -p crtsim-desktop
 ```
 
-Use **Open image** or drag one PNG/JPEG/WebP/BMP into the window. Adjust the controls on the left;
+Use **Open File** or drag one PNG/JPEG/WebP/BMP into the window. Adjust the controls on the left;
 the preview refreshes after you finish a drag or pause typing. **Export PNG** renders using the export size,
 even when the preview is smaller. The window remains responsive while loading, rendering and exporting.
 Settings changed during an export apply to the next export. The native save dialog asks for confirmation when a desktop PNG or JSON preset
@@ -100,6 +103,38 @@ do not depend on one vendor, but it is not a substitute for runtime tests on sev
 Vulkan/DX12/Metal implementation will show a compatible-adapter error; it is not silently switched to a CPU renderer.
 
 ## Build and try
+
+### Video
+
+Install `ffmpeg` and `ffprobe` on PATH (on Arch: `sudo pacman -S ffmpeg`). The image renderer does not need them.
+For a portable installation, set `CRTSIM_FFMPEG` and `CRTSIM_FFPROBE` to the respective executable paths.
+FFmpeg must include `libx264` for MP4/MKV, `libvpx-vp9` for WebM, and AAC/Opus encoders when converting audio.
+Missing executables/codecs produce an error in the window; nothing is downloaded automatically.
+
+1. Choose **Open File…**, drop a video, or pass its path on the command line.
+2. Use **Previous frame / Next frame**, arrow keys, the frame number field or the wide slider beneath the preview.
+   Selection loads when you release the slider or choose **Go**. Frame numbers start at 1 and follow actual decoded frames, including VFR sources.
+   **Export frame** saves the currently displayed source frame as a full-resolution CRT PNG. This is a settled still preview, not motion-history playback.
+   Counting frames on open and decoding from the start for exact seeks can take time on long videos; both are cancellable.
+3. Choose output resolution and video timing: source-rate stable artifacts (default), 60 Hz alternating artifacts, or persistence off.
+4. Choose **Export video…** and a filename ending in `.mp4`, `.mkv` or `.webm`. MP4/MKV use H.264; WebM uses VP9.
+
+Exports retain CRT history between ordered frames. Variable-frame-rate input is normalized to the detected average frame rate,
+or to 60 FPS in 60 Hz mode. Source-rate mode corrects persistence decay by media time; this is an approximation of the spatial feedback effect.
+Audio defaults to copying the first track when compatible, with AAC/Opus fallback; delayed audio is re-encoded to preserve its timing.
+**Re-encode** and **Mute** are also available. Video output dimensions must be even.
+
+The progress bar reports frames, rendering speed and an approximate remaining time. **Cancel** stops video loading/export;
+closing the app also terminates its FFmpeg processes. Existing destinations are replaced only after a successful export.
+Temporary encoded files require space on the destination drive, but decoded frames are streamed rather than saved as PNGs.
+Settings and the source are captured for each export; edits during export apply to the next job.
+
+Output is opaque SDR with software encoding. HDR input uses FFmpeg's `zscale`/`tonemap` filters when available.
+No subtitles, chapters, additional audio tracks, HDR output or hardware encoder controls are included yet.
+MP4/MKV/WebM exports embed an importable preset in a container comment, including the original controls and video timing/audio settings.
+PNG exports still embed importable presets. Full details and validation commands are in [VIDEO_PIPELINE.md](docs/VIDEO_PIPELINE.md).
+
+### Images and CLI
 
 Install stable Rust through [rustup](https://rustup.rs/), then:
 

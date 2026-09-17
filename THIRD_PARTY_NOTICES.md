@@ -16,4 +16,8 @@ eframe/egui, rfd, tempfile and directories. The desktop uses eframe's bundled fo
 Before distributing binaries, collect the complete license texts for all transitive dependencies using a license-reporting tool such as cargo-about.
 This document is a development inventory, not a completed binary-distribution license bundle.
 
-FFmpeg is not bundled, linked, downloaded or used in Phases 0 or 1.
+## FFmpeg
+
+Phase 3 invokes a user-installed FFmpeg and ffprobe as separate executables. Neither is bundled, linked or downloaded by this application.
+The installed build determines codec availability and its license obligations; builds containing libx264 generally enable GPL components.
+Before distributing FFmpeg with a future release, collect the exact build configuration, applicable licenses and corresponding source obligations.
