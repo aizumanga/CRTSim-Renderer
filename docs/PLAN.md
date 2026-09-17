@@ -84,6 +84,11 @@ This phase does not promise continuous real-time frame rates, cancellable GPU su
 - PNG and MP4/MKV/WebM preset import; video container metadata stores original controls plus timing/audio options.
 - Real-time video playback remains deferred. Exact decoded-frame seeks handle VFR without approximate timestamp steps but may be slower on long footage.
 
+## v0.2 groundwork
+
+- Interface themes are v0.2 groundwork: dark and light defaults, two classic operating-system-inspired palettes,
+  and a restrained Sky Diary palette adapted from the aizumanga-neocities site. They remain separate from render presets and output.
+
 ## Later work
 
 - Full color management, optional LUT import, batch jobs, wider tube geometry remain later work.

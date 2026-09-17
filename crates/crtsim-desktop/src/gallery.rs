@@ -2,6 +2,8 @@ use anyhow::{ensure, Context, Result};
 use crtsim_core::config::{ColorMode, Config, Filter};
 use std::path::{Path, PathBuf};
 
+use crate::theme::Theme;
+
 pub const DISCLAIMER: &str = "This project is what some would call \"vibe-coded slop\", built based on J. Kyle Pittman's public CRTSim. The original CRT simulation, shaders, textures and meshes are his work; this project's AI-assisted renderer port and interface are separate additions. This is an unofficial project, not made or endorsed by him.";
 pub const SUPPORT: &str = "Please support J. Kyle Pittman and Minor Key Games: buy and play their games on itch.io and Steam.";
 pub const ITCH: &str = "https://piratehearts.itch.io/";
@@ -134,6 +136,26 @@ impl Store {
         file.persist(path).map_err(|e| e.error)?;
         Ok(())
     }
+    pub fn theme(&self) -> Result<Option<Theme>> {
+        let path = self.root.join("theme-v1.txt");
+        if !path.exists() {
+            return Ok(None);
+        }
+        ensure!(path.metadata()?.len() <= 64, "Theme setting is too large");
+        let value = std::fs::read_to_string(path)?;
+        let id = value.trim();
+        Theme::from_id(id)
+            .map(Some)
+            .with_context(|| format!("Unknown saved theme {id:?}"))
+    }
+    pub fn set_theme(&self, theme: Theme) -> Result<()> {
+        std::fs::create_dir_all(&self.root)?;
+        crate::files::save_atomic(&self.root.join("theme-v1.txt"), |file| {
+            use std::io::Write;
+            writeln!(file, "{}", theme.id())?;
+            Ok(())
+        })
+    }
     pub fn scan(&self) -> Result<(Vec<Entry>, Vec<String>)> {
         let dir = self.root.join("presets");
         if !dir.exists() {
@@ -245,6 +267,9 @@ mod tests {
         assert!(s.welcome_needed());
         s.acknowledge().unwrap();
         assert!(!s.welcome_needed());
+        assert_eq!(s.theme().unwrap(), None);
+        s.set_theme(Theme::SkyDiary).unwrap();
+        assert_eq!(s.theme().unwrap(), Some(Theme::SkyDiary));
         let c = crate::model::general();
         s.save("My CRT", &c, (1216, 832)).unwrap();
         assert!(s.save("my crt", &c, (1, 1)).is_err());

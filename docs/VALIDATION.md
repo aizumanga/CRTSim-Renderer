@@ -6,6 +6,7 @@ This is a runnable prototype, not a claim of completed cross-platform visual par
 
 CPU tests cover old JSON defaults, exact neutral grading, gray chroma output, gallery persistence, welcome acknowledgement,
 duplicate/path-name protection, corrupt-file isolation and all built-in configuration validation.
+Theme tests cover unique stable identifiers, every built-in palette applying to an egui context, and app-data persistence.
 The GPU test covers linear-light float targets, filtered masks and monotonic progress through 100%.
 CI captures the actual welcome window, desktop and gallery, plus linear-light and filtered-mask diagnostics.
 Native file dialogs, real GPU performance and cross-driver visual equivalence remain manual acceptance work.
