@@ -557,7 +557,9 @@ impl App {
     }
     fn toolbar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.horizontal_wrapped(|ui| {
-            ui.colored_label(self.theme.accent(), "●");
+            let (mark, _) = ui.allocate_exact_size(egui::vec2(10., 10.), egui::Sense::hover());
+            ui.painter()
+                .circle_filled(mark.center(), 4., self.theme.accent());
             ui.strong("CRTSim Renderer");
             ui.separator();
             let enabled = !self.dialog_open && !self.loading && !self.exporting;

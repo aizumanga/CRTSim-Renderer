@@ -68,6 +68,8 @@ jobs:
           WINIT_UNIX_BACKEND: x11
         run: |
           xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-desktop -- --backend vulkan --smoke-test output/desktop.png
+          mkdir -p "$CRTSIM_DATA_DIR"
+          echo 'sky-diary' > "$CRTSIM_DATA_DIR/theme-v1.txt"
           xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-desktop -- --smoke-test output/welcome.png --smoke-welcome
           mkdir -p "$CRTSIM_DATA_DIR/presets"
           cp output/general.json "$CRTSIM_DATA_DIR/presets/Animation CRT.json"
