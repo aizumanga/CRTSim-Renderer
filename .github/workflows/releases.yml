@@ -110,4 +110,4 @@ jobs:
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release create "$RELEASE_TAG" --verify-tag --draft --title "CRTSim Renderer $RELEASE_TAG" --notes 'Portable desktop and CLI packages. See the included README and docs/RELEASES.md. Video requires a separate FFmpeg/ffprobe installation. macOS is ad-hoc signed only, without Apple Developer ID signing or notarization.'
           fi
-          gh release upload "$RELEASE_TAG" packages/*.zip packages/*.tar.gz packages/*.AppImage packages/SHA256SUMS-*.txt --clobber
+          gh release upload "$RELEASE_TAG" packages/dist/*.zip packages/dist/*.tar.gz packages/dist/*.AppImage packages/dist/SHA256SUMS-*.txt --clobber
