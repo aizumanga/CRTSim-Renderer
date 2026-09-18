@@ -68,10 +68,12 @@ if args.platform == 'macos-arm64':
 if exe:
     archive = dist / (name + '.zip')
     # Cargo sources can carry Unix-epoch timestamps, older than ZIP's 1980 minimum.
+    # Keep Windows files at the ZIP root. Windows' "Extract All" already creates a
+    # directory named after the archive, so another identical directory is needless.
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, strict_timestamps=False) as output:
         for path in sorted(stage.rglob('*')):
             if path.is_file():
-                output.write(path, path.relative_to(dist))
+                output.write(path, path.relative_to(stage))
 else:
     archive = dist / (name + '.tar.gz')
     with tarfile.open(archive, 'w:gz') as output:

@@ -19,7 +19,7 @@ Review and publish the draft manually. This workflow does not create tags or mer
 
 | Platform | Package | Launch |
 | --- | --- | --- |
-| Windows x86_64 | Portable ZIP, desktop and CLI | Extract the entire ZIP, open `crtsim-desktop.exe` |
+| Windows x86_64 | Portable ZIP, desktop and CLI | Extract the entire ZIP; `crtsim-desktop.exe` is directly inside the extracted folder |
 | Linux x86_64 | AppImage | Make executable, then open it |
 | Linux x86_64 | Portable tar.gz, desktop and CLI | Extract, run `./crtsim-desktop` |
 | macOS Apple Silicon | tar.gz with `.app`, desktop and CLI | Extract, open `CRTSim Renderer.app` |
@@ -49,6 +49,7 @@ The AppImage is launched under software Vulkan/Xvfb in CI before its artifact is
 ### Windows and macOS
 
 Windows builds statically link the C runtime; no separate Visual C++ redistributable is needed for that runtime.
+Windows ZIP contents are stored at the archive root so extraction does not create a redundant second package folder.
 The application is unsigned and Windows may display a download warning.
 macOS is optional/provisional: Apple Silicon only, ad-hoc signed for execution, without Developer ID signing or notarization.
 Gatekeeper may require approval through System Settings → Privacy & Security. Real Mac runtime testing remains necessary.
