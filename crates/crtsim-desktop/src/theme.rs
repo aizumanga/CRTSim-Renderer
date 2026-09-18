@@ -2,11 +2,11 @@ use eframe::egui::{self, Color32, Stroke};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Theme {
-    #[default]
     CrtDark,
     PaperLight,
     LunaBlue,
     ClassicPlatinum,
+    #[default]
     SkyDiary,
 }
 
@@ -120,15 +120,15 @@ impl Theme {
                     rgb(73, 67, 139),
                 ),
                 Self::SkyDiary => (
-                    rgb(218, 239, 252),
-                    rgb(247, 251, 255),
-                    rgb(205, 229, 248),
-                    rgb(255, 255, 255),
-                    rgb(225, 240, 252),
-                    rgb(255, 218, 234),
-                    rgb(244, 170, 204),
-                    rgb(38, 60, 91),
-                    rgb(105, 157, 207),
+                    rgb(169, 196, 220),
+                    rgb(202, 221, 237),
+                    rgb(184, 207, 228),
+                    rgb(225, 235, 245),
+                    rgb(197, 215, 234),
+                    rgb(233, 204, 227),
+                    rgb(216, 170, 204),
+                    rgb(27, 49, 77),
+                    rgb(96, 133, 174),
                     rgb(50, 119, 186),
                 ),
             };
@@ -163,11 +163,34 @@ impl Theme {
         visuals.widgets.open.weak_bg_fill = active;
         visuals.widgets.open.bg_stroke = Stroke::new(1.0_f32, self.accent());
         visuals.widgets.open.fg_stroke.color = text;
+        visuals.window_rounding = egui::Rounding::same(6.);
+        visuals.window_shadow = egui::epaint::Shadow {
+            offset: egui::vec2(0., 5.),
+            blur: 14.,
+            spread: 1.,
+            color: Color32::from_black_alpha(80),
+        };
+        visuals.collapsing_header_frame = true;
+        visuals.slider_trailing_fill = true;
+        for widget in [
+            &mut visuals.widgets.inactive,
+            &mut visuals.widgets.hovered,
+            &mut visuals.widgets.active,
+            &mut visuals.widgets.open,
+        ] {
+            widget.rounding = egui::Rounding::same(3.);
+        }
 
         let mut style = (*ctx.style()).clone();
         style.visuals = visuals;
         style.spacing.item_spacing = egui::vec2(8., 8.);
         style.spacing.button_padding = egui::vec2(9., 5.);
+        style.spacing.interact_size.y = 25.;
+        style.spacing.slider_width = 120.;
+        style.spacing.slider_rail_height = 5.;
+        style
+            .text_styles
+            .insert(egui::TextStyle::Heading, egui::FontId::proportional(18.));
         ctx.set_style(style);
     }
 }

@@ -1,5 +1,6 @@
 pub mod config;
 pub mod mesh;
+pub mod workflow;
 
 use anyhow::{ensure, Context, Result};
 use bytemuck::{Pod, Zeroable};
@@ -768,6 +769,9 @@ impl Renderer {
             });
             pass.set_bind_group(0, &bindings, &[]);
             for (index, m) in [(1, &self.screen), (2, &self.frame)] {
+                if c.screen_only && index == 2 {
+                    continue;
+                }
                 pass.set_pipeline(&self.pipelines[index + base_pipeline]);
                 pass.set_vertex_buffer(0, m.vertices.slice(..));
                 pass.set_index_buffer(m.indices.slice(..), wgpu::IndexFormat::Uint16);

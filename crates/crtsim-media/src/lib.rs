@@ -23,6 +23,9 @@ use std::{
 
 #[derive(Clone, Debug)]
 pub struct Video {
+    pub metadata: std::collections::BTreeMap<String, String>,
+    pub tracks: Vec<Track>,
+    pub start: f64,
     pub path: PathBuf,
     pub size: (u32, u32),
     pub fps: f64,
@@ -34,6 +37,50 @@ pub struct Video {
     pub stream: u64,
     /// Container-provided decoded-frame count. Missing for many streaming/Matroska sources.
     pub frames: Option<u64>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Track {
+    pub index: u64,
+    pub kind: String,
+    pub codec: String,
+    pub offset: f64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Quality {
+    Draft,
+    #[default]
+    Balanced,
+    High,
+    Archival,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Encoder {
+    #[default]
+    Software,
+    Nvenc,
+    Qsv,
+    Amf,
+    VideoToolbox,
+}
+impl Encoder {
+    pub fn codec(self, webm: bool) -> Result<&'static str> {
+        ensure!(
+            !webm || self == Self::Software,
+            "WebM requires the software VP9 encoder; choose MP4/MKV for hardware H.264"
+        );
+        Ok(match self {
+            Self::Software if webm => "libvpx-vp9",
+            Self::Software => "libx264",
+            Self::Nvenc => "h264_nvenc",
+            Self::Qsv => "h264_qsv",
+            Self::Amf => "h264_amf",
+            Self::VideoToolbox => "h264_videotoolbox",
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
@@ -54,11 +101,91 @@ pub enum Audio {
     Mute,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct Options {
     pub timing: Timing,
     pub audio: Audio,
+    pub quality: Quality,
+    pub encoder: Encoder,
+    pub preserve_streams: bool,
+    /// Optional constant-quality override for software H.264/VP9 (lower is better).
+    pub crf: Option<u8>,
+    /// Optional fixed target bitrate for hardware H.264, in megabits per second.
+    pub bitrate_mbps: Option<u32>,
+    pub speed: Option<EncodingSpeed>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EncodingSpeed {
+    Fast,
+    Balanced,
+    Slow,
+}
+impl Options {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.crf.is_none_or(|v| v <= 51),
+            "Quality value must be 0–51"
+        );
+        ensure!(
+            self.bitrate_mbps.is_none_or(|v| (1..=200).contains(&v)),
+            "Video bitrate must be 1–200 Mbps"
+        );
+        Ok(())
+    }
+    pub fn effective_crf(&self, webm: bool) -> u8 {
+        self.crf.unwrap_or(
+            match self.quality {
+                Quality::Draft => 26,
+                Quality::Balanced => 18,
+                Quality::High => 14,
+                Quality::Archival => 10,
+            } + if webm { 6 } else { 0 },
+        )
+    }
+}
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            timing: Timing::default(),
+            audio: Audio::default(),
+            quality: Quality::default(),
+            encoder: Encoder::default(),
+            preserve_streams: true,
+            crf: None,
+            bitrate_mbps: None,
+            speed: None,
+        }
+    }
+}
+
+fn subtitle_codec(codec: &str, container: &str) -> Option<&'static str> {
+    let text = ["subrip", "ass", "ssa", "webvtt", "mov_text", "text"].contains(&codec);
+    match container {
+        "mkv" => Some("copy"),
+        "mp4" if text => Some("mov_text"),
+        "webm" if text => Some("webvtt"),
+        _ => None,
+    }
+}
+pub fn preservation_notes(video: &Video, container: &str) -> Vec<String> {
+    let mut notes = vec![];
+    for t in &video.tracks {
+        if t.kind == "subtitle" && subtitle_codec(&t.codec, container).is_none() {
+            notes.push(format!(
+                "Subtitle {} ({}) cannot be stored in {container}; use MKV to preserve it.",
+                t.index, t.codec
+            ));
+        }
+        if t.kind == "attachment" && container != "mkv" {
+            notes.push(format!("Attachment {} is preserved only in MKV.", t.index));
+        }
+        if t.kind == "data" {
+            notes.push(format!("Data track {} is not copied.", t.index));
+        }
+    }
+    notes
 }
 
 const PRESET_PREFIX: &str = "CRTSim-Renderer-Preset:";
@@ -89,11 +216,11 @@ pub fn import_preset(path: &Path, input: (u32, u32), cancel: &Arc<AtomicBool>) -
     let mut bytes = Vec::new();
     process
         .stdout()
-        .take(1024 * 1024 + 1)
+        .take(32 * 1024 * 1024 + 1)
         .read_to_end(&mut bytes)?;
     ensure!(
-        bytes.len() <= 1024 * 1024,
-        "Video preset metadata exceeds 1 MB"
+        bytes.len() <= 32 * 1024 * 1024,
+        "Video preset metadata exceeds 32 MB"
     );
     process.wait()?;
     parse_preset(&serde_json::from_slice(&bytes)?, input)
@@ -118,6 +245,7 @@ fn parse_preset(root: &Value, input: (u32, u32)) -> Result<Preset> {
         video_options: wire.video_options,
     };
     preset.config.signal_size(input)?;
+    preset.video_options.validate()?;
     preset.config.output_size(input)?;
     Ok(preset)
 }
@@ -216,9 +344,12 @@ pub fn probe(path: &Path, cancel: &Arc<AtomicBool>) -> Result<Video> {
     let mut bytes = Vec::new();
     process
         .stdout()
-        .take(1024 * 1024 + 1)
+        .take(32 * 1024 * 1024 + 1)
         .read_to_end(&mut bytes)?;
-    ensure!(bytes.len() <= 1024 * 1024, "Video metadata exceeds 1 MB");
+    ensure!(
+        bytes.len() <= 32 * 1024 * 1024,
+        "Video metadata exceeds 32 MB"
+    );
     process.wait()?;
     parse_probe(path, &serde_json::from_slice(&bytes)?)
 }
@@ -279,6 +410,26 @@ fn parse_probe(path: PathBuf, root: &Value) -> Result<Video> {
         .and_then(|a| number(&a["start_time"]))
         .unwrap_or(video_start);
     Ok(Video {
+        metadata: root["format"]["tags"]
+            .as_object()
+            .map(|tags| {
+                tags.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_owned())))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        tracks: streams
+            .iter()
+            .filter_map(|s| {
+                Some(Track {
+                    index: s["index"].as_u64()?,
+                    kind: s["codec_type"].as_str()?.into(),
+                    codec: s["codec_name"].as_str().unwrap_or("").into(),
+                    offset: number(&s["start_time"]).unwrap_or(video_start) - video_start,
+                })
+            })
+            .collect(),
+        start: video_start,
         path,
         size,
         fps: rate(&rate_text).unwrap(),
@@ -411,6 +562,7 @@ pub fn export_with(
     mut progress: impl FnMut(Progress),
 ) -> Result<()> {
     check_cancel(cancel)?;
+    options.validate()?;
     config.validate()?;
     config.signal_size(video.size)?;
     let size = config.output_size(video.size)?;
@@ -427,14 +579,29 @@ pub fn export_with(
         ["mp4", "mkv", "webm"].contains(&extension.as_str()),
         "Choose an MP4, MKV or WebM filename"
     );
-    require_encoder(
-        if extension == "webm" {
-            "libvpx-vp9"
-        } else {
-            "libx264"
-        },
-        cancel,
-    )?;
+    let codec = options.encoder.codec(extension == "webm")?;
+    require_encoder(codec, cancel)?;
+    if options.encoder != Encoder::Software {
+        let mut check = command("ffmpeg");
+        check.args([
+            "-f",
+            "lavfi",
+            "-i",
+            "color=size=128x128:rate=30",
+            "-frames:v",
+            "2",
+            "-c:v",
+            codec,
+            "-f",
+            "null",
+            "-",
+        ]);
+        let mut process = Process::spawn(&mut check, cancel)?;
+        drop(process.stdin());
+        process
+            .wait()
+            .context("Selected hardware encoder is unavailable on this machine; choose Software")?;
+    }
     if output.exists() {
         ensure!(
             output.canonicalize()? != video.path,
@@ -470,9 +637,40 @@ pub fn export_with(
         })?
     );
     ensure!(
-        metadata.len() <= 16384,
-        "Video preset metadata exceeds 16 KB"
+        metadata.len() <= 16 * 1024 * 1024,
+        "Video preset metadata exceeds 16 MB"
     );
+    // Use a file: embedded LUTs are too large for OS command-line limits.
+    let metadata_file = folder.path().join("preset.ffmeta");
+    let escape = |s: &str| {
+        s.replace('\\', "\\\\")
+            .replace('=', "\\=")
+            .replace(';', "\\;")
+            .replace('#', "\\#")
+            .replace('\n', "\\\n")
+            .replace('\r', "")
+    };
+    let mut tags = String::from(";FFMETADATA1\n");
+    if options.preserve_streams {
+        for (key, value) in &video.metadata {
+            // Re-exporting our own output must not recursively embed old LUT presets.
+            if key.eq_ignore_ascii_case("comment") && value.starts_with(PRESET_PREFIX) {
+                continue;
+            }
+            let key = if key.eq_ignore_ascii_case("comment") {
+                "source_comment"
+            } else {
+                key
+            };
+            tags.push_str(&format!("{}={}\n", escape(key), escape(value)));
+        }
+    }
+    tags.push_str(&format!("comment={}\n", escape(&metadata)));
+    ensure!(
+        tags.len() <= 16 * 1024 * 1024,
+        "Combined source and preset metadata exceeds 16 MB"
+    );
+    std::fs::write(&metadata_file, tags)?;
     let mut encode_cmd = command("ffmpeg");
     encode_cmd.args([
         "-y",
@@ -489,20 +687,51 @@ pub fn export_with(
         "-an",
         "-c:v",
     ]);
-    if extension == "webm" {
+    encode_cmd.arg(codec);
+    let crf = options.effective_crf(extension == "webm");
+    if options.encoder != Encoder::Software {
+        let mbps = match options.quality {
+            Quality::Draft => 6,
+            Quality::Balanced => 12,
+            Quality::High => 24,
+            Quality::Archival => 40,
+        };
+        let automatic_bitrate =
+            (mbps as f64 * (size.0 as f64 * size.1 as f64 / (1920. * 1080.)) * (fps / 30.))
+                .clamp(2., 200.);
+        let bitrate = options
+            .bitrate_mbps
+            .map(f64::from)
+            .unwrap_or(automatic_bitrate);
+        encode_cmd.args(["-b:v", &format!("{}k", (bitrate * 1000.).round() as u32)]);
+    } else if extension == "webm" {
         encode_cmd.args([
-            "libvpx-vp9",
             "-crf",
-            "24",
+            &crf.to_string(),
             "-b:v",
             "0",
             "-deadline",
             "good",
             "-cpu-used",
-            "4",
+            match options.speed {
+                Some(EncodingSpeed::Fast) => "8",
+                Some(EncodingSpeed::Slow) => "1",
+                _ => "4",
+            },
         ]);
     } else {
-        encode_cmd.args(["libx264", "-crf", "18", "-preset", "medium"]);
+        encode_cmd.args([
+            "-crf",
+            &crf.to_string(),
+            "-preset",
+            match options.speed {
+                Some(EncodingSpeed::Fast) => "veryfast",
+                Some(EncodingSpeed::Balanced) => "medium",
+                Some(EncodingSpeed::Slow) => "slow",
+                None if options.quality == Quality::Draft => "veryfast",
+                None => "medium",
+            },
+        ]);
     }
     // Renderer bytes are full-range RGB with BT.709/sRGB primaries. Make the RGB-to-YUV
     // matrix and legal range explicit, then tag the encoded stream for consistent playback.
@@ -581,14 +810,21 @@ pub fn export_with(
     let duration = frames as f64 / fps;
     let mux = |copy_audio: bool| -> Result<()> {
         let mut cmd = command("ffmpeg");
-        cmd.args(["-y", "-i"]).arg(&silent);
+        cmd.args(["-y", "-copyts", "-i"]).arg(&silent);
         let audio = video.audio && options.audio != Audio::Mute;
-        if audio {
-            cmd.arg("-i").arg(&video.path);
-        }
+        cmd.args(["-itsoffset", &(-video.start).to_string(), "-i"])
+            .arg(&video.path);
+        cmd.args(["-f", "ffmetadata", "-i"]).arg(&metadata_file);
         cmd.args(["-map", "0:v:0", "-c:v", "copy"]);
         if audio {
-            cmd.args(["-map", "1:a:0"]);
+            cmd.args([
+                "-map",
+                if options.preserve_streams {
+                    "1:a?"
+                } else {
+                    "1:a:0"
+                },
+            ]);
             if copy_audio {
                 cmd.args(["-c:a", "copy"]);
             } else {
@@ -602,27 +838,52 @@ pub fn export_with(
                     "-b:a",
                     "192k",
                 ]);
-                let filter = if video.audio_offset >= 0. {
-                    format!(
-                        "asetpts=PTS-STARTPTS,adelay={}:all=1",
-                        (video.audio_offset * 1000.).round()
-                    )
-                } else {
-                    format!("atrim=start={},asetpts=PTS-STARTPTS", -video.audio_offset)
-                };
-                cmd.args(["-af", &filter]);
+                for (index, track) in video
+                    .tracks
+                    .iter()
+                    .filter(|s| s.kind == "audio")
+                    .take(if options.preserve_streams {
+                        usize::MAX
+                    } else {
+                        1
+                    })
+                    .enumerate()
+                {
+                    let filter = if track.offset >= 0. {
+                        format!(
+                            "asetpts=PTS-STARTPTS,adelay={}:all=1",
+                            (track.offset * 1000.).round()
+                        )
+                    } else {
+                        format!("atrim=start={},asetpts=PTS-STARTPTS", -track.offset)
+                    };
+                    cmd.args([&format!("-filter:a:{index}"), &filter]);
+                }
             }
         }
-        cmd.args([
-            "-t",
-            &duration.to_string(),
-            "-map_metadata",
-            "-1",
-            "-metadata",
-            &format!("comment={metadata}"),
-        ]);
+        if options.preserve_streams {
+            let mut index = 0;
+            for track in video.tracks.iter().filter(|s| s.kind == "subtitle") {
+                if let Some(codec) = subtitle_codec(&track.codec, &extension) {
+                    cmd.args([
+                        "-map",
+                        &format!("1:{}", track.index),
+                        &format!("-c:s:{index}"),
+                        codec,
+                    ]);
+                    index += 1;
+                }
+            }
+            if extension == "mkv" {
+                cmd.args(["-map", "1:t?", "-c:t", "copy"]);
+            }
+            cmd.args(["-map_chapters", "1"]);
+        } else {
+            cmd.args(["-map_chapters", "-1"]);
+        }
+        cmd.args(["-t", &duration.to_string(), "-map_metadata", "2"]);
         if extension == "mp4" {
-            cmd.args(["-movflags", "+faststart"]);
+            cmd.args(["-movflags", "+faststart+use_metadata_tags"]);
         }
         cmd.args([
             "-f",
@@ -641,7 +902,12 @@ pub fn export_with(
         fraction: 0.95,
         stage: "Preserving audio and finalizing container".into(),
     });
-    let copy = options.audio == Audio::Auto && video.audio_offset.abs() < 0.002;
+    let copy = options.audio == Audio::Auto
+        && video
+            .tracks
+            .iter()
+            .filter(|s| s.kind == "audio")
+            .all(|s| s.offset.abs() < 0.002);
     if let Err(error) = mux(copy) {
         check_cancel(cancel)?;
         if copy {
@@ -685,9 +951,89 @@ pub fn export(
     )
 }
 
+/// Stream a CFR preview, retaining a short history before the requested media time.
+/// The callback provides backpressure; cancellation also interrupts decoder reads.
+pub fn playback(
+    video: &Video,
+    start: f64,
+    config: &Config,
+    options: &Options,
+    renderer: &Renderer,
+    cancel: &Arc<AtomicBool>,
+    mut frame_ready: impl FnMut(f64, RgbaImage, RgbaImage) -> Result<()>,
+) -> Result<()> {
+    let fps = if options.timing == Timing::Ntsc60 {
+        60.
+    } else {
+        video.fps
+    };
+    let rate = fps.to_string();
+    let preroll = (start - 0.2).max(0.);
+    let mut decoder = Process::spawn(
+        &mut decode_command(video, Some(&rate), preroll, None),
+        cancel,
+    )?;
+    drop(decoder.stdin());
+    let mut output = decoder.stdout();
+    let mut input = RgbaImage::new(video.size.0, video.size.1);
+    let c = render_config(config, options, fps);
+    let mut sequence = Sequence::default();
+    let mut index = 0u64;
+    loop {
+        check_cancel(cancel)?;
+        let bytes = input.as_mut();
+        if output.read(&mut bytes[..1])? == 0 {
+            break;
+        }
+        output
+            .read_exact(&mut bytes[1..])
+            .context("Truncated playback frame")?;
+        let rendered =
+            renderer.render_video_frame_with_cancel(&input, &c, &mut sequence, cancel)?;
+        let time = preroll + index as f64 / fps;
+        index += 1;
+        if time + 0.00001 >= start {
+            frame_ready(time, input.clone(), rendered)?;
+        }
+    }
+    decoder.wait()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn export_overrides_validate_and_old_options_keep_profile_defaults() {
+        let legacy: Options =
+            serde_json::from_str(r#"{"timing":"stable","audio":"auto"}"#).unwrap();
+        assert_eq!(legacy.effective_crf(false), 18);
+        assert_eq!(legacy.effective_crf(true), 24);
+        assert!(legacy.validate().is_ok());
+        let custom = Options {
+            crf: Some(21),
+            bitrate_mbps: Some(16),
+            speed: Some(EncodingSpeed::Slow),
+            ..Options::default()
+        };
+        assert_eq!(custom.effective_crf(true), 21);
+        assert_eq!(
+            serde_json::from_str::<Options>(&serde_json::to_string(&custom).unwrap()).unwrap(),
+            custom
+        );
+        assert!(Options {
+            crf: Some(52),
+            ..custom.clone()
+        }
+        .validate()
+        .is_err());
+        assert!(Options {
+            bitrate_mbps: Some(0),
+            ..custom
+        }
+        .validate()
+        .is_err());
+    }
 
     #[test]
     fn rates_and_duration_validation() {

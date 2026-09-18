@@ -5,11 +5,11 @@ Environment overrides `CRTSIM_FFMPEG` and `CRTSIM_FFPROBE` support executable pa
 
 ## Processing
 
-1. Probe the first non-cover-art video stream and first audio track. Validate dimensions, duration, frame rate, pixel aspect and right-angle rotation.
+1. Probe the first non-cover-art video stream and collect audio/subtitle/attachment tracks and global metadata. Validate dimensions, duration, frame rate, pixel aspect and right-angle rotation.
 2. Normalize decoded video timestamps to zero, sample them at the selected constant frame rate, apply HDR-to-SDR tone mapping when required, and normalize rotation/pixel aspect.
 3. Read one RGBA frame at a time. A `Sequence` owns two feedback textures and a simulation tick counter on one renderer. Warm-up occurs only on the first frame; later frames retain history.
-4. Stream rendered RGBA to the encoder at the same rational frame rate. H.264 CRF 18/medium is used for MP4/MKV; VP9 CRF 24 for WebM. Full-range RGB is explicitly converted to limited-range BT.709, tagged as BT.709, and stored as 8-bit yuv420p. Output dimensions must be even.
-5. Remux the encoded video with the source's first audio track. Auto mode tries stream copy when the track has no material start offset, then falls back to AAC/Opus if the container rejects it. Explicit re-encoding also works. Audio with an offset is trimmed or padded against the video start before encoding.
+4. Stream rendered RGBA to the encoder at the same rational frame rate. Balanced defaults to H.264 CRF 18/medium for MP4/MKV or VP9 CRF 24 for WebM. Other profiles and optional hardware H.264 encoders are described in [WORKFLOW.md](WORKFLOW.md). Full-range RGB converts explicitly to limited-range BT.709, tagged as BT.709, and stored as 8-bit yuv420p. Output dimensions must be even.
+5. Remux source audio tracks, supported subtitles, chapters and metadata. Auto mode tries audio stream copy without material offsets, then falls back to AAC/Opus if needed. Offset audio is trimmed/padded per track. MKV also copies attachments. Unsupported bitmap subtitles in MP4/WebM and data streams are omitted with UI guidance. Text subtitle conversions may lose styling.
 6. Publish a complete temporary output using atomic replacement. Any error or cancellation leaves an existing destination untouched.
 
 The output duration follows the sampled video frames, with up to one frame of CFR rounding. Audio is limited to that duration.
@@ -27,12 +27,12 @@ Signal, surface, bloom, depth, readback and temporal targets persist for the dur
 
 ## Scope and limits
 
-- Seeking extracts a selected frame and previews it as a settled still. It does not reconstruct temporal trails; playback and preroll previews are future work.
+- Exact frame seeking produces a settled still. Continuous playback retains history, has up to 200 ms of preroll on resume, and uses bounded buffering. See [WORKFLOW.md](WORKFLOW.md) for audio-preview and CFR navigation limits.
 - Only local files with a finite probed duration (up to seven days) and a usable 1–240 FPS rate are accepted. Existing core dimension/memory limits apply.
 - Sources are normalized to square pixels before the CRT preset's own pixel-aspect setting. Rotation is limited to multiples of 90 degrees.
 - HDR transfer flags trigger `zscale`/`tonemap`; the installed FFmpeg must provide those filters. ICC management, Dolby Vision reconstruction and HDR output are outside this version.
-- Subtitles, chapters, additional audio tracks and container source metadata are omitted. Renderer presets are embedded in PNG and exported video.
-- Software encoders only. Video export is exposed through the desktop and media library; the existing image CLI remains unchanged.
+- Preservation is enabled by default, subject to container support. Renderer presets are embedded in PNG and exported video; original comments use `source_comment` where supported.
+- Optional hardware H.264 encoders are probed before rendering. Video export is exposed through the desktop and media library; the image CLI also supports source edits/LUTs via JSON.
 - The original video cannot be its own export destination. Native save dialogs confirm other replacements.
 
 ## Verification
@@ -66,6 +66,6 @@ Frame PNG export renders the currently loaded frame as a settled still, without 
 
 MP4/MKV/WebM exports write `CRTSim-Renderer-Preset:` plus versioned JSON into the container comment.
 The JSON contains the original Config and video Options (timing/audio), not the adjusted persistence coefficients.
-The importer validates the schema, version and dimensions, runs ffprobe on a background worker and limits the response to 1 MB.
+The importer validates the schema, version and dimensions, runs ffprobe on a background worker and limits the response to 32 MB for embedded LUTs. Export metadata goes through an FFmetadata file to avoid command-line length limits.
 Container tags are matched case-insensitively because Matroska/WebM uppercases comment names.
-The metadata contains no source filename/path. Audio fallback and mute retain it; external services/editors may strip it.
+The renderer preset contains no source filename/path. Preserved source metadata may contain information from the source container. Audio fallback and mute retain the renderer preset; external services/editors may strip it.

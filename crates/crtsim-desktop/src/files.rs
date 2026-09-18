@@ -20,7 +20,10 @@ pub fn load_image(path: &Path) -> Result<RgbaImage> {
         .to_rgba8())
 }
 pub fn load_preset(path: &Path, input: (u32, u32)) -> Result<Config> {
-    ensure!(path.metadata()?.len() <= 1024 * 1024, "Preset exceeds 1 MB");
+    ensure!(
+        path.metadata()?.len() <= 32 * 1024 * 1024,
+        "Preset exceeds 32 MB"
+    );
     let c = Config::from_json_slice(&std::fs::read(path)?)?;
     c.signal_size(input)?;
     c.output_size(input)?;
@@ -55,7 +58,10 @@ pub fn save_png(path: &Path, image: RgbaImage, preset: Option<&Config>) -> Resul
         let mut bytes = encoded.into_inner();
         if let Some(config) = preset {
             let json = serde_json::to_vec(config)?;
-            ensure!(json.len() <= 1024 * 1024, "Preset metadata exceeds 1 MB");
+            ensure!(
+                json.len() <= 32 * 1024 * 1024,
+                "Preset metadata exceeds 32 MB"
+            );
             add_text_chunk(&mut bytes, PRESET_KEYWORD, &json)?;
         }
         file.write_all(&bytes)?;
@@ -78,7 +84,10 @@ pub fn load_preset_from_image(path: &Path, input: (u32, u32)) -> Result<Config> 
     );
     let json = find_text_chunk(&bytes, PRESET_KEYWORD)
         .context("This image does not contain a CRTSim-Renderer preset")?;
-    ensure!(json.len() <= 1024 * 1024, "Preset metadata exceeds 1 MB");
+    ensure!(
+        json.len() <= 32 * 1024 * 1024,
+        "Preset metadata exceeds 32 MB"
+    );
     let c = Config::from_json_slice(json).context("Embedded preset metadata is invalid")?;
     c.signal_size(input)?;
     c.output_size(input)?;

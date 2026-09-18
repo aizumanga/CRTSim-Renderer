@@ -1,8 +1,11 @@
+mod chrome;
+mod export_ui;
 mod files;
 mod gallery;
 mod model;
 mod theme;
 mod worker;
+mod workflow;
 
 use crtsim_core::config::{self, ColorMode, Config, Filter, Fit, Phase};
 use crtsim_core::RenderProgress;
@@ -20,6 +23,9 @@ use worker::{Event, Job};
 
 #[derive(Clone, Copy)]
 enum Dialog {
+    OpenProject,
+    SaveProject,
+    Lut,
     File,
     ExportVideo,
     ImportPreset,
@@ -35,6 +41,8 @@ enum View {
 }
 
 struct App {
+    workflow: workflow::State,
+    ui_context: egui::Context,
     video: Option<crtsim_media::Video>,
     video_frame: u64,
     selected_frame: u64,
@@ -55,6 +63,7 @@ struct App {
     export_progress: Option<RenderProgress>,
     smoke_welcome: bool,
     smoke_gallery: bool,
+    smoke_export: bool,
     config: Config,
     history: model::History,
     input: Arc<RgbaImage>,
@@ -126,7 +135,7 @@ impl App {
             Some(Ok(None)) | None => theme::Theme::default(),
             Some(Err(e)) => {
                 storage_error = Some(format!(
-                    "Could not load the saved theme: {e:#}. Using CRT Dark."
+                    "Could not load the saved theme: {e:#}. Using Sky Diary."
                 ));
                 theme::Theme::default()
             }
@@ -145,6 +154,8 @@ impl App {
             }
         }
         let mut app = Self {
+            workflow: workflow::State::default(),
+            ui_context: ctx.clone(),
             video: None,
             video_frame: 0,
             selected_frame: 0,
@@ -165,6 +176,7 @@ impl App {
             export_progress: None,
             smoke_welcome: false,
             smoke_gallery: false,
+            smoke_export: false,
             history: model::History::new(config.clone()),
             config,
             input,
@@ -195,6 +207,7 @@ impl App {
             smoke_requested: false,
             started: Instant::now(),
         };
+        app.init_workflow(input_path.is_some());
         if let Some(path) = input_path {
             app.load(path);
         }
@@ -202,6 +215,7 @@ impl App {
     }
 
     fn changed(&mut self) {
+        self.stop_playback();
         self.revision += 1;
         self.dirty = true;
         self.changed_at = Instant::now();
@@ -213,11 +227,23 @@ impl App {
         self.changed();
     }
     fn dialog(&mut self, kind: Dialog, ctx: &egui::Context) {
+        self.stop_playback();
         self.dialog_open = true;
         let send = self.dialog_send.clone();
         let ctx = ctx.clone();
+        let video_extension = self.workflow.export_format.extension();
         std::thread::spawn(move || {
             let path = match kind {
+                Dialog::OpenProject => rfd::FileDialog::new()
+                    .add_filter("CRT project", &["crtsim"])
+                    .pick_file(),
+                Dialog::SaveProject => rfd::FileDialog::new()
+                    .add_filter("CRT project", &["crtsim"])
+                    .set_file_name("project.crtsim")
+                    .save_file(),
+                Dialog::Lut => rfd::FileDialog::new()
+                    .add_filter("3D color LUT", &["cube"])
+                    .pick_file(),
                 Dialog::File => rfd::FileDialog::new()
                     .add_filter(
                         "Images and videos",
@@ -228,8 +254,8 @@ impl App {
                     )
                     .pick_file(),
                 Dialog::ExportVideo => rfd::FileDialog::new()
-                    .add_filter("Video", &["mp4", "mkv", "webm"])
-                    .set_file_name("rendered.mp4")
+                    .add_filter("Video", &[video_extension])
+                    .set_file_name(format!("rendered.{video_extension}"))
                     .save_file(),
                 Dialog::ImportPreset => rfd::FileDialog::new()
                     .add_filter(
@@ -253,9 +279,10 @@ impl App {
             // confirm the actual destination too, rather than silently replacing another file.
             let path = path.and_then(|mut path| {
                 let extension = match kind {
+                    Dialog::SaveProject => Some("crtsim"),
                     Dialog::Export => Some("png"),
                     Dialog::SavePreset => Some("json"),
-                    Dialog::ExportVideo => Some("mp4"),
+                    Dialog::ExportVideo => Some(video_extension),
                     _ => None,
                 };
                 if let Some(extension) = extension {
@@ -280,6 +307,14 @@ impl App {
         });
     }
     fn load(&mut self, path: PathBuf) {
+        self.stop_playback();
+        if path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("crtsim"))
+        {
+            self.open_project(path);
+            return;
+        }
         if path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
             ["mp4", "mkv", "mov", "webm", "avi", "m4v"].contains(&e.to_ascii_lowercase().as_str())
         }) {
@@ -291,6 +326,7 @@ impl App {
         self.send(Job::Load(path));
     }
     fn load_video(&mut self, path: PathBuf, frame: u64, reuse: bool) {
+        self.stop_playback();
         self.video_job = true;
         self.loading = true;
         self.cancel = Arc::new(AtomicBool::new(false));
@@ -319,6 +355,7 @@ impl App {
         }
     }
     fn export(&mut self, path: PathBuf) {
+        self.stop_playback();
         if let Err(e) = model::preview_config(&self.config, self.input.dimensions(), None) {
             self.error = Some(format!("{e:#}"));
             return;
@@ -345,8 +382,45 @@ impl App {
             self.dialog_open = false;
             if let Some(mut path) = path {
                 match kind {
+                    Dialog::OpenProject => self.open_project(path),
+                    Dialog::SaveProject => self.save_project_file(path),
+                    Dialog::Lut => {
+                        let result = (|| -> anyhow::Result<_> {
+                            anyhow::ensure!(
+                                path.metadata()?.len() <= 16 * 1024 * 1024,
+                                "LUT exceeds 16 MB"
+                            );
+                            let name = path
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .into_owned();
+                            crtsim_core::workflow::Lut::parse_cube(
+                                name,
+                                &std::fs::read_to_string(path)?,
+                            )
+                        })();
+                        match result {
+                            Ok(lut) => {
+                                let mut c = self.config.clone();
+                                c.lut = Some(Arc::new(lut));
+                                self.replace_config(c);
+                                self.status = "LUT imported".into();
+                            }
+                            Err(e) => self.error = Some(format!("Cannot import LUT: {e:#}")),
+                        }
+                    }
                     Dialog::File => self.load(path),
                     Dialog::ExportVideo => {
+                        if !path.extension().is_some_and(|e| {
+                            e.eq_ignore_ascii_case(self.workflow.export_format.extension())
+                        }) {
+                            self.error = Some(format!(
+                                "Choose a .{} filename for the selected format.",
+                                self.workflow.export_format.extension()
+                            ));
+                            continue;
+                        }
                         if let Some(video) = self.video.clone() {
                             self.exporting = true;
                             self.video_job = true;
@@ -448,6 +522,8 @@ impl App {
                     self.loading = false;
                     match result {
                         Ok((video, input, thumb, frame, count)) => {
+                            self.workflow.source = Some(video.path.clone());
+                            self.workflow.play_time = frame as f64 / video.fps;
                             self.source_name = video
                                 .path
                                 .file_name()
@@ -465,18 +541,27 @@ impl App {
                             self.error = None;
                             self.changed();
                             self.status = "Video frame loaded".into();
+                            if let Some(p) = self.workflow.pending_project.take() {
+                                self.apply_project(p);
+                            }
                         }
                         Err(_) if self.cancel.load(Ordering::Relaxed) => {
                             self.status = "Video loading cancelled".into();
+                            self.workflow.pending_project = None;
                             self.error = None;
                         }
-                        Err(e) => self.error = Some(e),
+                        Err(e) => {
+                            self.workflow.pending_project = None;
+                            self.error = Some(e);
+                        }
                     }
                 }
                 Event::Loaded(result) => {
                     self.loading = false;
                     match result {
                         Ok((path, input, thumb)) => {
+                            self.workflow.source =
+                                Some(path.canonicalize().unwrap_or_else(|_| path.clone()));
                             self.video = None;
                             self.source_name = path
                                 .file_name()
@@ -490,8 +575,14 @@ impl App {
                             self.error = None;
                             self.changed();
                             self.status = "Image loaded".into();
+                            if let Some(p) = self.workflow.pending_project.take() {
+                                self.apply_project(p);
+                            }
                         }
-                        Err(e) => self.error = Some(e),
+                        Err(e) => {
+                            self.workflow.pending_project = None;
+                            self.error = Some(e);
+                        }
                     }
                 }
                 Event::Preview { revision, result } => {
@@ -519,6 +610,7 @@ impl App {
                     }
                 }
                 Event::Exported(result) => {
+                    self.queue_finished(&result);
                     self.video_job = false;
                     self.export_progress = None;
                     self.exporting = false;
@@ -538,7 +630,7 @@ impl App {
         }
     }
     fn request_preview(&mut self) {
-        if self.rendering || self.loading || self.exporting {
+        if self.rendering || self.loading || self.exporting || self.workflow.playback.is_some() {
             return;
         }
         self.history.commit(&self.config);
@@ -557,103 +649,101 @@ impl App {
     }
     fn toolbar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.horizontal_wrapped(|ui| {
-            let (mark, _) = ui.allocate_exact_size(egui::vec2(10., 10.), egui::Sense::hover());
-            ui.painter()
-                .circle_filled(mark.center(), 4., self.theme.accent());
-            ui.strong("CRTSim Renderer");
+            chrome::monitor(ui);
+            ui.label(egui::RichText::new("CRTSim Renderer").strong().size(17.));
             ui.separator();
-            let enabled = !self.dialog_open && !self.loading && !self.exporting;
-            if ui
-                .add_enabled(enabled, egui::Button::new("Preset gallery…"))
-                .clicked()
-            {
-                self.refresh_gallery();
-                self.show_gallery = true;
-            }
-            if ui
-                .add_enabled(enabled, egui::Button::new("Open File…"))
-                .clicked()
-            {
-                self.dialog(Dialog::File, ctx);
-            }
-            if ui
-                .add_enabled(enabled, egui::Button::new("Test card"))
-                .clicked()
-            {
-                self.video = None;
-                self.input = Arc::new(config::test_card());
-                self.original = texture(ctx, "original", &self.input, 2048);
-                self.source_name = "Built-in test card".into();
-                self.rendered = None;
-                self.changed();
-            }
-            if ui
-                .add_enabled(
-                    enabled,
-                    egui::Button::new("Import preset from Image/Video…"),
-                )
-                .clicked()
-            {
-                self.dialog(Dialog::ImportPreset, ctx);
-            }
-            if ui
-                .add_enabled(enabled, egui::Button::new("Load preset…"))
-                .clicked()
-            {
-                self.dialog(Dialog::LoadPreset, ctx);
-            }
-            if ui
-                .add_enabled(enabled, egui::Button::new("Save preset…"))
-                .clicked()
-            {
-                self.dialog(Dialog::SavePreset, ctx);
-            }
-            if ui
-                .add_enabled(
-                    enabled && !self.exporting,
-                    egui::Button::new(if self.video.is_some() {
-                        "Export frame…"
-                    } else {
-                        "Export PNG…"
-                    }),
-                )
-                .clicked()
-            {
-                self.dialog(Dialog::Export, ctx);
-            }
-            if self.video.is_some()
-                && ui
-                    .add_enabled(enabled, egui::Button::new("Export video…"))
-                    .clicked()
-            {
-                self.dialog(Dialog::ExportVideo, ctx);
-            }
-            if ui.button("Credits").clicked() {
-                self.show_credits = true;
-            }
-            ui.separator();
-            let mut selected = self.theme;
-            egui::ComboBox::from_id_source("appearance-theme")
-                .selected_text(format!("Theme · {}", self.theme.name()))
-                .show_ui(ui, |ui| {
+            let enabled = !self.dialog_open
+                && !self.loading
+                && !self.exporting
+                && self.workflow.export_dialog.is_none();
+            ui.add_enabled_ui(enabled, |ui| {
+                ui.menu_button("File", |ui| {
+                    if ui.button("Open media…").clicked() {
+                        self.dialog(Dialog::File, ctx);
+                        ui.close_menu();
+                    }
+                    if ui.button("Test card").clicked() {
+                        self.video = None;
+                        self.workflow.source = None;
+                        self.input = Arc::new(config::test_card());
+                        self.original = texture(ctx, "original", &self.input, 2048);
+                        self.source_name = "Built-in test card".into();
+                        self.rendered = None;
+                        self.changed();
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    self.project_menu(ui, ctx);
+                });
+                ui.menu_button("Presets", |ui| {
+                    if ui.button("Preset gallery…").clicked() {
+                        self.refresh_gallery();
+                        self.show_gallery = true;
+                        ui.close_menu();
+                    }
+                    for (label, kind) in [
+                        ("Load preset…", Dialog::LoadPreset),
+                        ("Save preset…", Dialog::SavePreset),
+                        ("Import from image / video…", Dialog::ImportPreset),
+                    ] {
+                        if ui.button(label).clicked() {
+                            self.dialog(kind, ctx);
+                            ui.close_menu();
+                        }
+                    }
+                });
+                ui.menu_button("View", |ui| {
+                    ui.label("Interface theme");
+                    let mut selected = self.theme;
                     for theme in theme::Theme::ALL {
                         ui.selectable_value(&mut selected, theme, theme.name())
                             .on_hover_text(theme.description());
                     }
-                });
-            if selected != self.theme {
-                self.theme = selected;
-                self.theme.apply(ctx);
-                if let Some(store) = &self.store {
-                    if let Err(e) = store.set_theme(self.theme) {
-                        self.error = Some(format!("Could not remember the selected theme: {e:#}"));
+                    if selected != self.theme {
+                        self.theme = selected;
+                        self.theme.apply(ctx);
+                        if let Some(store) = &self.store {
+                            if let Err(e) = store.set_theme(self.theme) {
+                                self.error =
+                                    Some(format!("Could not remember the selected theme: {e:#}"));
+                            }
+                        }
+                        ui.close_menu();
                     }
-                }
+                });
+                ui.menu_button("Export", |ui| {
+                    if ui
+                        .button(if self.video.is_some() {
+                            "Current frame as PNG…"
+                        } else {
+                            "Image as PNG…"
+                        })
+                        .clicked()
+                    {
+                        self.dialog(Dialog::Export, ctx);
+                        ui.close_menu();
+                    }
+                    if ui
+                        .add_enabled(self.video.is_some(), egui::Button::new("Video…"))
+                        .clicked()
+                    {
+                        self.open_video_export(false);
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("Batch queue…").clicked() {
+                        self.workflow.show_queue = true;
+                        ui.close_menu();
+                    }
+                });
+            });
+            if ui.button("Credits").clicked() {
+                self.show_credits = true;
             }
         });
     }
     fn settings(&mut self, ui: &mut egui::Ui) {
-        if let Some(video) = self.video.clone() {
+        if let Some(video) = &self.video {
             ui.heading("Video");
             ui.label(format!(
                 "{:.2}s · {:.3} FPS · {}",
@@ -661,60 +751,27 @@ impl App {
                 video.fps,
                 if video.audio { "with audio" } else { "silent" }
             ));
+            ui.small(
+                "Preview is silent. Configure exported audio and compression in Export → Video.",
+            );
             if video.hdr {
-                ui.small("HDR source: FFmpeg tone-maps to SDR (zscale/tonemap required).");
+                ui.small("HDR source: FFmpeg tone-maps to SDR.");
             }
-            ui.small("Choose a frame beneath the preview. Timing and audio below apply to full-video export.");
-            egui::ComboBox::from_label("Export timing")
-                .selected_text(match self.video_options.timing {
-                    crtsim_media::Timing::Stable => "Source rate · stable artifacts",
-                    crtsim_media::Timing::Ntsc60 => "60 Hz · alternating artifacts",
-                    crtsim_media::Timing::Disabled => "Source rate · persistence off",
-                })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut self.video_options.timing,
-                        crtsim_media::Timing::Stable,
-                        "Source rate · stable artifacts",
-                    );
-                    ui.selectable_value(
-                        &mut self.video_options.timing,
-                        crtsim_media::Timing::Ntsc60,
-                        "60 Hz · alternating artifacts",
-                    );
-                    ui.selectable_value(
-                        &mut self.video_options.timing,
-                        crtsim_media::Timing::Disabled,
-                        "Source rate · persistence off",
-                    );
-                });
-            egui::ComboBox::from_label("Audio")
-                .selected_text(match self.video_options.audio {
-                    crtsim_media::Audio::Auto => "Preserve when compatible",
-                    crtsim_media::Audio::Encode => "Re-encode AAC / Opus",
-                    crtsim_media::Audio::Mute => "Mute",
-                })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut self.video_options.audio,
-                        crtsim_media::Audio::Auto,
-                        "Preserve when compatible",
-                    );
-                    ui.selectable_value(
-                        &mut self.video_options.audio,
-                        crtsim_media::Audio::Encode,
-                        "Re-encode AAC / Opus",
-                    );
-                    ui.selectable_value(
-                        &mut self.video_options.audio,
-                        crtsim_media::Audio::Mute,
-                        "Mute",
-                    );
-                });
             ui.separator();
         }
-        ui.heading("Image & output");
-        ui.label(&self.source_name);
+        ui.horizontal(|ui| {
+            chrome::monitor(ui);
+            ui.heading("Source");
+        });
+        egui::Frame::none()
+            .fill(ui.visuals().extreme_bg_color)
+            .stroke(ui.visuals().window_stroke)
+            .rounding(3.)
+            .inner_margin(9.)
+            .show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.label(egui::RichText::new(&self.source_name).strong());
+            });
         ui.small(format!(
             "Source: {} × {}",
             self.input.width(),
@@ -750,32 +807,7 @@ impl App {
             }
         });
         let before = self.config.clone();
-        egui::ComboBox::from_label("Color processing")
-            .selected_text(match self.config.color_mode {
-                ColorMode::Reference => "Original gamma",
-                ColorMode::LinearLight => "Linear light (experimental)",
-            })
-            .show_ui(ui, |ui| {
-                ui.selectable_value(
-                    &mut self.config.color_mode,
-                    ColorMode::Reference,
-                    "Original gamma",
-                );
-                ui.selectable_value(
-                    &mut self.config.color_mode,
-                    ColorMode::LinearLight,
-                    "Linear light (experimental)",
-                );
-            });
-        if self.config.color_mode == ColorMode::LinearLight {
-            ui.small("Linear-light glass, lighting and bloom; SDR output. The analog signal still uses the original gamma-space model.");
-        }
-        egui::CollapsingHeader::new("Optional color grade").show(ui, |ui| {
-            slider(ui, "Hue (degrees)", &mut self.config.hue, -180.0..=180.);
-            slider(ui, "Chroma", &mut self.config.chroma, 0.0..=2.);
-            ui.small("YIQ hue/chroma adjustment. This is an optional grade, not the game's unpublished NES palette LUT or a complete NTSC decoder.");
-        });
-        ui.checkbox(&mut self.config.mask_antialias, "Filter mask when shrinking").on_hover_text("Mipmapped mask filtering reduces moiré during minification. Turn off for Phase 0/1 reference sampling.");
+        chrome::Section::new("Image & output").show(ui,|ui| {
         resolution(
             ui,
             "Signal",
@@ -837,9 +869,41 @@ impl App {
                 "Current fit/overscan can crop content and subtitles.",
             );
         }
-        ui.small("Rounded glass may hide extreme corners even with Contain. Alpha is flattened onto black. SDR output; no ICC color management.");
+        ui.small("Rounded glass may hide extreme corners even with Contain. Alpha uses the selected background. SDR output; no ICC color management.");
+
+        });
+        self.workflow_settings(ui);
+        chrome::Section::new("Color processing").show(ui,|ui| {
+        egui::ComboBox::from_label("Color processing")
+            .selected_text(match self.config.color_mode {
+                ColorMode::Reference => "Original gamma",
+                ColorMode::LinearLight => "Linear light (experimental)",
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(
+                    &mut self.config.color_mode,
+                    ColorMode::Reference,
+                    "Original gamma",
+                );
+                ui.selectable_value(
+                    &mut self.config.color_mode,
+                    ColorMode::LinearLight,
+                    "Linear light (experimental)",
+                );
+            });
+        if self.config.color_mode == ColorMode::LinearLight {
+            ui.small("Linear-light glass, lighting and bloom; SDR output. The analog signal still uses the original gamma-space model.");
+        }
+        chrome::Section::new("Optional color grade").show(ui, |ui| {
+            slider(ui, "Hue (degrees)", &mut self.config.hue, -180.0..=180.);
+            slider(ui, "Chroma", &mut self.config.chroma, 0.0..=2.);
+            ui.small("YIQ hue/chroma adjustment. This is an optional grade, not the game's unpublished NES palette LUT or a complete NTSC decoder.");
+        });
+        ui.checkbox(&mut self.config.mask_antialias, "Filter mask when shrinking").on_hover_text("Mipmapped mask filtering reduces moiré during minification. Turn off for Phase 0/1 reference sampling.");
+
+        });
         ui.separator();
-        egui::CollapsingHeader::new("Color & signal")
+        chrome::Section::new("CRT signal")
             .default_open(true)
             .show(ui, |ui| {
                 slider(ui, "Saturation", &mut self.config.saturation, 0.0..=3.);
@@ -857,40 +921,38 @@ impl App {
                     0.0..=2.,
                 );
             });
-        egui::CollapsingHeader::new("Glass & mask")
-            .default_open(true)
-            .show(ui, |ui| {
-                slider(ui, "Barrel distortion", &mut self.config.barrel, -2.0..=2.);
-                slider(ui, "Overscan", &mut self.config.overscan, 0.1..=3.);
-                slider(ui, "Mask opacity", &mut self.config.mask_opacity, 0.0..=1.);
-                slider(
-                    ui,
-                    "Mask brightness",
-                    &mut self.config.mask_brightness,
-                    0.0..=2.,
-                );
-                slider(
-                    ui,
-                    "Mask columns",
-                    &mut self.config.mask_repeats[0],
-                    1.0..=16384.,
-                );
-                slider(
-                    ui,
-                    "Mask rows",
-                    &mut self.config.mask_repeats[1],
-                    1.0..=16384.,
-                );
-                slider(ui, "Edge dimming", &mut self.config.dimming, 0.0..=1.);
-                slider(ui, "Camera field of view", &mut self.config.fov, 5.0..=90.);
-            });
-        egui::CollapsingHeader::new("Bloom & reflections").show(ui, |ui| {
+        chrome::Section::new("Glass & mask").show(ui, |ui| {
+            slider(ui, "Barrel distortion", &mut self.config.barrel, -2.0..=2.);
+            slider(ui, "Overscan", &mut self.config.overscan, 0.1..=3.);
+            slider(ui, "Mask opacity", &mut self.config.mask_opacity, 0.0..=1.);
+            slider(
+                ui,
+                "Mask brightness",
+                &mut self.config.mask_brightness,
+                0.0..=2.,
+            );
+            slider(
+                ui,
+                "Mask columns",
+                &mut self.config.mask_repeats[0],
+                1.0..=16384.,
+            );
+            slider(
+                ui,
+                "Mask rows",
+                &mut self.config.mask_repeats[1],
+                1.0..=16384.,
+            );
+            slider(ui, "Edge dimming", &mut self.config.dimming, 0.0..=1.);
+            slider(ui, "Camera field of view", &mut self.config.fov, 5.0..=90.);
+        });
+        chrome::Section::new("Bloom & reflections").show(ui, |ui| {
             slider(ui, "Bloom amount", &mut self.config.bloom, 0.0..=2.);
             slider(ui, "Bloom power", &mut self.config.bloom_power, 0.1..=8.);
             slider(ui, "Bloom spread", &mut self.config.bloom_spread, 0.0..=0.2);
             slider(ui, "Edge reflection", &mut self.config.reflection, 0.0..=2.);
         });
-        egui::CollapsingHeader::new("Frame & lighting").show(ui, |ui| {
+        chrome::Section::new("Frame & lighting").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label("Frame color");
                 ui.color_edit_button_rgb(&mut self.config.frame_color);
@@ -913,7 +975,7 @@ impl App {
                 );
             }
         });
-        egui::CollapsingHeader::new("Persistence & artifact phase").show(ui, |ui| {
+        chrome::Section::new("Persistence & artifact phase").show(ui, |ui| {
             for (i,name) in ["Red persistence","Green persistence","Blue persistence"].iter().enumerate() { slider(ui,name,&mut self.config.persistence[i],0.0..=0.999); }
             ui.add(egui::Slider::new(&mut self.config.warmup,0..=240).text("Warm-up ticks"));
             egui::ComboBox::from_label("Phase").selected_text(format!("{:?}",self.config.phase)).show_ui(ui,|ui| {
@@ -927,9 +989,9 @@ impl App {
     }
     fn preview(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(&mut self.view, View::Crt, "CRT");
             ui.selectable_value(&mut self.view, View::Original, "Original");
-            ui.selectable_value(&mut self.view, View::Compare, "Side by side");
+            ui.selectable_value(&mut self.view, View::Crt, "CRT");
+            ui.selectable_value(&mut self.view, View::Compare, "Compare");
             ui.separator();
             ui.checkbox(&mut self.live, "Live preview");
             if ui
@@ -963,7 +1025,7 @@ impl App {
                 ui.add(egui::Slider::new(&mut self.zoom, 0.25..=4.).text("Zoom"));
             }
         });
-        ui.small("Preview size does not change export size. For mask detail, use Export resolution and 1× zoom; display scaling may still affect sampling.");
+        ui.small("Preview monitor").on_hover_text("Drag the divider in Compare. Preview quality never changes export resolution. Inspect mask detail at Export resolution and 1× zoom.");
         if let Ok(c) =
             model::preview_config(&self.config, self.input.dimensions(), self.preview_limit)
         {
@@ -990,18 +1052,14 @@ impl App {
         if self.rendered.is_some() && self.rendered_revision != Some(self.revision) {
             ui.colored_label(ui.visuals().warn_fg_color, "Preview is out of date.");
         }
-        let controls_height = if self.video.is_some() { 106. } else { 0. };
+        let controls_height = if self.video.is_some() { 136. } else { 0. };
         let available = egui::vec2(
             ui.available_width(),
             (ui.available_height() - controls_height).max(1.),
         );
         egui::ScrollArea::both().max_height(available.y).auto_shrink([false,false]).show(ui,|ui| {
             if self.view == View::Compare {
-                ui.horizontal_top(|ui| {
-                    let area = egui::vec2((available.x-16.).max(1.)/2.,(available.y-24.).max(1.));
-                    ui.vertical(|ui| { ui.label("Original"); show_image(ui,&self.original,area,self.fit_preview,self.zoom); });
-                    if let Some(ref im) = self.rendered { ui.vertical(|ui| { ui.label("CRT"); show_image(ui,im,area,self.fit_preview,self.zoom); }); }
-                });
+                if let Some(ref im)=self.rendered {workflow::compare(ui,&self.original,im,available,self.fit_preview,self.zoom,&mut self.workflow.comparison);}
             } else if self.view == View::Original { show_image(ui,&self.original,available,self.fit_preview,self.zoom); }
             else if let Some(ref im) = self.rendered { show_image(ui,im,available,self.fit_preview,self.zoom); }
             else { ui.label("Open an image, video or test card. Your rendered preview will appear here."); }
@@ -1020,14 +1078,36 @@ impl App {
         ui.add_enabled_ui(enabled, |ui| {
             ui.horizontal_wrapped(|ui| {
                 if ui
-                    .add_enabled(self.video_frame > 0, egui::Button::new("Previous frame"))
+                    .button(if self.workflow.playback.is_some() {
+                        "Ⅱ Pause"
+                    } else {
+                        "▶ Play"
+                    })
+                    .clicked()
+                {
+                    if self.workflow.playback.is_some() {
+                        self.stop_playback();
+                    } else {
+                        self.start_playback();
+                    }
+                }
+                ui.small("Silent preview");
+                ui.monospace(format!(
+                    "{:02}:{:02} / {:02}:{:02}",
+                    self.workflow.play_time as u64 / 60,
+                    self.workflow.play_time as u64 % 60,
+                    video.duration as u64 / 60,
+                    video.duration as u64 % 60
+                ));
+                if ui
+                    .add_enabled(self.video_frame > 0, egui::Button::new("|◀"))
                     .clicked()
                 {
                     self.selected_frame = self.video_frame.saturating_sub(1);
                     seek = true;
                 }
                 if ui
-                    .add_enabled(self.video_frame < last, egui::Button::new("Next frame"))
+                    .add_enabled(self.video_frame < last, egui::Button::new("▶|"))
                     .clicked()
                 {
                     self.selected_frame = (self.video_frame + 1).min(last);
@@ -1056,6 +1136,13 @@ impl App {
                     || (response.changed() && !ui.input(|i| i.pointer.any_down()));
             });
             if !ui.ctx().wants_keyboard_input() {
+                if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space)) {
+                    if self.workflow.playback.is_some() {
+                        self.stop_playback();
+                    } else {
+                        self.start_playback();
+                    }
+                }
                 if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft)) {
                     self.selected_frame = self.video_frame.saturating_sub(1);
                     seek = true;
@@ -1257,13 +1344,27 @@ fn show_image(ui: &mut egui::Ui, im: &TextureHandle, available: egui::Vec2, fit:
     } else {
         zoom / ui.ctx().pixels_per_point()
     };
-    ui.add(egui::Image::new(im).fit_to_exact_size(size * factor));
+    let display = size * factor;
+    let (area, _) =
+        ui.allocate_exact_size(if fit { available } else { display }, egui::Sense::hover());
+    let rect = egui::Rect::from_center_size(area.center(), display);
+    ui.painter().image(
+        im.id(),
+        rect,
+        egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.)),
+        egui::Color32::WHITE,
+    );
 }
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.workflow_ui(ctx);
         self.receive(ctx);
-        if !self.dialog_open && !self.show_welcome && !ctx.wants_keyboard_input() {
+        if !self.dialog_open
+            && self.workflow.export_dialog.is_none()
+            && !self.show_welcome
+            && !ctx.wants_keyboard_input()
+        {
             let mut ctrl_shift = egui::Modifiers::CTRL;
             ctrl_shift.shift = true;
             let mut command_shift = egui::Modifiers::COMMAND;
@@ -1294,18 +1395,40 @@ impl eframe::App for App {
                 }
             }
         }
-        if !self.loading && !self.dialog_open && !self.show_welcome && !self.exporting {
+        if !self.loading
+            && !self.dialog_open
+            && self.workflow.export_dialog.is_none()
+            && !self.show_welcome
+            && !self.exporting
+        {
             let dropped = ctx.input(|i| i.raw.dropped_files.first().and_then(|f| f.path.clone()));
             if let Some(path) = dropped {
                 self.load(path);
             }
         }
         // A modal file dialog freezes edits so its eventual result uses the displayed settings.
-        egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
-            ui.add_enabled_ui(!self.show_welcome, |ui| self.toolbar(ui, ctx));
-        });
+        egui::TopBottomPanel::top("toolbar")
+            .exact_height(42.)
+            .show(ctx, |ui| {
+                let rect = ui.max_rect();
+                chrome::gradient(
+                    ui.painter(),
+                    rect,
+                    ui.visuals().extreme_bg_color,
+                    ui.visuals().panel_fill,
+                );
+                chrome::bevel(ui, rect);
+                ui.add_enabled_ui(!self.show_welcome, |ui| self.toolbar(ui, ctx));
+            });
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
-            ui.label(&self.status);
+            ui.horizontal(|ui| {
+                chrome::status_light(
+                    ui,
+                    self.rendering || self.loading || self.exporting,
+                    self.error.is_some() || self.preview_error.is_some(),
+                );
+                ui.label(&self.status);
+            });
             if let Some(p) = &self.export_progress {
                 ui.add(
                     egui::ProgressBar::new(p.fraction)
@@ -1331,17 +1454,38 @@ impl eframe::App for App {
             }
         });
         egui::SidePanel::left("settings")
-            .default_width(330.)
-            .min_width(300.)
+            .default_width(310.)
+            .min_width(280.)
             .resizable(true)
             .show(ctx, |ui| {
-                ui.add_enabled_ui(!self.dialog_open && !self.show_welcome, |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| self.settings(ui));
-                });
+                ui.add_enabled_ui(
+                    !self.dialog_open
+                        && self.workflow.export_dialog.is_none()
+                        && !self.show_welcome,
+                    |ui| {
+                        egui::ScrollArea::vertical().show(ui, |ui| self.settings(ui));
+                    },
+                );
             });
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.add_enabled_ui(!self.show_welcome, |ui| self.preview(ui));
-        });
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::none()
+                    .fill(egui::Color32::from_rgb(16, 35, 55))
+                    .inner_margin(12.)
+                    .stroke(egui::Stroke::new(
+                        1.0_f32,
+                        egui::Color32::from_rgb(75, 117, 155),
+                    )),
+            )
+            .show(ctx, |ui| {
+                chrome::preview_style(ui);
+                ui.add_enabled_ui(
+                    !self.show_welcome
+                        && !self.dialog_open
+                        && self.workflow.export_dialog.is_none(),
+                    |ui| self.preview(ui),
+                );
+            });
         self.gallery_window(ctx);
         self.credits_window(ctx);
         if self.dirty
@@ -1359,6 +1503,12 @@ impl eframe::App for App {
             || self.exporting
         {
             ctx.request_repaint_after(Duration::from_millis(50));
+        }
+        if self.smoke_export && self.rendered_revision == Some(self.revision) {
+            self.smoke_export = false;
+            self.open_video_export(false);
+            ctx.request_repaint();
+            return;
         }
         // Reproducible CI screenshot after an actual preview, without platform-specific mouse coordinates.
         if let Some(ref path) = self.smoke {
@@ -1395,6 +1545,8 @@ impl eframe::App for App {
 
 impl Drop for App {
     fn drop(&mut self) {
+        self.stop_playback();
+        self.save_session();
         self.cancel.store(true, Ordering::Relaxed);
         let _ = self.jobs.send(Job::Shutdown);
         if let Some(thread) = self.worker_thread.take() {
@@ -1409,11 +1561,13 @@ fn main() -> eframe::Result<()> {
     let mut backends = wgpu::Backends::PRIMARY;
     let mut smoke_welcome = false;
     let mut smoke_gallery = false;
+    let mut smoke_export = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--smoke-welcome" => smoke_welcome = true,
             "--smoke-gallery" => smoke_gallery = true,
+            "--smoke-export" => smoke_export = true,
             "--backend" => {
                 backends = match args.next().as_deref() {
                     Some("vulkan") => wgpu::Backends::VULKAN,
@@ -1460,6 +1614,7 @@ fn main() -> eframe::Result<()> {
             if app.smoke.is_some() {
                 app.smoke_welcome = smoke_welcome;
                 app.smoke_gallery = smoke_gallery;
+                app.smoke_export = smoke_export;
                 app.show_welcome = smoke_welcome;
                 app.show_gallery = smoke_gallery;
             }

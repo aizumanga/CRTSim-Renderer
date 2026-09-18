@@ -36,6 +36,9 @@ pub enum ColorMode {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
+    pub source: crate::workflow::SourceEdit,
+    pub screen_only: bool,
+    pub lut: Option<std::sync::Arc<crate::workflow::Lut>>,
     pub version: u32,
     pub signal: String,
     pub output: String,
@@ -78,6 +81,9 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            source: Default::default(),
+            screen_only: false,
+            lut: None,
             version: 1,
             signal: "original".into(),
             output: "reference".into(),
@@ -146,6 +152,10 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<()> {
+        self.source.validate()?;
+        if let Some(lut) = &self.lut {
+            lut.validate()?;
+        }
         ensure!(self.version == 1, "unsupported config version");
         ensure!(self.warmup <= 240, "warmup must be <=240 ticks");
         let ranges = [
@@ -202,6 +212,7 @@ impl Config {
     }
     pub fn signal_size(&self, input: (u32, u32)) -> Result<(u32, u32)> {
         validate_size(input)?;
+        let input = self.source.size(input);
         let height = match self.signal.as_str() {
             "original" => return Ok((256, 224)),
             "native" => return Ok(input),
@@ -243,24 +254,41 @@ impl Config {
     }
 }
 
-/// Produces the logical signal; alpha is composited onto black before filtering.
+/// Produces the logical signal; alpha is composited onto the selected background before filtering.
 /// Explicit custom sizes/original may change aspect: the caller must opt into them.
 pub fn prepare(input: &RgbaImage, config: &Config) -> Result<RgbaImage> {
     config.validate()?;
     let (w, h) = config.signal_size(input.dimensions())?;
-    let mut opaque = input.clone();
-    for p in opaque.pixels_mut() {
-        let a = u16::from(p[3]);
-        for i in 0..3 {
-            p[i] = ((u16::from(p[i]) * a + 127) / 255) as u8;
+    let transformed = config.source.crop != [0.; 4]
+        || config.source.rotation != 0.
+        || config.source.zoom != 1.
+        || config.source.position != [0.; 2]
+        || config.source.checkerboard;
+    let mut resized = if transformed {
+        config
+            .source
+            .prepare(input, (w, h), config.filter == Filter::Nearest)
+    } else {
+        let mut opaque = input.clone();
+        for p in opaque.pixels_mut() {
+            let a = u16::from(p[3]);
+            for i in 0..3 {
+                p[i] = ((u16::from(p[i]) * a
+                    + u16::from(config.source.background[i]) * (255 - a)
+                    + 127)
+                    / 255) as u8;
+            }
+            p[3] = 255;
         }
-        p[3] = 255;
-    }
-    let filter = match config.filter {
-        Filter::Nearest => imageops::FilterType::Nearest,
-        Filter::Lanczos => imageops::FilterType::Lanczos3,
+        let filter = match config.filter {
+            Filter::Nearest => imageops::FilterType::Nearest,
+            Filter::Lanczos => imageops::FilterType::Lanczos3,
+        };
+        imageops::resize(&opaque, w, h, filter)
     };
-    let mut resized = imageops::resize(&opaque, w, h, filter);
+    if let Some(lut) = &config.lut {
+        lut.apply(&mut resized);
+    }
     if config.hue != 0. || config.chroma != 1. {
         let (sin, cos) = config.hue.to_radians().sin_cos();
         for p in resized.pixels_mut() {
