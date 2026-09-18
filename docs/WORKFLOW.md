@@ -1,5 +1,9 @@
 # v0.2 workflow
 
+The toolbar groups commands under **File**, **Presets**, **View** and **Export**, followed by Credits.
+File contains media and project commands; Presets contains the gallery and imports; View contains interface themes.
+Export contains PNG, video and batch queue commands.
+
 ## Edit and compare
 
 **Source & framing** provides independent crop edges, rotation, source zoom and horizontal/vertical pan.
@@ -26,10 +30,8 @@ to rebuild temporal history. Buffer size is bounded independently of clip length
 If rendering falls behind, playback shows Buffering again. Lower Preview quality for demanding footage or effects.
 Editing, seeking, opening a dialog or starting an export stops playback and cancels its decoder.
 
-Preview audio uses an optional local `ffplay` executable (`CRTSIM_FFPLAY` overrides its location).
-It starts after buffering and stops on pause/seek/buffer underrun. Audio preview is best effort, with device/startup latency;
-export timing is handled separately by FFmpeg. Toggle Preview audio off for silent visual inspection.
-Missing ffplay or an unavailable sound device leaves video preview usable.
+Video previews are silent. The earlier separate ffplay audio process could drift and restart on buffer underruns,
+so it has been removed. Exported audio is configured in the video export window and still uses FFmpeg's stream-preservation pipeline.
 
 Playback normalizes variable-rate footage to the selected constant rate, as export does. During playback the frame
 counter is an estimate from media time; manual frame navigation still selects exact decoded ordinals.
@@ -56,6 +58,13 @@ Use Start / resume, Pause after current, Cancel current, Retry, Move up or Remov
 jobs can continue. No temporary PNG frame sequences are written. Cancelling or closing the app reaps FFmpeg subprocesses.
 
 ## Video quality and preservation
+
+**Export → Video…** opens a dedicated settings window before the destination chooser. MP4/H.264 is the recommended default;
+MKV/H.264 favors stream preservation, and WebM/VP9 targets web playback. Each format and encoding method has a short explanation.
+**Advanced** exposes optional software CRF (0–51), compression speed, or hardware target bitrate (1–200 Mbps).
+Leave overrides off to use the quality profile. Selecting another profile resets custom CRF/bitrate. Format switches reset CRF
+because H.264 and VP9 use different quality scales. WebM always uses software VP9.
+The batch queue has its own **Video settings…** window for new jobs; existing jobs keep their settings.
 
 Draft, Balanced, High and Archival select software CRF 26/18/14/10 for H.264 and 32/24/20/16 for VP9.
 Archival is a high-quality lossy profile. Hardware H.264 choices are NVIDIA NVENC, Intel Quick Sync, AMD AMF and Apple VideoToolbox.

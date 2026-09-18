@@ -143,13 +143,18 @@ fn multiple_tracks_subtitles_chapters_metadata_and_lut_roundtrip() {
         lut: Some(Arc::new(lut)),
         ..Config::default()
     };
+    let options = Options {
+        crf: Some(21),
+        speed: Some(crtsim_media::EncodingSpeed::Fast),
+        ..Options::default()
+    };
     for ext in ["mkv", "mp4", "webm"] {
         let destination = dir.path().join(format!("result.{ext}"));
         crtsim_media::export_with(
             &video,
             &destination,
             &config,
-            &Options::default(),
+            &options,
             &cancel,
             |im, _| Ok(im.clone()),
             |_| {},
@@ -194,6 +199,12 @@ fn multiple_tracks_subtitles_chapters_metadata_and_lut_roundtrip() {
             .collect();
         assert_eq!(audio[0]["tags"]["language"], "eng");
         assert_eq!(audio[1]["tags"]["language"], "jpn");
+        assert_eq!(
+            crtsim_media::import_preset(&destination, (64, 48), &cancel)
+                .unwrap()
+                .video_options,
+            options
+        );
         assert_eq!(
             crtsim_media::import_preset(&destination, (64, 48), &cancel)
                 .unwrap()

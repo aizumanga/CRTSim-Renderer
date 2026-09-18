@@ -124,7 +124,9 @@ Missing executables/codecs produce an error in the window; nothing is downloaded
    **Play / Pause** (Space) starts buffered playback with CRT history. **Export frame** saves the displayed source frame as a full-resolution, settled CRT PNG.
    When a valid container frame count exists it is used immediately. Other files require one decoded-frame count on open. Exact seeks decode by ordinal from the start and can take time on long videos; loading/seeking is cancellable.
 3. Choose output resolution and video timing: source-rate stable artifacts (default), 60 Hz alternating artifacts, or persistence off.
-4. Choose **Export video…** and a filename ending in `.mp4`, `.mkv` or `.webm`. MP4/MKV use H.264; WebM uses VP9.
+4. Choose **Export → Video…**. A separate window explains MP4/H.264, MKV/H.264 and WebM/VP9, with quality/audio controls and optional advanced encoding settings. Then choose the destination.
+
+The compact toolbar groups media/projects under **File**, gallery/imports under **Presets**, themes under **View**, and rendering under **Export**. Video previews are silent; audio is retained in exports unless explicitly muted.
 
 Exports retain CRT history between ordered frames. Variable-frame-rate input is normalized to the detected average frame rate,
 or to 60 FPS in 60 Hz mode. Source-rate mode corrects persistence decay by media time; this is an approximation of the spatial feedback effect.

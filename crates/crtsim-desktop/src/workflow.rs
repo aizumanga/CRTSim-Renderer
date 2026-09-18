@@ -1,7 +1,7 @@
 use crate::{files, model, texture, worker, App, Dialog, Job};
 use anyhow::{ensure, Result};
 use crtsim_core::config::Config;
-use crtsim_media::{Encoder, Options, Quality};
+use crtsim_media::Options;
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -59,6 +59,7 @@ fn read_project(path: &Path) -> Result<Project> {
     let mut p: Project = serde_json::from_slice(&std::fs::read(path)?)?;
     ensure!(p.version == 1, "Unsupported project version");
     p.config.validate()?;
+    p.options.validate()?;
     ensure!(p.queue.len() <= 256, "Queue exceeds 256 jobs");
     let root = path.parent().unwrap_or_else(|| Path::new("."));
     let resolve = |p: &mut PathBuf| {
@@ -71,6 +72,7 @@ fn read_project(path: &Path) -> Result<Project> {
     }
     for item in &mut p.queue {
         item.config.validate()?;
+        item.options.validate()?;
         resolve(&mut item.source);
         resolve(&mut item.output);
         if item.status == QueueStatus::Running {
@@ -94,22 +96,11 @@ pub struct Playback {
     buffered: VecDeque<worker::PlaybackFrame>,
     clock: Option<(Instant, f64)>,
     ended: bool,
-    audio: Option<std::process::Child>,
-    audio_failed: bool,
     capacity: usize,
-}
-impl Playback {
-    fn stop_audio(&mut self) {
-        if let Some(mut audio) = self.audio.take() {
-            let _ = audio.kill();
-            let _ = audio.wait();
-        }
-    }
 }
 impl Drop for Playback {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Relaxed);
-        self.stop_audio();
     }
 }
 
@@ -118,14 +109,15 @@ pub struct State {
     pub comparison: f32,
     pub playback: Option<Playback>,
     pub play_time: f64,
-    pub preview_audio: bool,
+    pub export_dialog: Option<crate::export_ui::ExportDialog>,
+    pub export_format: crate::export_ui::Format,
     pub project_path: Option<PathBuf>,
     recovery: Option<Project>,
     recent: Vec<PathBuf>,
     queue: Vec<QueueItem>,
     queue_running: bool,
     active: Option<usize>,
-    show_queue: bool,
+    pub show_queue: bool,
     last_saved: Option<Project>,
     last_save: Instant,
     pub pending_project: Option<Project>,
@@ -139,7 +131,8 @@ impl Default for State {
             comparison: 0.5,
             playback: None,
             play_time: 0.,
-            preview_audio: true,
+            export_dialog: None,
+            export_format: Default::default(),
             project_path: None,
             recovery: None,
             recent: vec![],
@@ -325,8 +318,6 @@ impl App {
             buffered: VecDeque::new(),
             clock: None,
             ended: false,
-            audio: None,
-            audio_failed: false,
             capacity,
         });
         self.dirty = false;
@@ -361,50 +352,8 @@ impl App {
             let time = p.buffered.front().unwrap().time;
             p.clock = Some((Instant::now(), time));
             self.status = "Playing".into();
-            if self.workflow.preview_audio && !p.audio_failed {
-                if let Some(video) = self.video.as_ref().filter(|v| v.audio) {
-                    let mut command = std::process::Command::new(
-                        std::env::var_os("CRTSIM_FFPLAY").unwrap_or_else(|| "ffplay".into()),
-                    );
-                    command
-                        .args([
-                            "-nodisp",
-                            "-autoexit",
-                            "-loglevel",
-                            "error",
-                            "-ss",
-                            &time.to_string(),
-                            "-i",
-                        ])
-                        .arg(&video.path)
-                        .args(["-vn", "-sn"]);
-                    command
-                        .stdin(std::process::Stdio::null())
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null());
-                    #[cfg(windows)]
-                    {
-                        use std::os::windows::process::CommandExt;
-                        command.creation_flags(0x08000000);
-                    }
-                    match command.spawn() {
-                        Ok(child) => p.audio = Some(child),
-                        Err(_) => {
-                            p.audio_failed = true;
-                            self.status = "Playing · audio preview requires ffplay on PATH".into();
-                        }
-                    }
-                }
-            }
         }
         if let Some((clock, base)) = p.clock {
-            if p.audio.as_mut().is_some_and(
-                |child| matches!(child.try_wait(),Ok(Some(status)) if !status.success()),
-            ) {
-                p.stop_audio();
-                p.audio_failed = true;
-                self.status = "Playing · audio device unavailable; preview is muted".into();
-            }
             let target = base + clock.elapsed().as_secs_f64();
             let mut next = None;
             while p.buffered.front().is_some_and(|f| f.time <= target) {
@@ -433,7 +382,6 @@ impl App {
                 && target > self.workflow.play_time + frame_duration
             {
                 p.clock = None;
-                p.stop_audio();
                 self.status = "Buffering · renderer is catching up…".into();
             }
         }
@@ -463,6 +411,7 @@ impl App {
             || self.loading
             || self.rendering
             || self.dialog_open
+            || self.workflow.export_dialog.is_some()
             || self.show_welcome
             || self.workflow.recovery.is_some()
             || self.workflow.playback.is_some()
@@ -527,6 +476,7 @@ impl App {
         });
     }
     pub fn workflow_ui(&mut self, ctx: &egui::Context) {
+        self.video_export_window(ctx);
         self.tick_playback(ctx);
         if let Some(receive) = &self.workflow.batch {
             match receive.try_recv() {
@@ -608,7 +558,8 @@ impl App {
             egui::Window::new("Batch export queue").open(&mut open).default_width(650.).show(ctx,|ui| {
                 ui.label("Each job keeps the settings used when it was added. Videos use MKV to preserve more tracks.");
                 ui.horizontal(|ui| {
-                    if ui.add_enabled(!self.dialog_open,egui::Button::new("Add files…")).clicked() {self.batch_dialog(ctx);}
+                    if ui.add_enabled(!self.dialog_open && self.workflow.export_dialog.is_none(),egui::Button::new("Add files…")).clicked() {self.batch_dialog(ctx);}
+                    if ui.add_enabled(!self.dialog_open && self.workflow.export_dialog.is_none(),egui::Button::new("Video settings…")).clicked() {self.open_video_export(true);}
                     if ui.button(if self.workflow.queue_running {"Pause after current"} else {"Start / resume"}).clicked() {self.stop_playback();self.workflow.queue_running = !self.workflow.queue_running;}
                     if ui.add_enabled(self.workflow.active.is_some(),egui::Button::new("Cancel current")).clicked() {self.cancel.store(true,Ordering::Relaxed);self.workflow.queue_running=false;}
                 });
@@ -676,9 +627,6 @@ impl App {
                 }
             }
         });
-        if ui.button("Batch queue…").clicked() {
-            self.workflow.show_queue = true;
-        }
     }
     pub fn workflow_settings(&mut self, ui: &mut egui::Ui) {
         egui::CollapsingHeader::new("Source & framing")
@@ -766,44 +714,6 @@ impl App {
             );
         });
     }
-    pub fn export_settings(&mut self, ui: &mut egui::Ui) {
-        egui::ComboBox::from_label("Video quality")
-            .selected_text(format!("{:?}", self.video_options.quality))
-            .show_ui(ui, |ui| {
-                for q in [
-                    Quality::Draft,
-                    Quality::Balanced,
-                    Quality::High,
-                    Quality::Archival,
-                ] {
-                    ui.selectable_value(&mut self.video_options.quality, q, format!("{q:?}"));
-                }
-            });
-        egui::ComboBox::from_label("Encoder")
-            .selected_text(format!("{:?}", self.video_options.encoder))
-            .show_ui(ui, |ui| {
-                for (e, name) in [
-                    (Encoder::Software, "Software · H.264 / VP9"),
-                    (Encoder::Nvenc, "NVIDIA NVENC"),
-                    (Encoder::Qsv, "Intel Quick Sync"),
-                    (Encoder::Amf, "AMD AMF"),
-                    (Encoder::VideoToolbox, "Apple VideoToolbox"),
-                ] {
-                    ui.selectable_value(&mut self.video_options.encoder, e, name);
-                }
-            });
-        ui.small("Hardware H.264 requires a compatible device and FFmpeg encoder. Availability is checked before export. Archival is high quality, not lossless.");
-        ui.checkbox(
-            &mut self.video_options.preserve_streams,
-            "Preserve all audio tracks, subtitles, chapters & metadata",
-        );
-        ui.small("MKV keeps compatible subtitle formats and attachments. MP4/WebM convert text subtitles; bitmap subtitles and data tracks may be omitted. Source comments are saved as source_comment where supported.");
-        if let Some(video) = &self.video {
-            for note in crtsim_media::preservation_notes(video, "mp4") {
-                ui.small(note);
-            }
-        }
-    }
 }
 
 pub fn compare(
@@ -874,8 +784,6 @@ mod tests {
             buffered: VecDeque::new(),
             clock: None,
             ended: false,
-            audio: None,
-            audio_failed: false,
             capacity: 4,
         });
         let make_frame = |time| {

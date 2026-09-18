@@ -88,7 +88,7 @@ This phase does not promise continuous real-time frame rates, cancellable GPU su
 
 - Interface themes are v0.2 groundwork: dark and light defaults, two classic operating-system-inspired palettes,
   and a restrained Sky Diary palette adapted from the aizumanga-neocities site. They remain separate from render presets and output.
-- Buffered video playback, persistent CRT history, short temporal preroll and optional ffplay preview audio.
+- Silent buffered video playback, persistent CRT history and short temporal preroll. Separate preview audio was removed after synchronization problems.
 - Crop, source zoom/pan/rotation, selectable flattened transparency backgrounds and bezel-free rendering.
 - Draggable before/after comparison, versioned projects, automatic recovery and recent projects.
 - Persistent sequential batch queue with captured settings, cancellation, retry and reordering.
