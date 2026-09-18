@@ -629,22 +629,23 @@ impl App {
         });
     }
     pub fn workflow_settings(&mut self, ui: &mut egui::Ui) {
-        egui::CollapsingHeader::new("Source & framing")
+        crate::chrome::Section::new("Source & framing")
             .default_open(true)
             .show(ui, |ui| {
                 ui.checkbox(&mut self.config.screen_only, "Screen only · no bezel");
-                ui.label("Crop (% removed from each edge)");
-                for (i, name) in ["Left", "Top", "Right", "Bottom"].iter().enumerate() {
-                    let opposite = (i + 2) % 4;
-                    let max = (0.98 - self.config.source.crop[opposite]).max(0.);
-                    let mut percent = self.config.source.crop[i] * 100.;
-                    if ui
-                        .add(egui::Slider::new(&mut percent, 0.0..=max * 100.).text(*name))
-                        .changed()
-                    {
-                        self.config.source.crop[i] = percent / 100.;
+                egui::CollapsingHeader::new("Crop edges · percent").show(ui, |ui| {
+                    for (i, name) in ["Left", "Top", "Right", "Bottom"].iter().enumerate() {
+                        let opposite = (i + 2) % 4;
+                        let max = (0.98 - self.config.source.crop[opposite]).max(0.);
+                        let mut percent = self.config.source.crop[i] * 100.;
+                        if ui
+                            .add(egui::Slider::new(&mut percent, 0.0..=max * 100.).text(*name))
+                            .changed()
+                        {
+                            self.config.source.crop[i] = percent / 100.;
+                        }
                     }
-                }
+                });
                 ui.add(
                     egui::Slider::new(&mut self.config.source.rotation, -180.0..=180.)
                         .text("Rotation °"),
@@ -696,7 +697,7 @@ impl App {
                     self.config.source = Default::default();
                 }
             });
-        egui::CollapsingHeader::new("Color LUT").show(ui, |ui| {
+        crate::chrome::Section::new("Color & LUT").show(ui, |ui| {
             ui.label(
                 self.config
                     .lut
@@ -731,7 +732,9 @@ pub fn compare(
     } else {
         native * zoom
     };
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
+    let (area_rect, response) =
+        ui.allocate_exact_size(if fit { area } else { size }, egui::Sense::click_and_drag());
+    let rect = egui::Rect::from_center_size(area_rect.center(), size);
     if let Some(pos) = response.interact_pointer_pos() {
         *split = ((pos.x - rect.left()) / rect.width()).clamp(0., 1.);
     }

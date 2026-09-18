@@ -87,7 +87,7 @@ impl App {
                             for note in crtsim_media::preservation_notes(video,draft.format.extension()) {ui.small(note);}
                         }
                     }
-                    egui::CollapsingHeader::new("Advanced · encoding method & parameters").show(ui,|ui| {
+                    crate::chrome::Section::new("Advanced encoding settings").show(ui,|ui| {
                         if draft.format==Format::Webm {ui.label("VP9 uses software encoding.");} else {
                             egui::ComboBox::from_label("Encoding method").selected_text(encoder_label(draft.options.encoder)).show_ui(ui,|ui| {
                                 for e in [Encoder::Software,Encoder::Nvenc,Encoder::Qsv,Encoder::Amf,Encoder::VideoToolbox] {ui.selectable_value(&mut draft.options.encoder,e,encoder_label(e));}

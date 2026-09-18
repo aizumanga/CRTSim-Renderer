@@ -4,6 +4,11 @@ The toolbar groups commands under **File**, **Presets**, **View** and **Export**
 File contains media and project commands; Presets contains the gallery and imports; View contains interface themes.
 Export contains PNG, video and batch queue commands.
 
+The workbench uses beveled control groups, a shaded menu bar, a native monitor icon and a colored status lamp.
+The preview has a dark surround and centers the image; less-used controls collapse to leave more space for editing.
+Sky Diary is the default for new installs and matches the approved blue-gray/pink concept. Existing saved theme choices
+are respected: choose **View → Sky Diary** for that palette. All five themes use the new layout and native controls.
+
 ## Edit and compare
 
 **Source & framing** provides independent crop edges, rotation, source zoom and horizontal/vertical pan.

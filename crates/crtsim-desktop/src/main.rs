@@ -1,3 +1,4 @@
+mod chrome;
 mod export_ui;
 mod files;
 mod gallery;
@@ -62,6 +63,7 @@ struct App {
     export_progress: Option<RenderProgress>,
     smoke_welcome: bool,
     smoke_gallery: bool,
+    smoke_export: bool,
     config: Config,
     history: model::History,
     input: Arc<RgbaImage>,
@@ -133,7 +135,7 @@ impl App {
             Some(Ok(None)) | None => theme::Theme::default(),
             Some(Err(e)) => {
                 storage_error = Some(format!(
-                    "Could not load the saved theme: {e:#}. Using CRT Dark."
+                    "Could not load the saved theme: {e:#}. Using Sky Diary."
                 ));
                 theme::Theme::default()
             }
@@ -174,6 +176,7 @@ impl App {
             export_progress: None,
             smoke_welcome: false,
             smoke_gallery: false,
+            smoke_export: false,
             history: model::History::new(config.clone()),
             config,
             input,
@@ -646,7 +649,8 @@ impl App {
     }
     fn toolbar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.horizontal_wrapped(|ui| {
-            ui.strong("CRTSim Renderer");
+            chrome::monitor(ui);
+            ui.label(egui::RichText::new("CRTSim Renderer").strong().size(17.));
             ui.separator();
             let enabled = !self.dialog_open
                 && !self.loading
@@ -755,8 +759,19 @@ impl App {
             }
             ui.separator();
         }
-        ui.heading("Image & output");
-        ui.label(&self.source_name);
+        ui.horizontal(|ui| {
+            chrome::monitor(ui);
+            ui.heading("Source");
+        });
+        egui::Frame::none()
+            .fill(ui.visuals().extreme_bg_color)
+            .stroke(ui.visuals().window_stroke)
+            .rounding(3.)
+            .inner_margin(9.)
+            .show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.label(egui::RichText::new(&self.source_name).strong());
+            });
         ui.small(format!(
             "Source: {} × {}",
             self.input.width(),
@@ -792,33 +807,7 @@ impl App {
             }
         });
         let before = self.config.clone();
-        self.workflow_settings(ui);
-        egui::ComboBox::from_label("Color processing")
-            .selected_text(match self.config.color_mode {
-                ColorMode::Reference => "Original gamma",
-                ColorMode::LinearLight => "Linear light (experimental)",
-            })
-            .show_ui(ui, |ui| {
-                ui.selectable_value(
-                    &mut self.config.color_mode,
-                    ColorMode::Reference,
-                    "Original gamma",
-                );
-                ui.selectable_value(
-                    &mut self.config.color_mode,
-                    ColorMode::LinearLight,
-                    "Linear light (experimental)",
-                );
-            });
-        if self.config.color_mode == ColorMode::LinearLight {
-            ui.small("Linear-light glass, lighting and bloom; SDR output. The analog signal still uses the original gamma-space model.");
-        }
-        egui::CollapsingHeader::new("Optional color grade").show(ui, |ui| {
-            slider(ui, "Hue (degrees)", &mut self.config.hue, -180.0..=180.);
-            slider(ui, "Chroma", &mut self.config.chroma, 0.0..=2.);
-            ui.small("YIQ hue/chroma adjustment. This is an optional grade, not the game's unpublished NES palette LUT or a complete NTSC decoder.");
-        });
-        ui.checkbox(&mut self.config.mask_antialias, "Filter mask when shrinking").on_hover_text("Mipmapped mask filtering reduces moiré during minification. Turn off for Phase 0/1 reference sampling.");
+        chrome::Section::new("Image & output").show(ui,|ui| {
         resolution(
             ui,
             "Signal",
@@ -880,9 +869,41 @@ impl App {
                 "Current fit/overscan can crop content and subtitles.",
             );
         }
-        ui.small("Rounded glass may hide extreme corners even with Contain. Alpha is flattened onto black. SDR output; no ICC color management.");
+        ui.small("Rounded glass may hide extreme corners even with Contain. Alpha uses the selected background. SDR output; no ICC color management.");
+
+        });
+        self.workflow_settings(ui);
+        chrome::Section::new("Color processing").show(ui,|ui| {
+        egui::ComboBox::from_label("Color processing")
+            .selected_text(match self.config.color_mode {
+                ColorMode::Reference => "Original gamma",
+                ColorMode::LinearLight => "Linear light (experimental)",
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(
+                    &mut self.config.color_mode,
+                    ColorMode::Reference,
+                    "Original gamma",
+                );
+                ui.selectable_value(
+                    &mut self.config.color_mode,
+                    ColorMode::LinearLight,
+                    "Linear light (experimental)",
+                );
+            });
+        if self.config.color_mode == ColorMode::LinearLight {
+            ui.small("Linear-light glass, lighting and bloom; SDR output. The analog signal still uses the original gamma-space model.");
+        }
+        chrome::Section::new("Optional color grade").show(ui, |ui| {
+            slider(ui, "Hue (degrees)", &mut self.config.hue, -180.0..=180.);
+            slider(ui, "Chroma", &mut self.config.chroma, 0.0..=2.);
+            ui.small("YIQ hue/chroma adjustment. This is an optional grade, not the game's unpublished NES palette LUT or a complete NTSC decoder.");
+        });
+        ui.checkbox(&mut self.config.mask_antialias, "Filter mask when shrinking").on_hover_text("Mipmapped mask filtering reduces moiré during minification. Turn off for Phase 0/1 reference sampling.");
+
+        });
         ui.separator();
-        egui::CollapsingHeader::new("Color & signal")
+        chrome::Section::new("CRT signal")
             .default_open(true)
             .show(ui, |ui| {
                 slider(ui, "Saturation", &mut self.config.saturation, 0.0..=3.);
@@ -900,40 +921,38 @@ impl App {
                     0.0..=2.,
                 );
             });
-        egui::CollapsingHeader::new("Glass & mask")
-            .default_open(true)
-            .show(ui, |ui| {
-                slider(ui, "Barrel distortion", &mut self.config.barrel, -2.0..=2.);
-                slider(ui, "Overscan", &mut self.config.overscan, 0.1..=3.);
-                slider(ui, "Mask opacity", &mut self.config.mask_opacity, 0.0..=1.);
-                slider(
-                    ui,
-                    "Mask brightness",
-                    &mut self.config.mask_brightness,
-                    0.0..=2.,
-                );
-                slider(
-                    ui,
-                    "Mask columns",
-                    &mut self.config.mask_repeats[0],
-                    1.0..=16384.,
-                );
-                slider(
-                    ui,
-                    "Mask rows",
-                    &mut self.config.mask_repeats[1],
-                    1.0..=16384.,
-                );
-                slider(ui, "Edge dimming", &mut self.config.dimming, 0.0..=1.);
-                slider(ui, "Camera field of view", &mut self.config.fov, 5.0..=90.);
-            });
-        egui::CollapsingHeader::new("Bloom & reflections").show(ui, |ui| {
+        chrome::Section::new("Glass & mask").show(ui, |ui| {
+            slider(ui, "Barrel distortion", &mut self.config.barrel, -2.0..=2.);
+            slider(ui, "Overscan", &mut self.config.overscan, 0.1..=3.);
+            slider(ui, "Mask opacity", &mut self.config.mask_opacity, 0.0..=1.);
+            slider(
+                ui,
+                "Mask brightness",
+                &mut self.config.mask_brightness,
+                0.0..=2.,
+            );
+            slider(
+                ui,
+                "Mask columns",
+                &mut self.config.mask_repeats[0],
+                1.0..=16384.,
+            );
+            slider(
+                ui,
+                "Mask rows",
+                &mut self.config.mask_repeats[1],
+                1.0..=16384.,
+            );
+            slider(ui, "Edge dimming", &mut self.config.dimming, 0.0..=1.);
+            slider(ui, "Camera field of view", &mut self.config.fov, 5.0..=90.);
+        });
+        chrome::Section::new("Bloom & reflections").show(ui, |ui| {
             slider(ui, "Bloom amount", &mut self.config.bloom, 0.0..=2.);
             slider(ui, "Bloom power", &mut self.config.bloom_power, 0.1..=8.);
             slider(ui, "Bloom spread", &mut self.config.bloom_spread, 0.0..=0.2);
             slider(ui, "Edge reflection", &mut self.config.reflection, 0.0..=2.);
         });
-        egui::CollapsingHeader::new("Frame & lighting").show(ui, |ui| {
+        chrome::Section::new("Frame & lighting").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label("Frame color");
                 ui.color_edit_button_rgb(&mut self.config.frame_color);
@@ -956,7 +975,7 @@ impl App {
                 );
             }
         });
-        egui::CollapsingHeader::new("Persistence & artifact phase").show(ui, |ui| {
+        chrome::Section::new("Persistence & artifact phase").show(ui, |ui| {
             for (i,name) in ["Red persistence","Green persistence","Blue persistence"].iter().enumerate() { slider(ui,name,&mut self.config.persistence[i],0.0..=0.999); }
             ui.add(egui::Slider::new(&mut self.config.warmup,0..=240).text("Warm-up ticks"));
             egui::ComboBox::from_label("Phase").selected_text(format!("{:?}",self.config.phase)).show_ui(ui,|ui| {
@@ -970,9 +989,9 @@ impl App {
     }
     fn preview(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(&mut self.view, View::Crt, "CRT");
             ui.selectable_value(&mut self.view, View::Original, "Original");
-            ui.selectable_value(&mut self.view, View::Compare, "Compare · drag divider");
+            ui.selectable_value(&mut self.view, View::Crt, "CRT");
+            ui.selectable_value(&mut self.view, View::Compare, "Compare");
             ui.separator();
             ui.checkbox(&mut self.live, "Live preview");
             if ui
@@ -1006,7 +1025,7 @@ impl App {
                 ui.add(egui::Slider::new(&mut self.zoom, 0.25..=4.).text("Zoom"));
             }
         });
-        ui.small("Preview size does not change export size. For mask detail, use Export resolution and 1× zoom; display scaling may still affect sampling.");
+        ui.small("Preview monitor").on_hover_text("Drag the divider in Compare. Preview quality never changes export resolution. Inspect mask detail at Export resolution and 1× zoom.");
         if let Ok(c) =
             model::preview_config(&self.config, self.input.dimensions(), self.preview_limit)
         {
@@ -1033,7 +1052,7 @@ impl App {
         if self.rendered.is_some() && self.rendered_revision != Some(self.revision) {
             ui.colored_label(ui.visuals().warn_fg_color, "Preview is out of date.");
         }
-        let controls_height = if self.video.is_some() { 106. } else { 0. };
+        let controls_height = if self.video.is_some() { 136. } else { 0. };
         let available = egui::vec2(
             ui.available_width(),
             (ui.available_height() - controls_height).max(1.),
@@ -1060,9 +1079,9 @@ impl App {
             ui.horizontal_wrapped(|ui| {
                 if ui
                     .button(if self.workflow.playback.is_some() {
-                        "Pause"
+                        "Ⅱ Pause"
                     } else {
-                        "Play"
+                        "▶ Play"
                     })
                     .clicked()
                 {
@@ -1073,16 +1092,22 @@ impl App {
                     }
                 }
                 ui.small("Silent preview");
-                ui.label(format!("{:.2}s", self.workflow.play_time));
+                ui.monospace(format!(
+                    "{:02}:{:02} / {:02}:{:02}",
+                    self.workflow.play_time as u64 / 60,
+                    self.workflow.play_time as u64 % 60,
+                    video.duration as u64 / 60,
+                    video.duration as u64 % 60
+                ));
                 if ui
-                    .add_enabled(self.video_frame > 0, egui::Button::new("Previous frame"))
+                    .add_enabled(self.video_frame > 0, egui::Button::new("|◀"))
                     .clicked()
                 {
                     self.selected_frame = self.video_frame.saturating_sub(1);
                     seek = true;
                 }
                 if ui
-                    .add_enabled(self.video_frame < last, egui::Button::new("Next frame"))
+                    .add_enabled(self.video_frame < last, egui::Button::new("▶|"))
                     .clicked()
                 {
                     self.selected_frame = (self.video_frame + 1).min(last);
@@ -1319,7 +1344,16 @@ fn show_image(ui: &mut egui::Ui, im: &TextureHandle, available: egui::Vec2, fit:
     } else {
         zoom / ui.ctx().pixels_per_point()
     };
-    ui.add(egui::Image::new(im).fit_to_exact_size(size * factor));
+    let display = size * factor;
+    let (area, _) =
+        ui.allocate_exact_size(if fit { available } else { display }, egui::Sense::hover());
+    let rect = egui::Rect::from_center_size(area.center(), display);
+    ui.painter().image(
+        im.id(),
+        rect,
+        egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.)),
+        egui::Color32::WHITE,
+    );
 }
 
 impl eframe::App for App {
@@ -1373,11 +1407,28 @@ impl eframe::App for App {
             }
         }
         // A modal file dialog freezes edits so its eventual result uses the displayed settings.
-        egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
-            ui.add_enabled_ui(!self.show_welcome, |ui| self.toolbar(ui, ctx));
-        });
+        egui::TopBottomPanel::top("toolbar")
+            .exact_height(42.)
+            .show(ctx, |ui| {
+                let rect = ui.max_rect();
+                chrome::gradient(
+                    ui.painter(),
+                    rect,
+                    ui.visuals().extreme_bg_color,
+                    ui.visuals().panel_fill,
+                );
+                chrome::bevel(ui, rect);
+                ui.add_enabled_ui(!self.show_welcome, |ui| self.toolbar(ui, ctx));
+            });
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
-            ui.label(&self.status);
+            ui.horizontal(|ui| {
+                chrome::status_light(
+                    ui,
+                    self.rendering || self.loading || self.exporting,
+                    self.error.is_some() || self.preview_error.is_some(),
+                );
+                ui.label(&self.status);
+            });
             if let Some(p) = &self.export_progress {
                 ui.add(
                     egui::ProgressBar::new(p.fraction)
@@ -1403,8 +1454,8 @@ impl eframe::App for App {
             }
         });
         egui::SidePanel::left("settings")
-            .default_width(330.)
-            .min_width(300.)
+            .default_width(310.)
+            .min_width(280.)
             .resizable(true)
             .show(ctx, |ui| {
                 ui.add_enabled_ui(
@@ -1416,12 +1467,25 @@ impl eframe::App for App {
                     },
                 );
             });
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.add_enabled_ui(
-                !self.show_welcome && !self.dialog_open && self.workflow.export_dialog.is_none(),
-                |ui| self.preview(ui),
-            );
-        });
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::none()
+                    .fill(egui::Color32::from_rgb(16, 35, 55))
+                    .inner_margin(12.)
+                    .stroke(egui::Stroke::new(
+                        1.0_f32,
+                        egui::Color32::from_rgb(75, 117, 155),
+                    )),
+            )
+            .show(ctx, |ui| {
+                chrome::preview_style(ui);
+                ui.add_enabled_ui(
+                    !self.show_welcome
+                        && !self.dialog_open
+                        && self.workflow.export_dialog.is_none(),
+                    |ui| self.preview(ui),
+                );
+            });
         self.gallery_window(ctx);
         self.credits_window(ctx);
         if self.dirty
@@ -1439,6 +1503,12 @@ impl eframe::App for App {
             || self.exporting
         {
             ctx.request_repaint_after(Duration::from_millis(50));
+        }
+        if self.smoke_export && self.rendered_revision == Some(self.revision) {
+            self.smoke_export = false;
+            self.open_video_export(false);
+            ctx.request_repaint();
+            return;
         }
         // Reproducible CI screenshot after an actual preview, without platform-specific mouse coordinates.
         if let Some(ref path) = self.smoke {
@@ -1491,11 +1561,13 @@ fn main() -> eframe::Result<()> {
     let mut backends = wgpu::Backends::PRIMARY;
     let mut smoke_welcome = false;
     let mut smoke_gallery = false;
+    let mut smoke_export = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--smoke-welcome" => smoke_welcome = true,
             "--smoke-gallery" => smoke_gallery = true,
+            "--smoke-export" => smoke_export = true,
             "--backend" => {
                 backends = match args.next().as_deref() {
                     Some("vulkan") => wgpu::Backends::VULKAN,
@@ -1542,6 +1614,7 @@ fn main() -> eframe::Result<()> {
             if app.smoke.is_some() {
                 app.smoke_welcome = smoke_welcome;
                 app.smoke_gallery = smoke_gallery;
+                app.smoke_export = smoke_export;
                 app.show_welcome = smoke_welcome;
                 app.show_gallery = smoke_gallery;
             }
