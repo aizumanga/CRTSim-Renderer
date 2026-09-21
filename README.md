@@ -16,7 +16,7 @@ It is not an official product or an exact reconstruction of a commercial game's 
 - Clean/signal/full-CRT debugging and mesh validation/export without a GPU.
 - Native wgpu backends: Vulkan on Linux, DX12 on Windows and Metal on macOS.
 
-Installers and the unpublished NES palette LUT are not included. Platform compilation does not prove visual parity between drivers.
+Installers and the original game's unpublished NES palette LUT are not included. A separate CC0 collection of 38 NES LUTs from MAME Goodies is included under **Color & LUT → LUT gallery…**. Platform compilation does not prove visual parity between drivers.
 See [the implementation plan](docs/PLAN.md) and [validation notes](docs/VALIDATION.md).
 
 ## Desktop app

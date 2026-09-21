@@ -2,6 +2,7 @@ mod chrome;
 mod export_ui;
 mod files;
 mod gallery;
+mod lut_gallery;
 mod model;
 mod theme;
 mod worker;
@@ -56,6 +57,8 @@ struct App {
     show_welcome: bool,
     show_credits: bool,
     show_gallery: bool,
+    show_lut_gallery: bool,
+    lut_gallery_search: String,
     gallery_entries: Vec<gallery::Entry>,
     gallery_warnings: Vec<String>,
     gallery_name: String,
@@ -169,6 +172,8 @@ impl App {
             show_welcome,
             show_credits: false,
             show_gallery: false,
+            show_lut_gallery: false,
+            lut_gallery_search: String::new(),
             gallery_entries,
             gallery_warnings,
             gallery_name: String::new(),
@@ -1072,7 +1077,11 @@ impl App {
             return;
         };
         let last = self.video_frames.saturating_sub(1);
-        let enabled = !self.loading && !self.exporting && !self.dialog_open && !self.show_gallery;
+        let enabled = !self.loading
+            && !self.exporting
+            && !self.dialog_open
+            && !self.show_gallery
+            && !self.show_lut_gallery;
         let mut seek = false;
         ui.separator();
         ui.add_enabled_ui(enabled, |ui| {
@@ -1289,6 +1298,23 @@ impl App {
             gallery::ARTICLE,
         );
         ui.separator();
+        ui.strong("NES LUT collection: Wellington Uemura (wtuemura)");
+        ui.label("Shared through MAME Goodies under CC0 1.0. Includes palettes by FirebrandX (FBX) and other creators identified in the original palette names. Thanks to the MAME Goodies contributors.");
+        ui.horizontal_wrapped(|ui| {
+            ui.hyperlink_to(
+                "NES LUTs & license",
+                "https://github.com/mamedev/mame-goodies/tree/master/bgfx/lut/nes",
+            );
+            ui.hyperlink_to(
+                "FirebrandX palettes",
+                "https://www.firebrandx.com/nespalette.html",
+            );
+            ui.hyperlink_to(
+                "Author's announcement",
+                "https://www.reddit.com/r/emulation/comments/1oopf1i/updated_nes_luts_for_mame/",
+            );
+        });
+        ui.separator();
         ui.small("Renderer port and interface: CRTSim-Renderer contributors, with AI assistance. Built with Rust, wgpu, egui/eframe, image and other open-source libraries; see THIRD_PARTY_NOTICES.md in the repository.");
     }
     fn credits_window(&mut self, ctx: &egui::Context) {
@@ -1487,6 +1513,7 @@ impl eframe::App for App {
                 );
             });
         self.gallery_window(ctx);
+        self.lut_gallery_window(ctx);
         self.credits_window(ctx);
         if self.dirty
             && self.changed_at.elapsed() >= Duration::from_millis(180)
@@ -1561,12 +1588,14 @@ fn main() -> eframe::Result<()> {
     let mut backends = wgpu::Backends::PRIMARY;
     let mut smoke_welcome = false;
     let mut smoke_gallery = false;
+    let mut smoke_lut_gallery = false;
     let mut smoke_export = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--smoke-welcome" => smoke_welcome = true,
             "--smoke-gallery" => smoke_gallery = true,
+            "--smoke-lut-gallery" => smoke_lut_gallery = true,
             "--smoke-export" => smoke_export = true,
             "--backend" => {
                 backends = match args.next().as_deref() {
@@ -1617,6 +1646,7 @@ fn main() -> eframe::Result<()> {
                 app.smoke_export = smoke_export;
                 app.show_welcome = smoke_welcome;
                 app.show_gallery = smoke_gallery;
+                app.show_lut_gallery = smoke_lut_gallery;
             }
             Box::new(app)
         }),

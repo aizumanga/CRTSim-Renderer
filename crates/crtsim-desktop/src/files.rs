@@ -176,6 +176,22 @@ pub fn save_preset(path: &Path, c: &Config) -> Result<()> {
 mod tests {
     use super::*;
     #[test]
+    fn included_lut_survives_preset_and_png_metadata_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut c = crate::model::general();
+        c.lut = Some(std::sync::Arc::new(crtsim_core::nes_luts::load(0).unwrap()));
+        assert_eq!(c.lut.as_ref().unwrap().size, 64);
+        let path = dir.path().join("nes-preset.json");
+        save_preset(&path, &c).unwrap();
+        assert_eq!(load_preset(&path, (1, 1)).unwrap(), c);
+        let png = dir.path().join("nes-image.png");
+        let source = RgbaImage::from_pixel(1, 1, image::Rgba([32, 64, 128, 255]));
+        save_png(&png, source.clone(), Some(&c)).unwrap();
+        assert_eq!(load_image(&png).unwrap(), source);
+        assert_eq!(load_preset_from_image(&png, (1, 1)).unwrap(), c);
+    }
+
+    #[test]
     fn preset_and_png_saves_atomically_replace_existing_files() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("preset.json");

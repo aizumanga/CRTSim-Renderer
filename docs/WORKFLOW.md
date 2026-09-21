@@ -20,6 +20,14 @@ Choose black, white, a custom color or a checkerboard for transparent pixels and
 The background becomes part of the rendered image, including exports. This is not alpha-channel export.
 **Screen only · no bezel** omits the physical frame mesh while retaining the curved glass, its lighting and output canvas.
 
+**Color & LUT → LUT gallery…** opens 38 included NES LUTs with a searchable list.
+Click a name to apply it while keeping your CRT and source framing settings. The gallery
+stays open for comparisons; **Remove LUT** restores the ungraded input. Changes support
+Undo/Redo and use Live preview when enabled. The collection is embedded and works offline.
+These LUTs were designed to remap MAME's mathematically derived NES palette; arbitrary
+images can use them as creative grades, but will not necessarily reproduce the named palette.
+Credits and source/license links are available in the gallery and Credits & support.
+
 **Color LUT** imports a 3D `.cube` table (2–65 samples per axis, up to 16 MB). Trilinear interpolation respects
 DOMAIN_MIN/MAX. The LUT runs before the CRT signal simulation and hue/chroma grade. Tables are embedded in
 presets/projects, so moving the original LUT file does not break the look. 1D LUTs and ICC transforms are outside this version.
