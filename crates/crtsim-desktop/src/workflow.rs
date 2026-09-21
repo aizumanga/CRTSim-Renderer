@@ -704,6 +704,10 @@ impl App {
                     .as_ref()
                     .map_or("No LUT", |l| l.name.as_str()),
             );
+            if ui.button("LUT gallery…").clicked() {
+                self.stop_playback();
+                self.show_lut_gallery = true;
+            }
             if ui.button("Import 3D .cube…").clicked() {
                 self.dialog(Dialog::Lut, &ui.ctx().clone());
             }

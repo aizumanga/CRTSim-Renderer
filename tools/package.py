@@ -27,6 +27,8 @@ for doc in ['README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md']:
     shutil.copy2(root / doc, stage)
 shutil.copytree(root / 'docs', stage / 'docs')
 shutil.copy2(root / 'assets/original-crtsim/SOURCES.md', stage / 'ORIGINAL_ASSETS.md')
+for doc in ['SOURCES.md', 'README.md', 'SHA256SUMS']:
+    shutil.copy2(root / 'assets/nes-luts' / doc, stage / ('NES_LUTS_' + doc))
 # Collect license texts from the exact Cargo.lock dependency sources, including build dependencies.
 metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--format-version', '1']))
 licenses = stage / 'dependency-licenses'

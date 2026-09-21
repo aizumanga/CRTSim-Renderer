@@ -21,3 +21,16 @@ This document is a development inventory, not a completed binary-distribution li
 Phase 3 invokes a user-installed FFmpeg and ffprobe as separate executables. Neither is bundled, linked or downloaded by this application.
 The installed build determines codec availability and its license obligations; builds containing libx264 generally enable GPL components.
 Before distributing FFmpeg with a future release, collect the exact build configuration, applicable licenses and corresponding source obligations.
+
+## Included NES LUTs
+
+NES LUT collection/update by **Wellington Uemura (wtuemura)**, distributed through
+[MAME Goodies](https://github.com/mamedev/mame-goodies/tree/master/bgfx/lut/nes)
+under **CC0 1.0**, as stated in the upstream NES README. Thanks to the MAME Goodies contributors.
+Includes palettes by [FirebrandX (FBX)](https://www.firebrandx.com/nespalette.html)
+and other creators identified in the original palette names, which are preserved.
+
+[Author's announcement](https://www.reddit.com/r/emulation/comments/1oopf1i/updated_nes_luts_for_mame/).
+The unmodified PNGs, upstream dedication, source notes and SHA-256 digests are in
+`assets/nes-luts/`. Release packages include `NES_LUTS_README.md`, `NES_LUTS_SOURCES.md`
+and `NES_LUTS_SHA256SUMS`; the LUT data is embedded in the executable.

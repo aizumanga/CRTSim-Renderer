@@ -1,5 +1,6 @@
 pub mod config;
 pub mod mesh;
+pub mod nes_luts;
 pub mod workflow;
 
 use anyhow::{ensure, Context, Result};
