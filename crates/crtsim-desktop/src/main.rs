@@ -1187,10 +1187,9 @@ impl App {
         if !self.show_gallery || self.show_welcome {
             return;
         }
-        let mut open = true;
         let mut selected = None;
         let mut edit = None;
-        egui::Window::new("Preset gallery").open(&mut open).default_width(600.).default_height(500.).show(ctx, |ui| {
+        let open = chrome::tool_window(ctx, "Preset gallery", [600., 500.], |ui| {
             ui.add_enabled_ui(!self.dialog_open, |ui| {
                 ui.label("Save your current settings here to find them again after restarting the app.");
                 ui.horizontal(|ui| {
@@ -1233,11 +1232,18 @@ impl App {
                     }
                 });
             });
+            if let Some(edit) = edit.take() {
+                self.description_edit = Some(edit);
+            }
+            // Shown inside the gallery's own window, next to the preset being edited.
+            self.description_window(ui.ctx());
         });
         self.show_gallery = open;
-        if let Some(edit) = edit {
-            self.description_edit = Some(edit);
+        if let Some(config) = selected {
+            self.replace_config(config);
         }
+    }
+    fn description_window(&mut self, ctx: &egui::Context) {
         if let Some((name, mut description)) = self.description_edit.clone() {
             let mut editing = true;
             let mut save = false;
@@ -1245,6 +1251,7 @@ impl App {
                 .open(&mut editing)
                 .collapsible(false)
                 .default_width(400.)
+                .constrain_to(ctx.screen_rect())
                 .show(ctx, |ui| {
                     ui.add(
                         egui::TextEdit::multiline(&mut description)
@@ -1273,9 +1280,6 @@ impl App {
                 }
             }
             self.description_edit = editing.then_some((name, description));
-        }
-        if let Some(config) = selected {
-            self.replace_config(config);
         }
     }
     fn credit_text(ui: &mut egui::Ui) {
@@ -1647,6 +1651,8 @@ fn main() -> eframe::Result<()> {
                 app.show_welcome = smoke_welcome;
                 app.show_gallery = smoke_gallery;
                 app.show_lut_gallery = smoke_lut_gallery;
+                // Keep galleries inside the main window so the smoke screenshot captures them.
+                cc.egui_ctx.set_embed_viewports(true);
             }
             Box::new(app)
         }),

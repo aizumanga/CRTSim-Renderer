@@ -135,3 +135,38 @@ pub fn preview_style(ui: &mut egui::Ui) {
     v.selection.bg_fill = Color32::from_rgb(139, 78, 112);
     v.selection.stroke = Stroke::new(1.0_f32, Color32::WHITE);
 }
+
+/// Shows a tool window (gallery, etc.) as its own native window so it can be moved anywhere,
+/// including beside or outside the app, keeping the preview unobstructed.
+/// If viewports are embedded (unsupported platform or screenshot smoke tests), it falls back to
+/// an in-app window that may cover the whole app instead of only the preview area.
+/// Returns `false` once the user closes it.
+pub fn tool_window(
+    ctx: &egui::Context,
+    title: &str,
+    size: [f32; 2],
+    contents: impl FnOnce(&mut egui::Ui),
+) -> bool {
+    let builder = egui::ViewportBuilder::default()
+        .with_title(title)
+        .with_inner_size(size)
+        .with_min_inner_size([320., 240.]);
+    ctx.show_viewport_immediate(
+        egui::ViewportId::from_hash_of(title),
+        builder,
+        |ctx, class| {
+            if class == egui::ViewportClass::Embedded {
+                let mut open = true;
+                egui::Window::new(title)
+                    .open(&mut open)
+                    .default_size(size)
+                    .constrain_to(ctx.screen_rect())
+                    .show(ctx, contents);
+                open
+            } else {
+                egui::CentralPanel::default().show(ctx, contents);
+                !ctx.input(|i| i.viewport().close_requested())
+            }
+        },
+    )
+}
