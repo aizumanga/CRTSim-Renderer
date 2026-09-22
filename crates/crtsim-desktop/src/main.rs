@@ -63,6 +63,8 @@ struct App {
     gallery_warnings: Vec<String>,
     gallery_name: String,
     description_edit: Option<(String, String)>,
+    tool_windows: gallery::Layout,
+    tool_windows_saved: gallery::Layout,
     export_progress: Option<RenderProgress>,
     smoke_welcome: bool,
     smoke_gallery: bool,
@@ -144,6 +146,11 @@ impl App {
             }
         };
         theme.apply(ctx);
+        let tool_windows = match store.as_ref().map(gallery::Store::tool_windows) {
+            Some(Ok(windows)) => windows,
+            // Window placement is a convenience; opening at the default size is fine.
+            Some(Err(_)) | None => gallery::Layout::new(),
+        };
         let show_welcome = smoke.is_none() && store.as_ref().is_none_or(|s| s.welcome_needed());
         let mut gallery_entries = gallery::builtins();
         let mut gallery_warnings = vec![];
@@ -178,6 +185,8 @@ impl App {
             gallery_warnings,
             gallery_name: String::new(),
             description_edit: None,
+            tool_windows_saved: tool_windows.clone(),
+            tool_windows,
             export_progress: None,
             smoke_welcome: false,
             smoke_gallery: false,
@@ -1077,11 +1086,11 @@ impl App {
             return;
         };
         let last = self.video_frames.saturating_sub(1);
-        let enabled = !self.loading
-            && !self.exporting
-            && !self.dialog_open
-            && !self.show_gallery
-            && !self.show_lut_gallery;
+        // A gallery in its own OS window has its own keyboard focus, so it no longer steals
+        // the arrow keys below; only the embedded fallback shares this viewport's input.
+        let galleries_overlap =
+            ui.ctx().embed_viewports() && (self.show_gallery || self.show_lut_gallery);
+        let enabled = !self.loading && !self.exporting && !self.dialog_open && !galleries_overlap;
         let mut seek = false;
         ui.separator();
         ui.add_enabled_ui(enabled, |ui| {
@@ -1183,13 +1192,43 @@ impl App {
             }
         }
     }
+    /// Remembered placement for one tool window. Copied out so the window's contents can
+    /// still borrow `self`; write it back with `store_window_state` after the window runs.
+    fn window_state(&self, title: &str) -> chrome::ToolWindow {
+        self.tool_windows.get(title).copied().unwrap_or_default()
+    }
+    fn store_window_state(&mut self, title: &str, window: chrome::ToolWindow) {
+        self.tool_windows.insert(title.to_owned(), window);
+    }
+    /// Writes the window layout only when it actually changed, so the two-second tick that
+    /// calls this does not rewrite the file while nothing moves.
+    pub(crate) fn save_tool_windows(&mut self) {
+        if self.smoke.is_some() {
+            return;
+        }
+        let layout: gallery::Layout = self
+            .tool_windows
+            .iter()
+            .map(|(title, window)| (title.clone(), window.to_save()))
+            .collect();
+        if layout == self.tool_windows_saved {
+            return;
+        }
+        if let Some(store) = &self.store {
+            match store.set_tool_windows(&layout) {
+                Ok(()) => self.tool_windows_saved = layout,
+                Err(e) => self.error = Some(format!("Window layout could not be saved: {e:#}")),
+            }
+        }
+    }
     fn gallery_window(&mut self, ctx: &egui::Context) {
         if !self.show_gallery || self.show_welcome {
             return;
         }
         let mut selected = None;
         let mut edit = None;
-        let open = chrome::tool_window(ctx, "Preset gallery", [600., 500.], |ui| {
+        let mut window = self.window_state("Preset gallery");
+        let open = chrome::tool_window(ctx, "Preset gallery", [600., 500.], &mut window, |ui| {
             ui.add_enabled_ui(!self.dialog_open, |ui| {
                 ui.label("Save your current settings here to find them again after restarting the app.");
                 ui.horizontal(|ui| {
@@ -1238,6 +1277,7 @@ impl App {
             // Shown inside the gallery's own window, next to the preset being edited.
             self.description_window(ui.ctx());
         });
+        self.store_window_state("Preset gallery", window);
         self.show_gallery = open;
         if let Some(config) = selected {
             self.replace_config(config);
@@ -1335,11 +1375,13 @@ impl App {
                     }
                 });
         } else if self.show_credits {
-            let mut open = true;
-            egui::Window::new("Credits & support")
-                .open(&mut open)
-                .default_width(560.)
-                .show(ctx, Self::credit_text);
+            let mut window = self.window_state("Credits & support");
+            // A native window clips instead of growing, so the long credits get a scroll area.
+            let open =
+                chrome::tool_window(ctx, "Credits & support", [560., 620.], &mut window, |ui| {
+                    egui::ScrollArea::vertical().show(ui, Self::credit_text);
+                });
+            self.store_window_state("Credits & support", window);
             self.show_credits = open;
         }
     }
@@ -1578,6 +1620,7 @@ impl Drop for App {
     fn drop(&mut self) {
         self.stop_playback();
         self.save_session();
+        self.save_tool_windows();
         self.cancel.store(true, Ordering::Relaxed);
         let _ = self.jobs.send(Job::Shutdown);
         if let Some(thread) = self.worker_thread.take() {

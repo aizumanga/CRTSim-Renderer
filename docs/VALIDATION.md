@@ -2,6 +2,37 @@
 
 This is a runnable prototype, not a claim of completed cross-platform visual parity.
 
+## Golden-image rendering regression
+
+`cargo test -p crtsim-core --test golden -- --ignored --nocapture` compares nine rendered
+frames against images committed in `crates/crtsim-core/tests/golden/`. The CI fixtures show
+that a render finished; these show that it still produces the same picture. One case per route
+the renderer can take: the reference frame and its signal, both composite phases, linear-light,
+the antialiased mask, screen-only, a bundled NES LUT, and the second frame of a sequence, which
+is the only case that sees frame-to-frame persistence.
+
+Comparison is effectively bit-exact (max one 0-255 step on any channel, mean under 0.002).
+That is not a cosmetic choice: perceptual limits loose enough to survive a driver change were
+measured against a deliberate regression -- luma weights rounded to 0.30/0.59/0.11 -- and
+missed it in all nine cases, because that edit moves the mean by only 0.015-0.039 steps. A
+single driver renders a frame bit-exactly, so tight limits are what makes the test able to
+fail at all.
+
+The driver that produced the goldens is recorded in `tests/golden/driver.txt`, and a different
+driver version fails with that message rather than with pixel differences. A Mesa upgrade in CI
+is therefore a deliberate review point, not a silent shift.
+
+After an intended rendering change, refresh and review the image diff:
+
+```sh
+CRTSIM_UPDATE_GOLDEN=1 cargo test -p crtsim-core --test golden -- --ignored
+```
+
+A mismatch writes the rendered frame and a 64x-amplified difference image into
+`$CRTSIM_TEST_OUTPUT/golden-failures/`, which the Vulkan job uploads with the other fixtures
+even when it fails. When the goldens have to be regenerated against a driver only CI has, an
+update run there leaves them in the same uploaded directory to download and commit.
+
 ## Phase 2 checks
 
 CPU tests cover old JSON defaults, exact neutral grading, gray chroma output, gallery persistence, welcome acknowledgement,

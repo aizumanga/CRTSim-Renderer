@@ -46,6 +46,8 @@ jobs:
       - name: Install software Vulkan driver
         run: sudo apt-get update -qq && sudo apt-get install -y mesa-vulkan-drivers libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libegl1-mesa-dev xvfb ffmpeg
       - run: cargo test --locked -p crtsim-core gpu_smoke -- --ignored --nocapture
+      - name: Golden-image rendering regression
+        run: cargo test --locked -p crtsim-core --test golden -- --ignored --nocapture
       - name: Video history, FFmpeg and audio integration
         run: |
           cargo test --locked -p crtsim-core video_history -- --ignored --nocapture
@@ -79,6 +81,8 @@ jobs:
           xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-desktop -- output/video-input.mkv --backend vulkan --smoke-test output/video-desktop.png
           xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-desktop -- output/video-input.mkv --backend vulkan --smoke-test output/video-export-window.png --smoke-export
       - uses: actions/upload-artifact@v4
+        # Runs on failure too: a golden mismatch writes its rendered and diff images here.
+        if: always()
         with:
           name: renderer-fixtures
           path: output/

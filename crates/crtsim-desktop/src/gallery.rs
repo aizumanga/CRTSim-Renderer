@@ -100,6 +100,9 @@ pub fn builtins() -> Vec<Entry> {
     ]
 }
 
+/// Remembered tool window placements, keyed by window title.
+pub type Layout = std::collections::BTreeMap<String, crate::chrome::ToolWindow>;
+
 #[derive(Clone)]
 pub struct Store {
     pub root: PathBuf,
@@ -153,6 +156,26 @@ impl Store {
         crate::files::save_atomic(&self.root.join("theme-v1.txt"), |file| {
             use std::io::Write;
             writeln!(file, "{}", theme.id())?;
+            Ok(())
+        })
+    }
+    /// Tool window placements from the last run, keyed by window title. A missing or
+    /// unreadable file is not worth an error: windows simply open at their default size.
+    pub fn tool_windows(&self) -> Result<Layout> {
+        let path = self.root.join("windows-v1.json");
+        if !path.exists() {
+            return Ok(Layout::new());
+        }
+        ensure!(
+            path.metadata()?.len() <= 8192,
+            "Saved window layout is too large"
+        );
+        Ok(serde_json::from_slice(&std::fs::read(path)?)?)
+    }
+    pub fn set_tool_windows(&self, windows: &Layout) -> Result<()> {
+        std::fs::create_dir_all(&self.root)?;
+        crate::files::save_atomic(&self.root.join("windows-v1.json"), |file| {
+            serde_json::to_writer_pretty(file, windows)?;
             Ok(())
         })
     }
@@ -270,6 +293,25 @@ mod tests {
         assert_eq!(s.theme().unwrap(), None);
         s.set_theme(Theme::SkyDiary).unwrap();
         assert_eq!(s.theme().unwrap(), Some(Theme::SkyDiary));
+        assert!(s.tool_windows().unwrap().is_empty());
+        let mut layout = Layout::new();
+        layout.insert(
+            "LUT gallery".into(),
+            crate::chrome::ToolWindow {
+                placement: Some(crate::chrome::Placement {
+                    position: [120., 48.],
+                    size: [640., 520.],
+                }),
+                on_top: true,
+                ..Default::default()
+            },
+        );
+        s.set_tool_windows(&layout).unwrap();
+        assert_eq!(s.tool_windows().unwrap(), layout);
+        std::fs::write(temp.path().join("windows-v1.json"), "x".repeat(8193)).unwrap();
+        assert!(s.tool_windows().is_err());
+        s.set_tool_windows(&Layout::new()).unwrap();
+        assert!(s.tool_windows().unwrap().is_empty());
         let c = crate::model::general();
         s.save("My CRT", &c, (1216, 832)).unwrap();
         assert!(s.save("my crt", &c, (1, 1)).is_err());
