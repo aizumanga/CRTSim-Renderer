@@ -552,33 +552,98 @@ impl App {
             }
         }
         if self.workflow.show_queue {
-            let mut open = true;
             let mut remove = None;
             let mut move_up = None;
-            egui::Window::new("Batch export queue").open(&mut open).default_width(650.).show(ctx,|ui| {
-                ui.label("Each job keeps the settings used when it was added. Videos use MKV to preserve more tracks.");
-                ui.horizontal(|ui| {
-                    if ui.add_enabled(!self.dialog_open && self.workflow.export_dialog.is_none(),egui::Button::new("Add files…")).clicked() {self.batch_dialog(ctx);}
-                    if ui.add_enabled(!self.dialog_open && self.workflow.export_dialog.is_none(),egui::Button::new("Video settings…")).clicked() {self.open_video_export(true);}
-                    if ui.button(if self.workflow.queue_running {"Pause after current"} else {"Start / resume"}).clicked() {self.stop_playback();self.workflow.queue_running = !self.workflow.queue_running;}
-                    if ui.add_enabled(self.workflow.active.is_some(),egui::Button::new("Cancel current")).clicked() {self.cancel.store(true,Ordering::Relaxed);self.workflow.queue_running=false;}
-                });
-                egui::ScrollArea::vertical().max_height(400.).show(ui,|ui| {
-                    for (i,q) in self.workflow.queue.iter_mut().enumerate() {
-                        ui.push_id(i,|ui| {ui.group(|ui| {
-                            ui.label(q.source.display().to_string());ui.small(format!("→ {}",q.output.display()));
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label(match &q.status {QueueStatus::Pending=>"Pending".into(),QueueStatus::Running=>"Exporting…".into(),QueueStatus::Done=>"Saved".into(),QueueStatus::Cancelled=>"Cancelled".into(),QueueStatus::Failed(e)=>format!("Failed: {e}")});
-                                if q.status!=QueueStatus::Running && self.workflow.active.is_none() {
-                                    if matches!(q.status,QueueStatus::Failed(_)|QueueStatus::Cancelled) && ui.small_button("Retry").clicked() {q.status=QueueStatus::Pending;}
-                                    if i>0 && ui.small_button("Move up").clicked() {move_up=Some(i);}
-                                    if ui.small_button("Remove").clicked() {remove=Some(i);}
-                                }
-                            });
-                        });});
-                    }
-                });
-            });
+            let mut window = self.window_state("Batch export queue");
+            let open = crate::chrome::tool_window(
+                ctx,
+                "Batch export queue",
+                [650., 560.],
+                &mut window,
+                |ui| {
+                    ui.label("Each job keeps the settings used when it was added. Videos use MKV to preserve more tracks.");
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(
+                                !self.dialog_open && self.workflow.export_dialog.is_none(),
+                                egui::Button::new("Add files…"),
+                            )
+                            .clicked()
+                        {
+                            self.batch_dialog(ctx);
+                        }
+                        if ui
+                            .add_enabled(
+                                !self.dialog_open && self.workflow.export_dialog.is_none(),
+                                egui::Button::new("Video settings…"),
+                            )
+                            .clicked()
+                        {
+                            self.open_video_export(true);
+                        }
+                        if ui
+                            .button(if self.workflow.queue_running {
+                                "Pause after current"
+                            } else {
+                                "Start / resume"
+                            })
+                            .clicked()
+                        {
+                            self.stop_playback();
+                            self.workflow.queue_running = !self.workflow.queue_running;
+                        }
+                        if ui
+                            .add_enabled(
+                                self.workflow.active.is_some(),
+                                egui::Button::new("Cancel current"),
+                            )
+                            .clicked()
+                        {
+                            self.cancel.store(true, Ordering::Relaxed);
+                            self.workflow.queue_running = false;
+                        }
+                    });
+                    egui::ScrollArea::vertical()
+                        .max_height(400.)
+                        .show(ui, |ui| {
+                            for (i, q) in self.workflow.queue.iter_mut().enumerate() {
+                                ui.push_id(i, |ui| {
+                                    ui.group(|ui| {
+                                        ui.label(q.source.display().to_string());
+                                        ui.small(format!("→ {}", q.output.display()));
+                                        ui.horizontal_wrapped(|ui| {
+                                            ui.label(match &q.status {
+                                                QueueStatus::Pending => "Pending".into(),
+                                                QueueStatus::Running => "Exporting…".into(),
+                                                QueueStatus::Done => "Saved".into(),
+                                                QueueStatus::Cancelled => "Cancelled".into(),
+                                                QueueStatus::Failed(e) => format!("Failed: {e}"),
+                                            });
+                                            if q.status != QueueStatus::Running
+                                                && self.workflow.active.is_none()
+                                            {
+                                                if matches!(
+                                                    q.status,
+                                                    QueueStatus::Failed(_) | QueueStatus::Cancelled
+                                                ) && ui.small_button("Retry").clicked()
+                                                {
+                                                    q.status = QueueStatus::Pending;
+                                                }
+                                                if i > 0 && ui.small_button("Move up").clicked() {
+                                                    move_up = Some(i);
+                                                }
+                                                if ui.small_button("Remove").clicked() {
+                                                    remove = Some(i);
+                                                }
+                                            }
+                                        });
+                                    });
+                                });
+                            }
+                        });
+                },
+            );
+            self.store_window_state("Batch export queue", window);
             if let Some(i) = remove {
                 self.workflow.queue.remove(i);
             }
@@ -591,6 +656,7 @@ impl App {
         if self.workflow.last_save.elapsed() > Duration::from_secs(2) {
             self.workflow.last_save = Instant::now();
             self.save_session();
+            self.save_tool_windows();
         }
         if self.smoke.is_none() {
             ctx.request_repaint_after(Duration::from_secs(2));

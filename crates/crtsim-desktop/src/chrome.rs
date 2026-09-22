@@ -136,37 +136,143 @@ pub fn preview_style(ui: &mut egui::Ui) {
     v.selection.stroke = Stroke::new(1.0_f32, Color32::WHITE);
 }
 
+/// Where a tool window sits on screen, remembered between runs.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Placement {
+    /// Outer position, including decorations, as `with_position` expects.
+    pub position: [f32; 2],
+    /// Inner size, excluding decorations, as `with_inner_size` expects.
+    pub size: [f32; 2],
+}
+
+/// Remembered geometry and behavior for one tool window.
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ToolWindow {
+    /// Applied when the window opens, then left alone. egui turns a changed builder value
+    /// into a move/resize command, so rewriting this every frame would fight the user
+    /// dragging or resizing the window.
+    pub placement: Option<Placement>,
+    /// Keep the window above the main one.
+    pub on_top: bool,
+    /// Where the window actually is now; folded into `placement` only when saving.
+    /// Only `tool_window` should write this: feeding it back in while the window is open
+    /// would make the builder fight the drag it just observed.
+    #[serde(skip)]
+    pub(crate) live: Option<Placement>,
+}
+impl ToolWindow {
+    /// The state worth writing to disk: where the window ended up, not where it opened.
+    pub fn to_save(self) -> Self {
+        Self {
+            placement: self.live.or(self.placement),
+            on_top: self.on_top,
+            live: None,
+        }
+    }
+}
+
 /// Shows a tool window (gallery, etc.) as its own native window so it can be moved anywhere,
-/// including beside or outside the app, keeping the preview unobstructed.
+/// including beside or outside the app, keeping the preview unobstructed. `window` carries the
+/// remembered placement and keep-on-top choice in, and the live placement back out.
 /// If viewports are embedded (unsupported platform or screenshot smoke tests), it falls back to
 /// an in-app window that may cover the whole app instead of only the preview area.
 /// Returns `false` once the user closes it.
 pub fn tool_window(
     ctx: &egui::Context,
     title: &str,
-    size: [f32; 2],
+    default_size: [f32; 2],
+    window: &mut ToolWindow,
     contents: impl FnOnce(&mut egui::Ui),
 ) -> bool {
-    let builder = egui::ViewportBuilder::default()
+    let mut builder = egui::ViewportBuilder::default()
         .with_title(title)
-        .with_inner_size(size)
-        .with_min_inner_size([320., 240.]);
-    ctx.show_viewport_immediate(
+        .with_inner_size(window.placement.map_or(default_size, |p| p.size))
+        .with_min_inner_size([320., 240.])
+        .with_window_level(if window.on_top {
+            egui::WindowLevel::AlwaysOnTop
+        } else {
+            egui::WindowLevel::Normal
+        });
+    if let Some(placement) = window.placement {
+        builder = builder.with_position(placement.position);
+    }
+    let mut on_top = window.on_top;
+    let mut live = None;
+    let open = ctx.show_viewport_immediate(
         egui::ViewportId::from_hash_of(title),
         builder,
         |ctx, class| {
             if class == egui::ViewportClass::Embedded {
+                // An in-app window already floats above the panels, so keep-on-top has
+                // nothing to do and no native geometry to remember.
                 let mut open = true;
                 egui::Window::new(title)
                     .open(&mut open)
-                    .default_size(size)
+                    .default_size(default_size)
                     .constrain_to(ctx.screen_rect())
                     .show(ctx, contents);
                 open
             } else {
-                egui::CentralPanel::default().show(ctx, contents);
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.checkbox(&mut on_top, "Keep on top")
+                        .on_hover_text("Keep this window above the main window");
+                    ui.separator();
+                    contents(ui);
+                });
+                live = ctx.input(|i| {
+                    let info = i.viewport();
+                    Some(Placement {
+                        position: info.outer_rect?.min.into(),
+                        size: info.inner_rect?.size().into(),
+                    })
+                });
                 !ctx.input(|i| i.viewport().close_requested())
             }
         },
-    )
+    );
+    window.on_top = on_top;
+    if live.is_some() {
+        window.live = live;
+    }
+    if !open {
+        // Folding the live geometry in on close means reopening the window in this same
+        // session brings it back to where it was, not to where it first appeared.
+        *window = window.to_save();
+    }
+    open
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn saved_placement_is_where_the_window_ended_up() {
+        let opened_at = Placement {
+            position: [10., 20.],
+            size: [600., 500.],
+        };
+        let dragged_to = Placement {
+            position: [700., 300.],
+            size: [640., 480.],
+        };
+        // Nothing to remember yet: the window has never been placed.
+        assert_eq!(ToolWindow::default().to_save().placement, None);
+        // Opened but never moved: keep what it opened with.
+        let untouched = ToolWindow {
+            placement: Some(opened_at),
+            on_top: true,
+            live: None,
+        };
+        assert_eq!(untouched.to_save().placement, Some(opened_at));
+        assert!(untouched.to_save().on_top);
+        // Moved: the live geometry wins, and is not fed back as an opening placement.
+        let moved = ToolWindow {
+            placement: Some(opened_at),
+            on_top: false,
+            live: Some(dragged_to),
+        };
+        assert_eq!(moved.to_save().placement, Some(dragged_to));
+        assert_eq!(moved.to_save().live, None);
+    }
 }
