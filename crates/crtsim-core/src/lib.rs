@@ -1,4 +1,5 @@
 pub mod config;
+mod gpu_prepare;
 pub mod mesh;
 pub mod nes_luts;
 pub mod workflow;
@@ -12,6 +13,8 @@ use std::sync::{
     Arc,
 };
 use wgpu::util::DeviceExt;
+
+pub use gpu_prepare::PrepareOn;
 
 pub const SHADER: &str = include_str!("../../../shaders/crtsim.wgsl");
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -74,6 +77,7 @@ struct Workspace {
     _depth: wgpu::Texture,
     depth_view: wgpu::TextureView,
     readback: Readback,
+    prepare: gpu_prepare::Cache,
     signal_size: (u32, u32),
     output_size: (u32, u32),
     surface_format: wgpu::TextureFormat,
@@ -121,6 +125,7 @@ impl Workspace {
             _depth: depth,
             depth_view,
             readback: Readback::new(device, output_size),
+            prepare: Default::default(),
             signal_size,
             output_size,
             surface_format,
@@ -227,9 +232,16 @@ pub struct Renderer {
     frame: GpuMesh,
     artifacts: Target,
     mask: Target,
+    prepare_pipelines: gpu_prepare::Pipelines,
+    /// Where the prepare step runs. The GPU unless a caller asks otherwise, to compare the two.
+    pub prepare: PrepareOn,
     pub adapter: wgpu::AdapterInfo,
 }
+/// A rendered still. `clean` and `signal` are read back only by a render that asks for them --
+/// `render` and its progress variants do; a video frame or a preview does not -- and are
+/// otherwise empty.
 pub struct Rendered {
+    /// The prepared signal: the source resized, edited and graded, before the simulation.
     pub clean: RgbaImage,
     pub signal: RgbaImage,
     pub crt: RgbaImage,
@@ -428,6 +440,7 @@ impl Renderer {
                 }),
             );
         }
+        let prepare_pipelines = gpu_prepare::Pipelines::new(&device, &queue);
         if let Some(error) = device.pop_error_scope().await {
             anyhow::bail!("shader/pipeline validation: {error}");
         }
@@ -516,6 +529,8 @@ impl Renderer {
             frame,
             artifacts,
             mask,
+            prepare_pipelines,
+            prepare: PrepareOn::default(),
             adapter: info,
         })
     }
@@ -689,6 +704,7 @@ impl Renderer {
             "image exceeds adapter texture limit {limit}"
         );
         // Conservative working-set guard: color targets, depth, readback and history.
+        const BUDGET: u64 = 1_500_000_000;
         let linear = c.color_mode == ColorMode::LinearLight;
         let base_pipeline = if linear { 6 } else { 0 };
         let surface_format = if linear {
@@ -699,10 +715,24 @@ impl Renderer {
         let estimated = u64::from(out.0) * u64::from(out.1) * if linear { 48 } else { 24 }
             + u64::from(sig.0) * u64::from(sig.1) * 16;
         ensure!(
-            estimated <= 1_500_000_000,
+            estimated <= BUDGET,
             "estimated working set exceeds Phase 0 budget; choose a smaller preset"
         );
-        let clean = config::prepare(input, c)?;
+        // Preparing on the device puts the input there as it is, plus the resize's intermediate.
+        // Where that does not fit -- a 16384-pixel image on a device limited to 8192, or a huge
+        // input kept at native size -- the render is still accepted, as it always was, by
+        // preparing here instead.
+        let (width, height) = input.dimensions();
+        let gpu_prepare = self.prepare == PrepareOn::Gpu
+            && width <= limit
+            && height <= limit
+            && estimated + u64::from(width) * (u64::from(height) * 4 + u64::from(sig.1) * 16)
+                <= BUDGET;
+        let clean = if gpu_prepare {
+            None
+        } else {
+            Some(config::prepare(input, c)?)
+        };
         let workspace = sequence
             .workspace
             .get_or_insert_with(|| Workspace::new(&self.device, sig, out, surface_format));
@@ -710,7 +740,23 @@ impl Renderer {
             workspace.matches(sig, out, surface_format),
             "Start a new video sequence after changing signal size, output size or color mode"
         );
-        workspace.source.upload(&self.queue, &clean);
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("still job"),
+            });
+        match &clean {
+            Some(clean) => workspace.source.upload(&self.queue, clean),
+            None => self.prepare_pipelines.encode(
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                &mut workspace.prepare,
+                input,
+                c,
+                &workspace.source,
+            ),
+        }
         report(0.05, "Image prepared".into());
         let first = sequence.history.is_none();
         let history = sequence.history.get_or_insert_with(|| {
@@ -764,11 +810,6 @@ impl Renderer {
             bloom: [c.bloom, c.bloom_power, c.bloom_spread, 0.],
             processing: [if linear { 1. } else { 0. }, 0., 0., 0.],
         };
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("still job"),
-            });
         // Explicitly reset both feedback surfaces; each job is independent.
         for t in history.iter().filter(|_| first) {
             let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -884,6 +925,11 @@ impl Renderer {
             self.readback(signal)?
         } else {
             RgbaImage::new(0, 0)
+        };
+        let clean = match clean {
+            Some(clean) => clean,
+            None if debug => self.readback(source)?,
+            None => RgbaImage::new(0, 0),
         };
         report(
             0.9,
@@ -1047,6 +1093,80 @@ mod tests {
             r.readback(&target).unwrap(),
             r.render(&source, &c).unwrap().crt
         );
+    }
+
+    /// The GPU prepare step against the CPU one it replaced, across a spread of routes and
+    /// settings wider than the goldens pin. Not tied to a recorded driver like the goldens: the
+    /// shader repeats the CPU's arithmetic, so on any driver the two differ only where float
+    /// rounding lands a value on the other side of a half step.
+    #[test]
+    #[ignore = "requires a Vulkan adapter"]
+    fn gpu_prepare_matches_cpu_prepare() {
+        let mut r = pollster::block_on(Renderer::new(wgpu::Backends::VULKAN)).unwrap();
+        let source = RgbaImage::from_fn(301, 187, |x, y| {
+            let v = (x * 37 + y * 101 + x * y * 13) % 256;
+            let a = if (x / 40 + y / 30) % 3 == 0 {
+                (x + y) % 256
+            } else {
+                255
+            };
+            image::Rgba([v as u8, (v * 7 % 256) as u8, (255 - v) as u8, a as u8])
+        });
+        let lut = Arc::new(nes_luts::load(7).unwrap());
+        let mut state = 0x2545_f491_u32;
+        let mut next = |range: f32| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            (state as f32 / u32::MAX as f32 * 2. - 1.) * range
+        };
+        let mut worst = 0;
+        let mut differing = 0;
+        let mut total = 0;
+        for case in 0..48 {
+            let signal = ["original", "native", "240p", "480p", "97x301", "600x100"][case % 6];
+            let mut c = Config {
+                signal: signal.into(),
+                output: "64x48".into(),
+                warmup: 0,
+                filter: if case % 2 == 0 {
+                    config::Filter::Lanczos
+                } else {
+                    config::Filter::Nearest
+                },
+                ..Config::default()
+            };
+            c.source.background = [(case * 40 % 256) as u8, 90, 200];
+            if case % 3 == 0 {
+                c.source.rotation = next(180.);
+                c.source.zoom = 1. + next(0.6);
+                c.source.position = [next(0.3), next(0.3)];
+                c.source.crop = [next(0.2).abs(), next(0.2).abs(), 0.1, 0.];
+                c.source.checkerboard = case % 4 == 0;
+            }
+            if case % 4 == 1 {
+                c.lut = Some(lut.clone());
+            }
+            if case % 5 < 2 {
+                c.hue = next(180.);
+                c.chroma = 1. + next(1.);
+            }
+            r.prepare = PrepareOn::Cpu;
+            let cpu = r.render(&source, &c).unwrap().clean;
+            r.prepare = PrepareOn::Gpu;
+            let gpu = r.render(&source, &c).unwrap().clean;
+            assert_eq!(cpu.dimensions(), gpu.dimensions(), "case {case}");
+            for (a, b) in cpu.pixels().zip(gpu.pixels()) {
+                for channel in 0..4 {
+                    let delta = a[channel].abs_diff(b[channel]);
+                    worst = worst.max(delta);
+                    differing += usize::from(delta > 0);
+                    total += 1;
+                }
+            }
+        }
+        println!("{differing} of {total} channels differ, by at most {worst} step(s)");
+        assert!(worst <= 1, "GPU prepare differs by {worst} steps");
     }
 
     #[test]
