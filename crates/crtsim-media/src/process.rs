@@ -84,6 +84,11 @@ impl Process {
     pub fn stdout(&mut self) -> ChildStdout {
         self.child.lock().unwrap().stdout.take().unwrap()
     }
+    /// Stops the process now, so a thread blocked on one of its pipes gets an error or end of
+    /// file instead of waiting for output that is no longer wanted.
+    pub fn kill(&self) {
+        let _ = self.child.lock().unwrap().kill();
+    }
     pub fn wait(&mut self) -> Result<()> {
         let status = loop {
             super::check_cancel(&self.cancel)?;

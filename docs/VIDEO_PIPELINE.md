@@ -17,6 +17,12 @@ No frame interpolation is performed: conversion to 60 Hz holds/drops source fram
 Stable mode uses each channel's original persistence weight raised to `60 / output_fps`; spatial persistence still makes this an approximation.
 Each export starts a fresh sequence, independent of all previews and prior jobs.
 
+Steps 3 and 4 overlap: one thread reads the decoder while another writes the encoder, with at
+most two frames queued on either side of the render loop, so decoding, rendering and encoding
+run at the same time instead of in turn. Frames stay in order. On a GPU whose frames render in
+tens of milliseconds, that was measured to shorten a 1080p export by about a third. On the
+software Vulkan driver in CI the render itself dominates, and the gain is far smaller.
+
 ## Resource ownership and cancellation
 
 Each FFmpeg process has a bounded stderr collector and a monitor that can kill the process while frame pipe I/O is blocked.
