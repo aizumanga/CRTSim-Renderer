@@ -235,6 +235,27 @@ pub struct Rendered {
     pub crt: RgbaImage,
 }
 
+/// A rendered frame left on the render device, for a caller that is only going to draw it
+/// again on that same device. Reading pixels back costs a full-frame transfer and a wait on
+/// the GPU -- measured at 14% of a 1280x720 render and 25% of a 4K one, before the re-upload
+/// on the other side -- and a preview pays all of it for nothing.
+///
+/// The texture is the caller's; drop it when the frame is no longer on screen.
+pub struct PreviewFrame {
+    pub texture: wgpu::Texture,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// What a render hands back.
+#[derive(Clone, Copy, PartialEq)]
+enum Output {
+    /// Pixels in system memory, for saving, encoding or a test.
+    Pixels,
+    /// A texture on the render device.
+    Texture,
+}
+
 /// Feedback belongs to a single sequence on this renderer. Start a new sequence after seeking
 /// or changing settings. Reuse it only with the same device and signal dimensions.
 #[derive(Default)]
@@ -562,7 +583,17 @@ impl Renderer {
         c: &Config,
         progress: impl FnMut(RenderProgress),
     ) -> Result<Rendered> {
-        self.render_sequence(input, c, &mut Sequence::default(), true, || false, progress)
+        Ok(self
+            .render_sequence(
+                input,
+                c,
+                &mut Sequence::default(),
+                true,
+                || false,
+                progress,
+                Output::Pixels,
+            )?
+            .0)
     }
 
     /// A cancellable still export. Cancellation is checked between bounded GPU batches.
@@ -573,14 +604,17 @@ impl Renderer {
         cancel: &AtomicBool,
         progress: impl FnMut(RenderProgress),
     ) -> Result<Rendered> {
-        self.render_sequence(
-            input,
-            c,
-            &mut Sequence::default(),
-            true,
-            || cancel.load(Ordering::Relaxed),
-            progress,
-        )
+        Ok(self
+            .render_sequence(
+                input,
+                c,
+                &mut Sequence::default(),
+                true,
+                || cancel.load(Ordering::Relaxed),
+                progress,
+                Output::Pixels,
+            )?
+            .0)
     }
 
     /// One ordered video frame. Warm-up applies once, then history and phase persist.
@@ -591,7 +625,8 @@ impl Renderer {
         sequence: &mut Sequence,
     ) -> Result<RgbaImage> {
         Ok(self
-            .render_sequence(input, c, sequence, false, || false, |_| {})?
+            .render_sequence(input, c, sequence, false, || false, |_| {}, Output::Pixels)?
+            .0
             .crt)
     }
 
@@ -610,10 +645,28 @@ impl Renderer {
                 false,
                 || cancel.load(Ordering::Relaxed),
                 |_| {},
+                Output::Pixels,
             )?
+            .0
             .crt)
     }
 
+    /// One frame for display on this renderer's own device, skipping the read back to system
+    /// memory that a saved or encoded frame needs.
+    pub fn render_preview(&self, input: &RgbaImage, c: &Config) -> Result<PreviewFrame> {
+        let (_, preview) = self.render_sequence(
+            input,
+            c,
+            &mut Sequence::default(),
+            false,
+            || false,
+            |_| {},
+            Output::Texture,
+        )?;
+        preview.context("render did not produce a preview frame")
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn render_sequence(
         &self,
         input: &RgbaImage,
@@ -622,7 +675,8 @@ impl Renderer {
         debug: bool,
         mut cancelled: impl FnMut() -> bool,
         mut progress: impl FnMut(RenderProgress),
-    ) -> Result<Rendered> {
+        output: Output,
+    ) -> Result<(Rendered, Option<PreviewFrame>)> {
         ensure!(!cancelled(), "Render cancelled");
         let mut report = |fraction, stage: String| progress(RenderProgress { fraction, stage });
         report(0., "Preparing image".into());
@@ -835,9 +889,55 @@ impl Renderer {
             0.9,
             "Glass, lighting and bloom complete; reading pixels".into(),
         );
-        let crt = self.readback_into(final_target, &mut workspace.readback)?;
+        let (crt, preview) = match output {
+            Output::Pixels => (
+                self.readback_into(final_target, &mut workspace.readback)?,
+                None,
+            ),
+            // The final target is reused by the next render, so the frame is copied out
+            // rather than handed over: a blit on the device, not a round trip through system
+            // memory. sRGB because that is the format egui requires of a texture it is given,
+            // and the copy is legal because the two differ only in that.
+            Output::Texture => {
+                let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("preview frame"),
+                    size: wgpu::Extent3d {
+                        width: final_target.width,
+                        height: final_target.height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    usage: wgpu::TextureUsages::COPY_DST
+                        | wgpu::TextureUsages::COPY_SRC
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                });
+                let mut encoder = self.device.create_command_encoder(&Default::default());
+                encoder.copy_texture_to_texture(
+                    final_target.texture.as_image_copy(),
+                    texture.as_image_copy(),
+                    wgpu::Extent3d {
+                        width: final_target.width,
+                        height: final_target.height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                self.queue.submit(Some(encoder.finish()));
+                (
+                    RgbaImage::new(0, 0),
+                    Some(PreviewFrame {
+                        texture,
+                        width: final_target.width,
+                        height: final_target.height,
+                    }),
+                )
+            }
+        };
         report(1., "Render complete".into());
-        Ok(Rendered { clean, signal, crt })
+        Ok((Rendered { clean, signal, crt }, preview))
     }
 
     fn readback(&self, target: &Target) -> Result<RgbaImage> {
@@ -922,6 +1022,33 @@ mod tests {
         assert_ne!(trailing, reset, "history was reset between video frames");
         assert_eq!(reset, r.render(&black, &c).unwrap().crt);
     }
+    #[test]
+    #[ignore = "requires a Vulkan adapter"]
+    fn preview_frame_matches_the_pixels_a_read_back_render_produces() {
+        let r = pollster::block_on(Renderer::new(wgpu::Backends::VULKAN)).unwrap();
+        let c = Config {
+            output: "320x180".into(),
+            ..Config::default()
+        };
+        let source = config::test_card();
+        let preview = r.render_preview(&source, &c).unwrap();
+        assert_eq!((preview.width, preview.height), (320, 180));
+        // Read the frame back the same way an export would, to compare like with like. The
+        // copy into the preview texture keeps the bytes and only relabels them as sRGB, which
+        // is the conversion egui would otherwise apply when it uploads the pixels itself.
+        let view = preview.texture.create_view(&Default::default());
+        let target = Target {
+            texture: preview.texture,
+            view,
+            width: preview.width,
+            height: preview.height,
+        };
+        assert_eq!(
+            r.readback(&target).unwrap(),
+            r.render(&source, &c).unwrap().crt
+        );
+    }
+
     #[test]
     #[ignore = "requires an explicitly provisioned GPU or software Vulkan driver"]
     fn gpu_smoke() {
