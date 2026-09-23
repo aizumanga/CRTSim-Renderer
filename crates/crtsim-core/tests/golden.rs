@@ -1,7 +1,7 @@
 //! Golden-image regression tests.
 //!
 //! The CI fixtures prove a render *finished*; these prove it still produces the same picture.
-//! They are the safety net for changes to the shader, the CPU prepare step or the pass order,
+//! They are the safety net for changes to the shader, the prepare step or the pass order,
 //! where a wrong constant silently shifts every frame instead of failing.
 //!
 //! Run them against a software Vulkan driver, which is repeatable enough to compare:
@@ -141,7 +141,7 @@ fn cases(renderer: &Renderer) -> Vec<(&'static str, RgbaImage)> {
 
     let reference = render(&base());
     let mut cases = vec![
-        // The CRT picture and, separately, the signal feeding it: a regression in the CPU
+        // The CRT picture and, separately, the signal feeding it: a regression in the
         // prepare step or the composite pass shows up in the signal before the CRT passes
         // have a chance to hide it.
         ("reference", reference.crt),
@@ -213,7 +213,132 @@ fn cases(renderer: &Renderer) -> Vec<(&'static str, RgbaImage)> {
             .expect("second sequence frame"),
     ));
 
+    cases.extend(prepare_cases(renderer));
     cases
+}
+
+/// A source that makes a resize visible: smooth gradients, hard edges at odd angles and
+/// detail finer than any signal it is scaled to, where the test card is already signal-sized
+/// and only ever reaches prepare as an identity.
+fn detailed_source() -> RgbaImage {
+    RgbaImage::from_fn(640, 480, |x, y| {
+        let ring = ((x as i32 - 320).pow(2) + (y as i32 - 240).pow(2)) / 96;
+        let stripes = if (x + 2 * y) % 7 < 3 { 230 } else { 20 };
+        let (r, g, b) = if y < 160 {
+            ((x * 255 / 639) as u8, (y * 255 / 159) as u8, 128)
+        } else if y < 320 {
+            (stripes, (ring % 256) as u8, 255 - stripes)
+        } else {
+            let check = if (x / 3 + y / 3) % 2 == 0 { 250 } else { 5 };
+            (check, 255 - (x * 200 / 639) as u8, check / 2)
+        };
+        image::Rgba([r, g, b, 255])
+    })
+}
+
+/// The same source with a transparent hole and a translucent band, for the alpha composite.
+fn translucent_source() -> RgbaImage {
+    let mut image = detailed_source();
+    for (x, y, p) in image.enumerate_pixels_mut() {
+        p[3] = if (200..440).contains(&x) && (140..340).contains(&y) {
+            0
+        } else if (40..120).contains(&y) {
+            (x * 255 / 639) as u8
+        } else {
+            255
+        };
+    }
+    image
+}
+
+/// The prepare step feeds every frame, but the cases above reach it only as an identity: the
+/// test card is already 256x224, opaque and ungraded. These capture its output directly -- the
+/// `clean` image, before the simulation can soften a difference -- once per route through it:
+/// each resize filter both ways, the alpha composite, the source edits with each sampler, and
+/// the grade with a LUT so the order of the two is pinned too.
+fn prepare_cases(renderer: &Renderer) -> Vec<(&'static str, RgbaImage)> {
+    let detailed = detailed_source();
+    let translucent = translucent_source();
+    let card = config::test_card();
+    let edit = crtsim_core::workflow::SourceEdit {
+        crop: [0.05, 0.1, 0.15, 0.02],
+        rotation: 7.5,
+        zoom: 1.3,
+        position: [0.06, -0.04],
+        background: [30, 60, 90],
+        checkerboard: false,
+    };
+    let lanczos = |signal: &str| Config {
+        signal: signal.into(),
+        filter: config::Filter::Lanczos,
+        ..base()
+    };
+    let nearest = |signal: &str| Config {
+        signal: signal.into(),
+        filter: config::Filter::Nearest,
+        ..base()
+    };
+    let lut = std::sync::Arc::new(nes_luts::load(3).expect("bundled LUT"));
+    let routes: Vec<(&'static str, &RgbaImage, Config)> = vec![
+        ("prepare-lanczos-down", &detailed, lanczos("200x150")),
+        ("prepare-lanczos-up", &card, lanczos("360p")),
+        ("prepare-lanczos-one-axis", &detailed, lanczos("640x224")),
+        ("prepare-nearest-down", &detailed, nearest("original")),
+        ("prepare-nearest-up", &card, nearest("480x400")),
+        (
+            "prepare-alpha",
+            &translucent,
+            Config {
+                source: crtsim_core::workflow::SourceEdit {
+                    background: [200, 40, 120],
+                    ..Default::default()
+                },
+                ..lanczos("200x150")
+            },
+        ),
+        (
+            "prepare-edit-bilinear",
+            &translucent,
+            Config {
+                source: edit.clone(),
+                ..lanczos("240x180")
+            },
+        ),
+        (
+            "prepare-edit-nearest",
+            &translucent,
+            Config {
+                source: crtsim_core::workflow::SourceEdit {
+                    checkerboard: true,
+                    ..edit.clone()
+                },
+                ..nearest("240x180")
+            },
+        ),
+        (
+            "prepare-grade",
+            &detailed,
+            Config {
+                hue: 33.,
+                chroma: 1.6,
+                ..lanczos("200x150")
+            },
+        ),
+        (
+            "prepare-lut-grade",
+            &detailed,
+            Config {
+                lut: Some(lut),
+                hue: -20.,
+                chroma: 0.7,
+                ..lanczos("200x150")
+            },
+        ),
+    ];
+    routes
+        .into_iter()
+        .map(|(name, source, c)| (name, renderer.render(source, &c).expect("render").clean))
+        .collect()
 }
 
 #[test]
