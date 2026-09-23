@@ -915,6 +915,8 @@ impl App {
             }
         });
         let before = self.config.clone();
+        // What each slider's reset returns to: the same baseline as Reset above.
+        let defaults = model::general();
         chrome::Section::new("Image & output").show(ui,|ui| {
         resolution(
             ui,
@@ -950,7 +952,7 @@ impl App {
                     "Nearest (pixel art)",
                 );
             });
-        slider(ui, "Pixel aspect", &mut self.config.pixel_aspect, 0.1..=10.);
+        slider(ui, "Pixel aspect", &mut self.config.pixel_aspect, defaults.pixel_aspect, 0.1..=10.);
         if let (Ok(signal), Ok(output)) = (
             self.config.signal_size(self.input.dimensions()),
             self.config.output_size(self.input.dimensions()),
@@ -1003,8 +1005,8 @@ impl App {
             ui.small("Linear-light glass, lighting and bloom; SDR output. The analog signal still uses the original gamma-space model.");
         }
         chrome::Section::new("Optional color grade").show(ui, |ui| {
-            slider(ui, "Hue (degrees)", &mut self.config.hue, -180.0..=180.);
-            slider(ui, "Chroma", &mut self.config.chroma, 0.0..=2.);
+            slider(ui, "Hue (degrees)", &mut self.config.hue, defaults.hue, -180.0..=180.);
+            slider(ui, "Chroma", &mut self.config.chroma, defaults.chroma, 0.0..=2.);
             ui.small("YIQ hue/chroma adjustment. This is an optional grade, not the game's unpublished NES palette LUT or a complete NTSC decoder.");
         });
         ui.checkbox(&mut self.config.mask_antialias, "Filter mask when shrinking").on_hover_text("Mipmapped mask filtering reduces moiré during minification. Turn off for Phase 0/1 reference sampling.");
@@ -1014,78 +1016,172 @@ impl App {
         chrome::Section::new("CRT signal")
             .default_open(true)
             .show(ui, |ui| {
-                slider(ui, "Saturation", &mut self.config.saturation, 0.0..=3.);
+                slider(
+                    ui,
+                    "Saturation",
+                    &mut self.config.saturation,
+                    defaults.saturation,
+                    0.0..=3.,
+                );
                 slider(
                     ui,
                     "Sharpness / ringing",
                     &mut self.config.sharpness,
+                    defaults.sharpness,
                     0.0..=3.,
                 );
-                slider(ui, "Color bleed", &mut self.config.bleed, 0.0..=2.);
+                slider(
+                    ui,
+                    "Color bleed",
+                    &mut self.config.bleed,
+                    defaults.bleed,
+                    0.0..=2.,
+                );
                 slider(
                     ui,
                     "Composite artifacts",
                     &mut self.config.artifacts,
+                    defaults.artifacts,
                     0.0..=2.,
                 );
             });
         chrome::Section::new("Glass & mask").show(ui, |ui| {
-            slider(ui, "Barrel distortion", &mut self.config.barrel, -2.0..=2.);
-            slider(ui, "Overscan", &mut self.config.overscan, 0.1..=3.);
-            slider(ui, "Mask opacity", &mut self.config.mask_opacity, 0.0..=1.);
+            slider(
+                ui,
+                "Barrel distortion",
+                &mut self.config.barrel,
+                defaults.barrel,
+                -2.0..=2.,
+            );
+            slider(
+                ui,
+                "Overscan",
+                &mut self.config.overscan,
+                defaults.overscan,
+                0.1..=3.,
+            );
+            slider(
+                ui,
+                "Mask opacity",
+                &mut self.config.mask_opacity,
+                defaults.mask_opacity,
+                0.0..=1.,
+            );
             slider(
                 ui,
                 "Mask brightness",
                 &mut self.config.mask_brightness,
+                defaults.mask_brightness,
                 0.0..=2.,
             );
             slider(
                 ui,
                 "Mask columns",
                 &mut self.config.mask_repeats[0],
+                defaults.mask_repeats[0],
                 1.0..=16384.,
             );
             slider(
                 ui,
                 "Mask rows",
                 &mut self.config.mask_repeats[1],
+                defaults.mask_repeats[1],
                 1.0..=16384.,
             );
-            slider(ui, "Edge dimming", &mut self.config.dimming, 0.0..=1.);
-            slider(ui, "Camera field of view", &mut self.config.fov, 5.0..=90.);
+            slider(
+                ui,
+                "Edge dimming",
+                &mut self.config.dimming,
+                defaults.dimming,
+                0.0..=1.,
+            );
+            slider(
+                ui,
+                "Camera field of view",
+                &mut self.config.fov,
+                defaults.fov,
+                5.0..=90.,
+            );
         });
         chrome::Section::new("Bloom & reflections").show(ui, |ui| {
-            slider(ui, "Bloom amount", &mut self.config.bloom, 0.0..=2.);
-            slider(ui, "Bloom power", &mut self.config.bloom_power, 0.1..=8.);
-            slider(ui, "Bloom spread", &mut self.config.bloom_spread, 0.0..=0.2);
-            slider(ui, "Edge reflection", &mut self.config.reflection, 0.0..=2.);
+            slider(
+                ui,
+                "Bloom amount",
+                &mut self.config.bloom,
+                defaults.bloom,
+                0.0..=2.,
+            );
+            slider(
+                ui,
+                "Bloom power",
+                &mut self.config.bloom_power,
+                defaults.bloom_power,
+                0.1..=8.,
+            );
+            slider(
+                ui,
+                "Bloom spread",
+                &mut self.config.bloom_spread,
+                defaults.bloom_spread,
+                0.0..=0.2,
+            );
+            slider(
+                ui,
+                "Edge reflection",
+                &mut self.config.reflection,
+                defaults.reflection,
+                0.0..=2.,
+            );
         });
         chrome::Section::new("Frame & lighting").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label("Frame color");
                 ui.color_edit_button_rgb(&mut self.config.frame_color);
             });
-            slider(ui, "Diffuse light", &mut self.config.diffuse, 0.0..=2.);
-            slider(ui, "Specular light", &mut self.config.specular, 0.0..=2.);
+            slider(
+                ui,
+                "Diffuse light",
+                &mut self.config.diffuse,
+                defaults.diffuse,
+                0.0..=2.,
+            );
+            slider(
+                ui,
+                "Specular light",
+                &mut self.config.specular,
+                defaults.specular,
+                0.0..=2.,
+            );
             slider(
                 ui,
                 "Specular power",
                 &mut self.config.specular_power,
+                defaults.specular_power,
                 1.0..=200.,
             );
-            slider(ui, "Rim light", &mut self.config.rim, 0.0..=2.);
+            slider(
+                ui,
+                "Rim light",
+                &mut self.config.rim,
+                defaults.rim,
+                0.0..=2.,
+            );
             for (i, name) in ["Light X", "Light Y", "Light Z"].iter().enumerate() {
                 slider(
                     ui,
                     name,
                     &mut self.config.light_position[i],
+                    defaults.light_position[i],
                     -1000.0..=1000.,
                 );
             }
         });
         chrome::Section::new("Persistence & artifact phase").show(ui, |ui| {
-            for (i,name) in ["Red persistence","Green persistence","Blue persistence"].iter().enumerate() { slider(ui,name,&mut self.config.persistence[i],0.0..=0.999); }
-            ui.add(egui::Slider::new(&mut self.config.warmup,0..=240).text("Warm-up ticks"));
+            for (i,name) in ["Red persistence","Green persistence","Blue persistence"].iter().enumerate() { slider(ui, name, &mut self.config.persistence[i], defaults.persistence[i], 0.0..=0.999); }
+            ui.horizontal(|ui| {
+                if ui.add_enabled(self.config.warmup != defaults.warmup, egui::Button::new("↺").small()).on_hover_text(format!("Reset Warm-up ticks to {}", defaults.warmup)).clicked() { self.config.warmup = defaults.warmup; }
+                ui.add(egui::Slider::new(&mut self.config.warmup,0..=240).text("Warm-up ticks"));
+            });
             egui::ComboBox::from_label("Phase").selected_text(format!("{:?}",self.config.phase)).show_ui(ui,|ui| {
                 for phase in [Phase::Stable,Phase::A,Phase::B,Phase::Alternating] { ui.selectable_value(&mut self.config.phase,phase,format!("{phase:?}")); }
             });
@@ -1515,14 +1611,37 @@ impl App {
     }
 }
 
-fn slider(ui: &mut egui::Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>) {
+/// A setting's slider, with a button that returns it alone to `default`. The button keeps its
+/// place while disabled, so the panel does not shift as values move on and off their defaults.
+fn slider(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut f32,
+    default: f32,
+    range: std::ops::RangeInclusive<f32>,
+) {
     let logarithmic = *range.start() >= 1. && *range.end() >= 200.;
-    ui.add(
-        egui::Slider::new(value, range)
-            .logarithmic(logarithmic)
-            .clamp_to_range(false)
-            .text(label),
-    );
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(*value != default, egui::Button::new("↺").small())
+            .on_hover_text(format!("Reset {label} to {}", format_value(default)))
+            .clicked()
+        {
+            *value = default;
+        }
+        ui.add(
+            egui::Slider::new(value, range)
+                .logarithmic(logarithmic)
+                .clamp_to_range(false)
+                .text(label),
+        );
+    });
+}
+
+/// A number as a person would write it: no trailing zeros, at most three decimals.
+fn format_value(value: f32) -> String {
+    let text = format!("{value:.3}");
+    text.trim_end_matches('0').trim_end_matches('.').to_owned()
 }
 fn resolution(ui: &mut egui::Ui, label: &str, value: &mut String, presets: &[&str]) {
     ui.horizontal(|ui| {
@@ -1918,6 +2037,14 @@ mod tests {
         app.receive(&ctx);
         assert_eq!(app.rendered_revision, Some(app.revision));
         assert_eq!(app.error.as_deref(), Some("Cannot decode selected file"));
+    }
+
+    #[test]
+    fn reset_tooltips_show_values_as_written() {
+        assert_eq!(format_value(0.25), "0.25");
+        assert_eq!(format_value(50.), "50");
+        assert_eq!(format_value(-0.115), "-0.115");
+        assert_eq!(format_value(8. / 7.), "1.143");
     }
 
     #[test]
