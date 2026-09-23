@@ -362,12 +362,17 @@ impl App {
             if let Some(f) = next {
                 self.workflow.play_time = f.time;
                 self.original = texture(ctx, "playing-source", &f.source, 2048);
-                self.rendered = Some(texture(
+                let frame = texture(
                     ctx,
                     "playing-crt",
                     &f.crt,
                     ctx.input(|i| i.max_texture_side) as u32,
-                ));
+                );
+                crate::App::replace_preview(
+                    &mut self.rendered,
+                    self.render_state.as_ref(),
+                    Some(crate::Displayed::Uploaded(frame)),
+                );
                 self.rendered_revision = Some(self.revision);
                 self.input = Arc::new(f.source);
                 if let Some(v) = &self.video {
@@ -789,14 +794,14 @@ impl App {
 
 pub fn compare(
     ui: &mut egui::Ui,
-    original: &egui::TextureHandle,
-    rendered: &egui::TextureHandle,
+    original: egui::load::SizedTexture,
+    rendered: egui::load::SizedTexture,
     area: egui::Vec2,
     fit: bool,
     zoom: f32,
     split: &mut f32,
 ) {
-    let native = rendered.size_vec2();
+    let native = rendered.size;
     let size = if fit {
         native * (area.x / native.x).min(area.y / native.y)
     } else {
@@ -811,14 +816,14 @@ pub fn compare(
     let x = rect.left() + rect.width() * *split;
     let uv = egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.));
     ui.painter()
-        .image(rendered.id(), rect, uv, egui::Color32::WHITE);
+        .image(rendered.id, rect, uv, egui::Color32::WHITE);
     let left = egui::Rect::from_min_max(rect.min, egui::pos2(x, rect.bottom()));
     let painter = ui.painter().with_clip_rect(left.intersect(ui.clip_rect()));
     painter.rect_filled(rect, 0., egui::Color32::BLACK);
-    let os = original.size_vec2();
+    let os = original.size;
     let os = os * (size.x / os.x).min(size.y / os.y);
     painter.image(
-        original.id(),
+        original.id,
         egui::Rect::from_center_size(rect.center(), os),
         uv,
         egui::Color32::WHITE,
@@ -845,7 +850,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = App::new(
             &ctx,
-            wgpu::Backends::PRIMARY,
+            crate::worker::Gpu::Own(wgpu::Backends::PRIMARY),
             None,
             Some("unused-smoke.png".into()),
         );
@@ -884,7 +889,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut app = App::new(
             &ctx,
-            wgpu::Backends::PRIMARY,
+            crate::worker::Gpu::Own(wgpu::Backends::PRIMARY),
             None,
             Some("unused-smoke.png".into()),
         );

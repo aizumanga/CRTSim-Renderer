@@ -85,7 +85,9 @@ Still previews are debounced; video playback streams frames with persistent CRT 
 The CRT mask can look different at different preview sizes; exports retain the requested resolution.
 Recovery does not overwrite explicitly saved presets or project files.
 
-Linux needs working OpenGL for the window and Vulkan for the CRT renderer, plus an X11 or Wayland session.
+Linux needs Vulkan for the CRT renderer and an X11 or Wayland session. The window shares that same
+device, falling back to OpenGL where no Vulkan driver is present, so the application still opens and
+reports the missing driver rather than failing to start.
 X11 also needs the xkbcommon X11 library (`libxkbcommon-x11` on Arch, `libxkbcommon-x11-0` on Debian/Ubuntu).
 The native file picker uses the desktop portal. On Arch/KDE, ensure `xdg-desktop-portal` and `xdg-desktop-portal-kde`
 are installed and working in your logged-in desktop session. Drag-and-drop or passing an image path also works:
@@ -95,7 +97,8 @@ cargo run --release --locked -p crtsim-desktop -- "image.png" --backend vulkan
 ```
 
 Windows uses the system file picker and normally DX12 for rendering; macOS uses its system picker and Metal.
-The window itself uses OpenGL through eframe. macOS runtime support remains provisional until tested on a real Mac.
+The window draws on the same device as the renderer, through eframe's wgpu backend.
+macOS runtime support remains provisional until tested on a real Mac.
 For Linux source-build errors about windowing libraries, install your distribution's Wayland and xkbcommon development packages
 (Debian/Ubuntu: `libwayland-dev libxkbcommon-dev libegl1-mesa-dev`; Arch: `wayland libxkbcommon`).
 

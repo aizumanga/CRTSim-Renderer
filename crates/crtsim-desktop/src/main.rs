@@ -74,7 +74,9 @@ struct App {
     input: Arc<RgbaImage>,
     source_name: String,
     original: TextureHandle,
-    rendered: Option<TextureHandle>,
+    rendered: Option<Displayed>,
+    /// The interface's device, needed to register and release preview frames.
+    render_state: Option<eframe::egui_wgpu::RenderState>,
     rendered_revision: Option<u64>,
     revision: u64,
     preview_limit: Option<u32>,
@@ -100,6 +102,26 @@ struct App {
     started: Instant,
 }
 
+/// The preview currently on screen. A frame rendered on the interface's own device is handed
+/// to egui as it is; anything else is uploaded as an ordinary texture.
+enum Displayed {
+    Uploaded(TextureHandle),
+    Frame {
+        /// Held because egui samples it until the registration is freed.
+        _texture: wgpu::Texture,
+        id: egui::TextureId,
+        size: egui::Vec2,
+    },
+}
+impl Displayed {
+    fn sized(&self) -> egui::load::SizedTexture {
+        match self {
+            Self::Uploaded(handle) => egui::load::SizedTexture::from_handle(handle),
+            Self::Frame { id, size, .. } => egui::load::SizedTexture::new(*id, *size),
+        }
+    }
+}
+
 fn texture(ctx: &egui::Context, name: &str, image: &RgbaImage, limit: u32) -> TextureHandle {
     let image = if image.width().max(image.height()) > limit {
         image::DynamicImage::ImageRgba8(image.clone())
@@ -121,14 +143,15 @@ fn texture(ctx: &egui::Context, name: &str, image: &RgbaImage, limit: u32) -> Te
 impl App {
     fn new(
         ctx: &egui::Context,
-        backend: wgpu::Backends,
+        gpu: worker::Gpu,
         input_path: Option<PathBuf>,
         smoke: Option<PathBuf>,
     ) -> Self {
         let input = Arc::new(config::test_card());
         let original = texture(ctx, "original", &input, 2048);
         let config = model::general();
-        let (jobs, events, worker_thread) = worker::start(ctx.clone(), backend);
+        let render_state = gpu.render_state().cloned();
+        let (jobs, events, worker_thread) = worker::start(ctx.clone(), gpu);
         let (dialog_send, dialog_receive) = mpsc::channel();
         let loading = false;
         let (store, mut storage_error) = match gallery::Store::discover() {
@@ -197,6 +220,7 @@ impl App {
             source_name: "Built-in test card".into(),
             original,
             rendered: None,
+            render_state,
             rendered_revision: None,
             revision: 0,
             preview_limit: Some(1280),
@@ -226,6 +250,54 @@ impl App {
             app.load(path);
         }
         app
+    }
+
+    /// Puts a preview on screen, releasing the registration of the one it replaces. egui keeps
+    /// no ownership of a frame handed to it, so nothing else frees these.
+    fn show_preview(&mut self, next: Option<Displayed>) {
+        Self::replace_preview(&mut self.rendered, self.render_state.as_ref(), next);
+    }
+
+    /// The same, reached through fields rather than through `self`, for callers that are
+    /// already holding a borrow of another part of the application.
+    fn replace_preview(
+        rendered: &mut Option<Displayed>,
+        state: Option<&eframe::egui_wgpu::RenderState>,
+        next: Option<Displayed>,
+    ) {
+        if let Some(Displayed::Frame { id, .. }) = rendered.take() {
+            if let Some(state) = state {
+                state.renderer.write().free_texture(&id);
+            }
+        }
+        *rendered = next;
+    }
+
+    /// Prepares a finished preview for drawing. A frame is registered with egui; pixels are
+    /// uploaded as before, which is what happens when the renderer is on its own device.
+    fn displayed(&self, ctx: &egui::Context, preview: worker::Preview) -> Option<Displayed> {
+        match (preview, self.render_state.as_ref()) {
+            (worker::Preview::Pixels(image), _) => {
+                let limit = ctx.input(|i| i.max_texture_side).min(u32::MAX as usize) as u32;
+                Some(Displayed::Uploaded(texture(ctx, "crt", &image, limit)))
+            }
+            (worker::Preview::Frame(frame), Some(state)) => {
+                let view = frame.texture.create_view(&Default::default());
+                let id = state.renderer.write().register_native_texture(
+                    &state.device,
+                    &view,
+                    wgpu::FilterMode::Linear,
+                );
+                Some(Displayed::Frame {
+                    size: egui::vec2(frame.width as f32, frame.height as f32),
+                    _texture: frame.texture,
+                    id,
+                })
+            }
+            // The worker only renders a frame when the interface has a device to draw it on,
+            // so there is nowhere for this to come from.
+            (worker::Preview::Frame(_), None) => None,
+        }
     }
 
     fn changed(&mut self) {
@@ -550,7 +622,7 @@ impl App {
                             self.video_frames = count;
                             self.original = texture(ctx, "original", &thumb, 2048);
                             self.input = Arc::new(input);
-                            self.rendered = None;
+                            self.show_preview(None);
                             self.rendered_revision = None;
                             self.error = None;
                             self.changed();
@@ -584,7 +656,7 @@ impl App {
                                 .into_owned();
                             self.original = texture(ctx, "original", &thumb, 2048);
                             self.input = Arc::new(input);
-                            self.rendered = None;
+                            self.show_preview(None);
                             self.rendered_revision = None;
                             self.error = None;
                             self.changed();
@@ -605,18 +677,13 @@ impl App {
                         continue;
                     }
                     match result {
-                        Ok((im, seconds)) => {
-                            let max_texture =
-                                ctx.input(|i| i.max_texture_side).min(u32::MAX as usize) as u32;
-                            self.rendered = Some(texture(ctx, "crt", &im, max_texture));
+                        Ok((preview, seconds)) => {
+                            let (width, height) = preview.dimensions();
+                            let shown = self.displayed(ctx, preview);
+                            self.show_preview(shown);
                             self.rendered_revision = Some(revision);
                             if !self.exporting {
-                                self.status = format!(
-                                    "Preview {} × {} · {:.2}s",
-                                    im.width(),
-                                    im.height(),
-                                    seconds
-                                );
+                                self.status = format!("Preview {width} × {height} · {seconds:.2}s");
                             }
                             self.preview_error = None;
                         }
@@ -682,7 +749,7 @@ impl App {
                         self.input = Arc::new(config::test_card());
                         self.original = texture(ctx, "original", &self.input, 2048);
                         self.source_name = "Built-in test card".into();
-                        self.rendered = None;
+                        self.show_preview(None);
                         self.changed();
                         ui.close_menu();
                     }
@@ -1073,9 +1140,9 @@ impl App {
         );
         egui::ScrollArea::both().max_height(available.y).auto_shrink([false,false]).show(ui,|ui| {
             if self.view == View::Compare {
-                if let Some(ref im)=self.rendered {workflow::compare(ui,&self.original,im,available,self.fit_preview,self.zoom,&mut self.workflow.comparison);}
-            } else if self.view == View::Original { show_image(ui,&self.original,available,self.fit_preview,self.zoom); }
-            else if let Some(ref im) = self.rendered { show_image(ui,im,available,self.fit_preview,self.zoom); }
+                if let Some(ref im)=self.rendered {workflow::compare(ui,egui::load::SizedTexture::from_handle(&self.original),im.sized(),available,self.fit_preview,self.zoom,&mut self.workflow.comparison);}
+            } else if self.view == View::Original { show_image(ui,egui::load::SizedTexture::from_handle(&self.original),available,self.fit_preview,self.zoom); }
+            else if let Some(ref im) = self.rendered { show_image(ui,im.sized(),available,self.fit_preview,self.zoom); }
             else { ui.label("Open an image, video or test card. Your rendered preview will appear here."); }
         });
         self.video_controls(ui);
@@ -1409,8 +1476,14 @@ fn resolution(ui: &mut egui::Ui, label: &str, value: &mut String, presets: &[&st
             .on_hover_text("Preset name or custom WIDTHxHEIGHT");
     });
 }
-fn show_image(ui: &mut egui::Ui, im: &TextureHandle, available: egui::Vec2, fit: bool, zoom: f32) {
-    let size = im.size_vec2();
+fn show_image(
+    ui: &mut egui::Ui,
+    im: egui::load::SizedTexture,
+    available: egui::Vec2,
+    fit: bool,
+    zoom: f32,
+) {
+    let size = im.size;
     let factor = if fit {
         (available.x / size.x).min(available.y / size.y).max(0.01)
     } else {
@@ -1421,7 +1494,7 @@ fn show_image(ui: &mut egui::Ui, im: &TextureHandle, available: egui::Vec2, fit:
         ui.allocate_exact_size(if fit { available } else { display }, egui::Sense::hover());
     let rect = egui::Rect::from_center_size(area.center(), display);
     ui.painter().image(
-        im.id(),
+        im.id,
         rect,
         egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.)),
         egui::Color32::WHITE,
@@ -1619,6 +1692,7 @@ impl eframe::App for App {
 impl Drop for App {
     fn drop(&mut self) {
         self.stop_playback();
+        self.show_preview(None);
         self.save_session();
         self.save_tool_windows();
         self.cancel.store(true, Ordering::Relaxed);
@@ -1633,6 +1707,7 @@ fn main() -> eframe::Result<()> {
     let mut input = None;
     let mut smoke = None;
     let mut backends = wgpu::Backends::PRIMARY;
+    let mut pinned_backend = false;
     let mut smoke_welcome = false;
     let mut smoke_gallery = false;
     let mut smoke_lut_gallery = false;
@@ -1645,11 +1720,15 @@ fn main() -> eframe::Result<()> {
             "--smoke-lut-gallery" => smoke_lut_gallery = true,
             "--smoke-export" => smoke_export = true,
             "--backend" => {
+                pinned_backend = true;
                 backends = match args.next().as_deref() {
                     Some("vulkan") => wgpu::Backends::VULKAN,
                     Some("dx12") => wgpu::Backends::DX12,
                     Some("metal") => wgpu::Backends::METAL,
-                    Some("auto") => wgpu::Backends::PRIMARY,
+                    Some("auto") => {
+                        pinned_backend = false;
+                        wgpu::Backends::PRIMARY
+                    }
                     _ => {
                         eprintln!("Expected --backend auto|vulkan|dx12|metal");
                         std::process::exit(2);
@@ -1682,11 +1761,50 @@ fn main() -> eframe::Result<()> {
             viewport: egui::ViewportBuilder::default()
                 .with_inner_size([1280., 850.])
                 .with_min_inner_size([900., 620.]),
-            renderer: eframe::Renderer::Glow,
+            // wgpu, so the interface draws on the same device the CRT frames are rendered on.
+            renderer: eframe::Renderer::Wgpu,
+            wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
+                // Honour --backend, which egui would otherwise pick for itself. Without one
+                // pinned, OpenGL stays available so the window still opens on a machine with
+                // no modern backend and can say so, as it could when the interface drew with
+                // GL; rendering there falls back to its own device, exactly as before.
+                supported_backends: if pinned_backend {
+                    backends
+                } else {
+                    backends | wgpu::Backends::GL
+                },
+                // The window only needs a device big enough for the window; the renderer needs
+                // one big enough for a full-resolution export, so ask for the larger of the
+                // two. Not of a GL adapter, which cannot meet them -- asking would stop the
+                // window opening at all, which is the failure this fallback exists to avoid.
+                device_descriptor: std::sync::Arc::new(|adapter: &wgpu::Adapter| {
+                    wgpu::DeviceDescriptor {
+                        label: Some("CRTSim"),
+                        required_features: wgpu::Features::empty(),
+                        required_limits: if adapter.get_info().backend == wgpu::Backend::Gl {
+                            wgpu::Limits::downlevel_webgl2_defaults()
+                                .using_resolution(adapter.limits())
+                        } else {
+                            crtsim_core::Renderer::limits(adapter)
+                        },
+                    }
+                }),
+                ..Default::default()
+            },
             ..Default::default()
         },
         Box::new(move |cc| {
-            let mut app = App::new(&cc.egui_ctx, backends, input, smoke);
+            // Without a wgpu device -- an unsupported platform, or a backend that failed to
+            // start -- the worker falls back to making its own, as it always did.
+            let gpu = match cc.wgpu_render_state.as_ref() {
+                // Sharing is only worth it on a device that can also do the rendering. A GL
+                // fallback window keeps the interface alive; the renderer makes its own.
+                Some(state) if state.adapter.get_info().backend != wgpu::Backend::Gl => {
+                    worker::Gpu::Shared(state.clone())
+                }
+                _ => worker::Gpu::Own(backends),
+            };
+            let mut app = App::new(&cc.egui_ctx, gpu, input, smoke);
             if app.smoke.is_some() {
                 app.smoke_welcome = smoke_welcome;
                 app.smoke_gallery = smoke_gallery;
@@ -1709,7 +1827,7 @@ mod tests {
     #[test]
     fn obsolete_preview_cannot_replace_current_settings() {
         let ctx = egui::Context::default();
-        let mut app = App::new(&ctx, wgpu::Backends::PRIMARY, None, None);
+        let mut app = App::new(&ctx, worker::Gpu::Own(wgpu::Backends::PRIMARY), None, None);
         let (send, receive) = mpsc::channel();
         app.events = receive;
         app.rendering = true;
@@ -1717,7 +1835,7 @@ mod tests {
         app.changed();
         send.send(Event::Preview {
             revision: 0,
-            result: Ok((config::test_card(), 0.1)),
+            result: Ok((worker::Preview::Pixels(config::test_card()), 0.1)),
         })
         .unwrap();
         app.receive(&ctx);
@@ -1728,7 +1846,7 @@ mod tests {
             .unwrap();
         send.send(Event::Preview {
             revision: app.revision,
-            result: Ok((config::test_card(), 0.1)),
+            result: Ok((worker::Preview::Pixels(config::test_card()), 0.1)),
         })
         .unwrap();
         app.receive(&ctx);
@@ -1739,7 +1857,7 @@ mod tests {
     #[test]
     fn export_captures_full_resolution_and_original_source() {
         let ctx = egui::Context::default();
-        let mut app = App::new(&ctx, wgpu::Backends::PRIMARY, None, None);
+        let mut app = App::new(&ctx, worker::Gpu::Own(wgpu::Backends::PRIMARY), None, None);
         let (send, receive) = mpsc::channel();
         app.jobs = send;
         let dir = tempfile::tempdir().unwrap();
