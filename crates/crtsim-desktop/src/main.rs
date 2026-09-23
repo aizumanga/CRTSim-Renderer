@@ -1,3 +1,4 @@
+mod audition;
 mod chrome;
 mod export_ui;
 mod files;
@@ -60,6 +61,13 @@ struct App {
     show_lut_gallery: bool,
     lut_gallery_search: String,
     gallery_entries: Vec<gallery::Entry>,
+    /// A look previewed from a gallery without being applied; see `audition`.
+    audition: Option<audition::Audition>,
+    /// What a gallery pointed at this frame, for `settle_audition`.
+    offered: Option<audition::Audition>,
+    /// An audition started or ended, so the preview must be redrawn even with live preview off.
+    audition_pending: bool,
+    included_luts: std::collections::HashMap<usize, Arc<crtsim_core::workflow::Lut>>,
     gallery_warnings: Vec<String>,
     gallery_name: String,
     description_edit: Option<(String, String)>,
@@ -205,6 +213,10 @@ impl App {
             show_lut_gallery: false,
             lut_gallery_search: String::new(),
             gallery_entries,
+            audition: None,
+            offered: None,
+            audition_pending: false,
+            included_luts: Default::default(),
             gallery_warnings,
             gallery_name: String::new(),
             description_edit: None,
@@ -718,7 +730,12 @@ impl App {
         }
         self.history.commit(&self.config);
         self.dirty = false;
-        match model::preview_config(&self.config, self.input.dimensions(), self.preview_limit) {
+        self.audition_pending = false;
+        match model::preview_config(
+            self.shown_config(),
+            self.input.dimensions(),
+            self.preview_limit,
+        ) {
             Ok(config) => {
                 self.rendering = true;
                 self.send(Job::Preview {
@@ -1132,6 +1149,15 @@ impl App {
                 });
             });
         }
+        if let Some(audition) = &self.audition {
+            ui.colored_label(
+                ui.visuals().selection.bg_fill,
+                format!(
+                    "Previewing {} — click it to apply, or move away to return to your settings",
+                    audition.label
+                ),
+            );
+        }
         if self.rendered.is_some() && self.rendered_revision != Some(self.revision) {
             ui.colored_label(ui.visuals().warn_fg_color, "Preview is out of date.");
         }
@@ -1295,6 +1321,7 @@ impl App {
             return;
         }
         let mut selected = None;
+        let mut hovered = None;
         let mut edit = None;
         let mut window = self.window_state("Preset gallery");
         let open = chrome::tool_window(ctx, "Preset gallery", [600., 500.], &mut window, |ui| {
@@ -1328,7 +1355,9 @@ impl App {
                             count += 1;
                             ui.group(|ui| {
                                 ui.horizontal(|ui| {
-                                    if ui.selectable_label(self.config == entry.config, &entry.name).clicked() { selected = Some(entry.config.clone()); }
+                                    let label = ui.selectable_label(self.config == entry.config, &entry.name);
+                                    if label.clicked() { selected = Some(entry.config.clone()); }
+                                    if label.hovered() && ui.is_enabled() { hovered = Some((format!("preset “{}”", entry.name), entry.config.clone())); }
                                     if entry.user && ui.small_button("Edit description").clicked() {
                                         edit = Some((entry.name.clone(), entry.description.clone()));
                                     }
@@ -1348,6 +1377,9 @@ impl App {
         });
         self.store_window_state("Preset gallery", window);
         self.show_gallery = open;
+        if let Some((label, config)) = hovered.filter(|_| open) {
+            self.offer_audition(label, config);
+        }
         if let Some(config) = selected {
             self.replace_config(config);
         }
@@ -1635,17 +1667,21 @@ impl eframe::App for App {
             });
         self.gallery_window(ctx);
         self.lut_gallery_window(ctx);
+        self.settle_audition();
         self.credits_window(ctx);
         if self.dirty
             && self.changed_at.elapsed() >= Duration::from_millis(180)
             && !ctx.input(|i| i.pointer.any_down())
         {
             self.history.commit(&self.config);
-            if self.live && !self.show_welcome {
+            if (self.live || self.audition_pending) && !self.show_welcome {
                 self.request_preview();
             }
         }
-        if (self.dirty && (self.live || self.changed_at.elapsed() < Duration::from_millis(180)))
+        if (self.dirty
+            && (self.live
+                || self.audition_pending
+                || self.changed_at.elapsed() < Duration::from_millis(180)))
             || self.rendering
             || self.loading
             || self.exporting

@@ -7,6 +7,8 @@ impl App {
             return;
         }
         let mut selected = None;
+        let mut hovered = None;
+        let mut hovered_none = false;
         let mut remove = false;
         let mut window = self.window_state("LUT gallery");
         let open = crate::chrome::tool_window(
@@ -48,12 +50,12 @@ impl App {
                                     .as_ref()
                                     .map_or("No LUT", |lut| lut.name.as_str())
                             ));
-                            remove = ui
-                                .add_enabled(
-                                    self.config.lut.is_some(),
-                                    egui::Button::new("Remove LUT"),
-                                )
-                                .clicked();
+                            let button = ui.add_enabled(
+                                self.config.lut.is_some(),
+                                egui::Button::new("Remove LUT"),
+                            );
+                            remove = button.clicked();
+                            hovered_none = button.hovered() && self.config.lut.is_some();
                         });
                         egui::ScrollArea::vertical()
                             .id_source("nes_lut_gallery")
@@ -70,14 +72,16 @@ impl App {
                                             .lut
                                             .as_ref()
                                             .is_some_and(|lut| lut.name == entry.name);
-                                        if ui
+                                        let label = ui
                                             .selectable_label(active, entry.name)
                                             .on_hover_text(
-                                                "Apply this LUT; keep all CRT and framing settings",
-                                            )
-                                            .clicked()
-                                        {
+                                                "Point to preview this LUT; click to apply it. CRT and framing settings are kept",
+                                            );
+                                        if label.clicked() {
                                             selected = Some(index);
+                                        }
+                                        if label.hovered() && ui.is_enabled() {
+                                            hovered = Some(index);
                                         }
                                     });
                                 }
@@ -102,6 +106,23 @@ impl App {
         );
         self.store_window_state("LUT gallery", window);
         self.show_lut_gallery = open;
+        if open && hovered_none {
+            let config = Config {
+                lut: None,
+                ..self.config.clone()
+            };
+            self.offer_audition("no LUT", config);
+        } else if let Some(index) = hovered.filter(|_| open) {
+            // A LUT that cannot be decoded is reported when it is clicked, not while pointed at.
+            if let Ok(lut) = self.included_lut(index) {
+                let label = format!("LUT “{}”", lut.name);
+                let config = Config {
+                    lut: Some(lut),
+                    ..self.config.clone()
+                };
+                self.offer_audition(label, config);
+            }
+        }
         if remove {
             let mut config = self.config.clone();
             config.lut = None;
@@ -109,11 +130,11 @@ impl App {
             self.error = None;
             self.status = "LUT removed".into();
         } else if let Some(index) = selected {
-            match nes_luts::load(index) {
+            match self.included_lut(index) {
                 Ok(lut) => {
                     let name = lut.name.clone();
                     let mut config = self.config.clone();
-                    config.lut = Some(Arc::new(lut));
+                    config.lut = Some(lut);
                     if config != self.config {
                         self.replace_config(config);
                     }
