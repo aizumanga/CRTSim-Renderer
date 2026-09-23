@@ -1,5 +1,5 @@
 use anyhow::{ensure, Context, Result};
-use crtsim_core::config::{ColorMode, Config, Filter};
+use crtsim_core::config::{ColorMode, Config, Filter, Phase};
 use std::path::{Path, PathBuf};
 
 use crate::theme::Theme;
@@ -70,6 +70,54 @@ pub fn builtins() -> Vec<Entry> {
                 signal: "240p".into(),
                 filter: Filter::Nearest,
                 mask_opacity: 0.7,
+                ..general.clone()
+            },
+        ),
+        entry(
+            "NTSC 240p",
+            "240 progressive rows, as consoles and computers drove an NTSC set, with the composite \
+             phase alternating each tick. Nearest resizing for pixel art.",
+            Config {
+                signal: "240p".into(),
+                filter: Filter::Nearest,
+                phase: Phase::Alternating,
+                mask_opacity: 0.7,
+                ..general.clone()
+            },
+        ),
+        entry(
+            "NTSC 480i",
+            "480 interlaced rows with the composite phase alternating each field, as NTSC \
+             broadcast and video were shown.",
+            Config {
+                signal: "480p".into(),
+                interlace: true,
+                phase: Phase::Alternating,
+                ..general.clone()
+            },
+        ),
+        entry(
+            "PAL 288p",
+            "288 progressive rows, as consoles and computers drove a PAL set. PAL's \
+             line-alternating color is not simulated; gentler, stable artifacts stand in for it.",
+            Config {
+                signal: "288p".into(),
+                filter: Filter::Nearest,
+                phase: Phase::Stable,
+                artifacts: 0.25,
+                mask_opacity: 0.7,
+                ..general.clone()
+            },
+        ),
+        entry(
+            "PAL 576i",
+            "576 interlaced rows, as PAL broadcast and video were shown. PAL's line-alternating \
+             color is not simulated; gentler, stable artifacts stand in for it.",
+            Config {
+                signal: "576p".into(),
+                interlace: true,
+                phase: Phase::Stable,
+                artifacts: 0.25,
                 ..general.clone()
             },
         ),
@@ -342,6 +390,25 @@ mod tests {
         for e in builtins() {
             e.config.validate().unwrap();
             e.config.signal_size((1216, 832)).unwrap();
+        }
+    }
+
+    #[test]
+    fn ntsc_and_pal_presets_have_their_line_counts_and_scanning() {
+        let presets = builtins();
+        for (name, rows, interlaced) in [
+            ("NTSC 240p", 240, false),
+            ("NTSC 480i", 480, true),
+            ("PAL 288p", 288, false),
+            ("PAL 576i", 576, true),
+        ] {
+            let preset = presets.iter().find(|e| e.name == name).unwrap();
+            assert_eq!(
+                preset.config.signal_size((1920, 1080)).unwrap().1,
+                rows,
+                "{name}"
+            );
+            assert_eq!(preset.config.interlace, interlaced, "{name}");
         }
     }
 }

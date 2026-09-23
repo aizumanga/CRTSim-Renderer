@@ -1,3 +1,4 @@
+mod audition;
 mod chrome;
 mod export_ui;
 mod files;
@@ -5,6 +6,7 @@ mod gallery;
 mod lut_gallery;
 mod model;
 mod theme;
+mod thumbnails;
 mod worker;
 mod workflow;
 
@@ -60,6 +62,14 @@ struct App {
     show_lut_gallery: bool,
     lut_gallery_search: String,
     gallery_entries: Vec<gallery::Entry>,
+    /// A look previewed from a gallery without being applied; see `audition`.
+    audition: Option<audition::Audition>,
+    /// What a gallery pointed at this frame, for `settle_audition`.
+    offered: Option<audition::Audition>,
+    /// An audition started or ended, so the preview must be redrawn even with live preview off.
+    audition_pending: bool,
+    included_luts: std::collections::HashMap<usize, Arc<crtsim_core::workflow::Lut>>,
+    thumbnails: thumbnails::Thumbnails,
     gallery_warnings: Vec<String>,
     gallery_name: String,
     description_edit: Option<(String, String)>,
@@ -90,7 +100,7 @@ struct App {
     loading: bool,
     exporting: bool,
     dialog_open: bool,
-    jobs: mpsc::Sender<Job>,
+    jobs: worker::Jobs,
     events: mpsc::Receiver<Event>,
     dialog_send: mpsc::Sender<(Dialog, Option<PathBuf>)>,
     dialog_receive: mpsc::Receiver<(Dialog, Option<PathBuf>)>,
@@ -205,6 +215,11 @@ impl App {
             show_lut_gallery: false,
             lut_gallery_search: String::new(),
             gallery_entries,
+            audition: None,
+            offered: None,
+            audition_pending: false,
+            included_luts: Default::default(),
+            thumbnails: Default::default(),
             gallery_warnings,
             gallery_name: String::new(),
             description_edit: None,
@@ -690,6 +705,11 @@ impl App {
                         Err(e) => self.preview_error = Some(e),
                     }
                 }
+                Event::Thumbnail {
+                    generation,
+                    key,
+                    result,
+                } => self.thumbnail_ready(ctx, generation, key, result),
                 Event::Exported(result) => {
                     self.queue_finished(&result);
                     self.video_job = false;
@@ -710,13 +730,20 @@ impl App {
             }
         }
     }
+    /// Also while exporting: previews have their own worker, and the export works from the
+    /// settings it captured, so the ones on screen are free to change.
     fn request_preview(&mut self) {
-        if self.rendering || self.loading || self.exporting || self.workflow.playback.is_some() {
+        if self.rendering || self.loading || self.workflow.playback.is_some() {
             return;
         }
         self.history.commit(&self.config);
         self.dirty = false;
-        match model::preview_config(&self.config, self.input.dimensions(), self.preview_limit) {
+        self.audition_pending = false;
+        match model::preview_config(
+            self.shown_config(),
+            self.input.dimensions(),
+            self.preview_limit,
+        ) {
             Ok(config) => {
                 self.rendering = true;
                 self.send(Job::Preview {
@@ -888,12 +915,16 @@ impl App {
             }
         });
         let before = self.config.clone();
+        // What each slider's reset returns to: the same baseline as Reset above.
+        let defaults = model::general();
         chrome::Section::new("Image & output").show(ui,|ui| {
         resolution(
             ui,
             "Signal",
             &mut self.config.signal,
-            &["auto", "native", "original", "240p", "360p", "480p"],
+            &[
+                "auto", "native", "original", "240p", "288p", "360p", "480p", "576p",
+            ],
         );
         resolution(
             ui,
@@ -923,7 +954,7 @@ impl App {
                     "Nearest (pixel art)",
                 );
             });
-        slider(ui, "Pixel aspect", &mut self.config.pixel_aspect, 0.1..=10.);
+        slider(ui, "Pixel aspect", &mut self.config.pixel_aspect, defaults.pixel_aspect, 0.1..=10.);
         if let (Ok(signal), Ok(output)) = (
             self.config.signal_size(self.input.dimensions()),
             self.config.output_size(self.input.dimensions()),
@@ -976,8 +1007,8 @@ impl App {
             ui.small("Linear-light glass, lighting and bloom; SDR output. The analog signal still uses the original gamma-space model.");
         }
         chrome::Section::new("Optional color grade").show(ui, |ui| {
-            slider(ui, "Hue (degrees)", &mut self.config.hue, -180.0..=180.);
-            slider(ui, "Chroma", &mut self.config.chroma, 0.0..=2.);
+            slider(ui, "Hue (degrees)", &mut self.config.hue, defaults.hue, -180.0..=180.);
+            slider(ui, "Chroma", &mut self.config.chroma, defaults.chroma, 0.0..=2.);
             ui.small("YIQ hue/chroma adjustment. This is an optional grade, not the game's unpublished NES palette LUT or a complete NTSC decoder.");
         });
         ui.checkbox(&mut self.config.mask_antialias, "Filter mask when shrinking").on_hover_text("Mipmapped mask filtering reduces moiré during minification. Turn off for Phase 0/1 reference sampling.");
@@ -987,81 +1018,176 @@ impl App {
         chrome::Section::new("CRT signal")
             .default_open(true)
             .show(ui, |ui| {
-                slider(ui, "Saturation", &mut self.config.saturation, 0.0..=3.);
+                slider(
+                    ui,
+                    "Saturation",
+                    &mut self.config.saturation,
+                    defaults.saturation,
+                    0.0..=3.,
+                );
                 slider(
                     ui,
                     "Sharpness / ringing",
                     &mut self.config.sharpness,
+                    defaults.sharpness,
                     0.0..=3.,
                 );
-                slider(ui, "Color bleed", &mut self.config.bleed, 0.0..=2.);
+                slider(
+                    ui,
+                    "Color bleed",
+                    &mut self.config.bleed,
+                    defaults.bleed,
+                    0.0..=2.,
+                );
                 slider(
                     ui,
                     "Composite artifacts",
                     &mut self.config.artifacts,
+                    defaults.artifacts,
                     0.0..=2.,
                 );
             });
         chrome::Section::new("Glass & mask").show(ui, |ui| {
-            slider(ui, "Barrel distortion", &mut self.config.barrel, -2.0..=2.);
-            slider(ui, "Overscan", &mut self.config.overscan, 0.1..=3.);
-            slider(ui, "Mask opacity", &mut self.config.mask_opacity, 0.0..=1.);
+            slider(
+                ui,
+                "Barrel distortion",
+                &mut self.config.barrel,
+                defaults.barrel,
+                -2.0..=2.,
+            );
+            slider(
+                ui,
+                "Overscan",
+                &mut self.config.overscan,
+                defaults.overscan,
+                0.1..=3.,
+            );
+            slider(
+                ui,
+                "Mask opacity",
+                &mut self.config.mask_opacity,
+                defaults.mask_opacity,
+                0.0..=1.,
+            );
             slider(
                 ui,
                 "Mask brightness",
                 &mut self.config.mask_brightness,
+                defaults.mask_brightness,
                 0.0..=2.,
             );
             slider(
                 ui,
                 "Mask columns",
                 &mut self.config.mask_repeats[0],
+                defaults.mask_repeats[0],
                 1.0..=16384.,
             );
             slider(
                 ui,
                 "Mask rows",
                 &mut self.config.mask_repeats[1],
+                defaults.mask_repeats[1],
                 1.0..=16384.,
             );
-            slider(ui, "Edge dimming", &mut self.config.dimming, 0.0..=1.);
-            slider(ui, "Camera field of view", &mut self.config.fov, 5.0..=90.);
+            slider(
+                ui,
+                "Edge dimming",
+                &mut self.config.dimming,
+                defaults.dimming,
+                0.0..=1.,
+            );
+            slider(
+                ui,
+                "Camera field of view",
+                &mut self.config.fov,
+                defaults.fov,
+                5.0..=90.,
+            );
         });
         chrome::Section::new("Bloom & reflections").show(ui, |ui| {
-            slider(ui, "Bloom amount", &mut self.config.bloom, 0.0..=2.);
-            slider(ui, "Bloom power", &mut self.config.bloom_power, 0.1..=8.);
-            slider(ui, "Bloom spread", &mut self.config.bloom_spread, 0.0..=0.2);
-            slider(ui, "Edge reflection", &mut self.config.reflection, 0.0..=2.);
+            slider(
+                ui,
+                "Bloom amount",
+                &mut self.config.bloom,
+                defaults.bloom,
+                0.0..=2.,
+            );
+            slider(
+                ui,
+                "Bloom power",
+                &mut self.config.bloom_power,
+                defaults.bloom_power,
+                0.1..=8.,
+            );
+            slider(
+                ui,
+                "Bloom spread",
+                &mut self.config.bloom_spread,
+                defaults.bloom_spread,
+                0.0..=0.2,
+            );
+            slider(
+                ui,
+                "Edge reflection",
+                &mut self.config.reflection,
+                defaults.reflection,
+                0.0..=2.,
+            );
         });
         chrome::Section::new("Frame & lighting").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label("Frame color");
                 ui.color_edit_button_rgb(&mut self.config.frame_color);
             });
-            slider(ui, "Diffuse light", &mut self.config.diffuse, 0.0..=2.);
-            slider(ui, "Specular light", &mut self.config.specular, 0.0..=2.);
+            slider(
+                ui,
+                "Diffuse light",
+                &mut self.config.diffuse,
+                defaults.diffuse,
+                0.0..=2.,
+            );
+            slider(
+                ui,
+                "Specular light",
+                &mut self.config.specular,
+                defaults.specular,
+                0.0..=2.,
+            );
             slider(
                 ui,
                 "Specular power",
                 &mut self.config.specular_power,
+                defaults.specular_power,
                 1.0..=200.,
             );
-            slider(ui, "Rim light", &mut self.config.rim, 0.0..=2.);
+            slider(
+                ui,
+                "Rim light",
+                &mut self.config.rim,
+                defaults.rim,
+                0.0..=2.,
+            );
             for (i, name) in ["Light X", "Light Y", "Light Z"].iter().enumerate() {
                 slider(
                     ui,
                     name,
                     &mut self.config.light_position[i],
+                    defaults.light_position[i],
                     -1000.0..=1000.,
                 );
             }
         });
         chrome::Section::new("Persistence & artifact phase").show(ui, |ui| {
-            for (i,name) in ["Red persistence","Green persistence","Blue persistence"].iter().enumerate() { slider(ui,name,&mut self.config.persistence[i],0.0..=0.999); }
-            ui.add(egui::Slider::new(&mut self.config.warmup,0..=240).text("Warm-up ticks"));
+            for (i,name) in ["Red persistence","Green persistence","Blue persistence"].iter().enumerate() { slider(ui, name, &mut self.config.persistence[i], defaults.persistence[i], 0.0..=0.999); }
+            ui.horizontal(|ui| {
+                if ui.add_enabled(self.config.warmup != defaults.warmup, egui::Button::new("↺").small()).on_hover_text(format!("Reset Warm-up ticks to {}", defaults.warmup)).clicked() { self.config.warmup = defaults.warmup; }
+                ui.add(egui::Slider::new(&mut self.config.warmup,0..=240).text("Warm-up ticks"));
+            });
             egui::ComboBox::from_label("Phase").selected_text(format!("{:?}",self.config.phase)).show_ui(ui,|ui| {
                 for phase in [Phase::Stable,Phase::A,Phase::B,Phase::Alternating] { ui.selectable_value(&mut self.config.phase,phase,format!("{phase:?}")); }
             });
+            ui.checkbox(&mut self.config.interlace, "Interlaced fields").on_hover_text("Each tick scans every other row, alternating fields; the rows it skips only fade by persistence. Use with a 480- or 576-row signal.");
             ui.small("Each still starts from black. Higher persistence may require more warm-up ticks. Alternating phase depends on tick count.");
         });
         if self.config != before {
@@ -1077,7 +1203,7 @@ impl App {
             ui.checkbox(&mut self.live, "Live preview");
             if ui
                 .add_enabled(
-                    !self.rendering && !self.loading && !self.exporting,
+                    !self.rendering && !self.loading,
                     egui::Button::new("Refresh"),
                 )
                 .clicked()
@@ -1129,6 +1255,15 @@ impl App {
                     "Rendering preview…"
                 });
             });
+        }
+        if let Some(audition) = &self.audition {
+            ui.colored_label(
+                ui.visuals().selection.bg_fill,
+                format!(
+                    "Previewing {} — click it to apply, or move away to return to your settings",
+                    audition.label
+                ),
+            );
         }
         if self.rendered.is_some() && self.rendered_revision != Some(self.revision) {
             ui.colored_label(ui.visuals().warn_fg_color, "Preview is out of date.");
@@ -1293,7 +1428,20 @@ impl App {
             return;
         }
         let mut selected = None;
+        let mut hovered = None;
         let mut edit = None;
+        let wanted: Vec<(String, Config)> = self
+            .gallery_entries
+            .iter()
+            .map(|e| (e.name.clone(), e.config.clone()))
+            .collect();
+        let pictures: std::collections::HashMap<String, TextureHandle> = wanted
+            .into_iter()
+            .filter_map(|(name, config)| {
+                let picture = self.preset_thumbnail(&name, &config)?;
+                Some((name, picture))
+            })
+            .collect();
         let mut window = self.window_state("Preset gallery");
         let open = chrome::tool_window(ctx, "Preset gallery", [600., 500.], &mut window, |ui| {
             ui.add_enabled_ui(!self.dialog_open, |ui| {
@@ -1318,20 +1466,56 @@ impl App {
                 if let Some(ref error) = self.error { ui.colored_label(ui.visuals().error_fg_color,error); }
                 if !self.gallery_warnings.is_empty() { egui::CollapsingHeader::new("Skipped preset files").show(ui,|ui| { for warning in &self.gallery_warnings { ui.label(warning); } }); }
                 ui.separator();
-                egui::ScrollArea::vertical().max_height(360.).show(ui, |ui| {
+                egui::ScrollArea::vertical().max_height(ui.available_height().max(200.)).show(ui, |ui| {
                     for user in [false,true] {
                         ui.heading(if user { "My presets" } else { "Included presets" });
                         let mut count = 0;
                         for entry in self.gallery_entries.iter().filter(|e| e.user == user) {
                             count += 1;
                             ui.group(|ui| {
+                                ui.set_min_width(ui.available_width());
                                 ui.horizontal(|ui| {
-                                    if ui.selectable_label(self.config == entry.config, &entry.name).clicked() { selected = Some(entry.config.clone()); }
-                                    if entry.user && ui.small_button("Edit description").clicked() {
-                                        edit = Some((entry.name.clone(), entry.description.clone()));
-                                    }
+                                    let picture = thumbnails::show(ui, pictures.get(&entry.name), 72., 16. / 9.)
+                                        .on_hover_text("Point to preview this preset on your image; click to apply it");
+                                    ui.vertical(|ui| {
+                                        ui.horizontal(|ui| {
+                                            let label = ui.selectable_label(self.config == entry.config, &entry.name);
+                                            if label.clicked() || picture.clicked() { selected = Some(entry.config.clone()); }
+                                            if (label.hovered() || picture.hovered()) && ui.is_enabled() { hovered = Some((format!("preset “{}”", entry.name), entry.config.clone())); }
+                                            if entry.user && ui.small_button("Edit description").clicked() {
+                                                edit = Some((entry.name.clone(), entry.description.clone()));
+                                            }
+                                        });
+                                        ui.add(egui::Label::new(if entry.description.is_empty() { "No description" } else { &entry.description }).wrap(true));
+                                        if entry.config == self.config {
+                                            ui.small("Matches your settings");
+                                        } else {
+                                            let changes = model::differences(&self.config, &entry.config);
+                                            egui::CollapsingHeader::new(format!(
+                                                "Differs from your settings in {} {}",
+                                                changes.len(),
+                                                if changes.len() == 1 { "setting" } else { "settings" }
+                                            ))
+                                            .id_source(("preset differences", &entry.name, entry.user))
+                                            .show(ui, |ui| {
+                                                egui::Grid::new(("preset difference grid", &entry.name, entry.user))
+                                                    .striped(true)
+                                                    .show(ui, |ui| {
+                                                        ui.strong("Setting");
+                                                        ui.strong("Yours");
+                                                        ui.strong("Preset");
+                                                        ui.end_row();
+                                                        for change in &changes {
+                                                            ui.label(&change.setting);
+                                                            ui.label(&change.from);
+                                                            ui.label(&change.to);
+                                                            ui.end_row();
+                                                        }
+                                                    });
+                                            });
+                                        }
+                                    });
                                 });
-                                ui.add(egui::Label::new(if entry.description.is_empty() { "No description" } else { &entry.description }).wrap(true));
                             });
                         }
                         if count == 0 { ui.label("No personal presets yet. Adjust an image and save your first look above."); }
@@ -1346,6 +1530,9 @@ impl App {
         });
         self.store_window_state("Preset gallery", window);
         self.show_gallery = open;
+        if let Some((label, config)) = hovered.filter(|_| open) {
+            self.offer_audition(label, config);
+        }
         if let Some(config) = selected {
             self.replace_config(config);
         }
@@ -1454,14 +1641,37 @@ impl App {
     }
 }
 
-fn slider(ui: &mut egui::Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>) {
+/// A setting's slider, with a button that returns it alone to `default`. The button keeps its
+/// place while disabled, so the panel does not shift as values move on and off their defaults.
+fn slider(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut f32,
+    default: f32,
+    range: std::ops::RangeInclusive<f32>,
+) {
     let logarithmic = *range.start() >= 1. && *range.end() >= 200.;
-    ui.add(
-        egui::Slider::new(value, range)
-            .logarithmic(logarithmic)
-            .clamp_to_range(false)
-            .text(label),
-    );
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(*value != default, egui::Button::new("↺").small())
+            .on_hover_text(format!("Reset {label} to {}", format_value(default)))
+            .clicked()
+        {
+            *value = default;
+        }
+        ui.add(
+            egui::Slider::new(value, range)
+                .logarithmic(logarithmic)
+                .clamp_to_range(false)
+                .text(label),
+        );
+    });
+}
+
+/// A number as a person would write it: no trailing zeros, at most three decimals.
+fn format_value(value: f32) -> String {
+    let text = format!("{value:.3}");
+    text.trim_end_matches('0').trim_end_matches('.').to_owned()
 }
 fn resolution(ui: &mut egui::Ui, label: &str, value: &mut String, presets: &[&str]) {
     ui.horizontal(|ui| {
@@ -1633,17 +1843,21 @@ impl eframe::App for App {
             });
         self.gallery_window(ctx);
         self.lut_gallery_window(ctx);
+        self.settle_audition();
         self.credits_window(ctx);
         if self.dirty
             && self.changed_at.elapsed() >= Duration::from_millis(180)
             && !ctx.input(|i| i.pointer.any_down())
         {
             self.history.commit(&self.config);
-            if self.live && !self.show_welcome {
+            if (self.live || self.audition_pending) && !self.show_welcome {
                 self.request_preview();
             }
         }
-        if (self.dirty && (self.live || self.changed_at.elapsed() < Duration::from_millis(180)))
+        if (self.dirty
+            && (self.live
+                || self.audition_pending
+                || self.changed_at.elapsed() < Duration::from_millis(180)))
             || self.rendering
             || self.loading
             || self.exporting
@@ -1665,7 +1879,8 @@ impl eframe::App for App {
                 );
                 std::process::exit(1);
             }
-            if (self.smoke_welcome || self.rendered_revision == Some(self.revision))
+            if (self.smoke_welcome
+                || self.rendered_revision == Some(self.revision) && !self.thumbnails_pending())
                 && !self.smoke_requested
             {
                 self.smoke_requested = true;
@@ -1855,11 +2070,38 @@ mod tests {
     }
 
     #[test]
+    fn reset_tooltips_show_values_as_written() {
+        assert_eq!(format_value(0.25), "0.25");
+        assert_eq!(format_value(50.), "50");
+        assert_eq!(format_value(-0.115), "-0.115");
+        assert_eq!(format_value(8. / 7.), "1.143");
+    }
+
+    #[test]
+    fn settings_changed_during_an_export_are_previewed() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(&ctx, worker::Gpu::Own(wgpu::Backends::PRIMARY), None, None);
+        let (send, receive) = mpsc::channel();
+        app.jobs = worker::Jobs::capture(send);
+        let dir = tempfile::tempdir().unwrap();
+        app.export(dir.path().join("rendered.png"));
+        assert!(matches!(receive.try_recv(), Ok(Job::Export { .. })));
+        app.config.bloom = 0.;
+        app.changed();
+        app.request_preview();
+        match receive.try_recv() {
+            Ok(Job::Preview { config, .. }) => assert_eq!(config.bloom, 0.),
+            _ => panic!("expected a preview while exporting"),
+        }
+        assert!(app.exporting && app.rendering);
+    }
+
+    #[test]
     fn export_captures_full_resolution_and_original_source() {
         let ctx = egui::Context::default();
         let mut app = App::new(&ctx, worker::Gpu::Own(wgpu::Backends::PRIMARY), None, None);
         let (send, receive) = mpsc::channel();
-        app.jobs = send;
+        app.jobs = worker::Jobs::capture(send);
         let dir = tempfile::tempdir().unwrap();
         app.config.output = "4k".into();
         app.preview_limit = Some(800);

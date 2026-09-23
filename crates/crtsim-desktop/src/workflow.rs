@@ -895,7 +895,7 @@ mod tests {
         );
         app.show_welcome = false;
         let (send, receive) = mpsc::channel();
-        app.jobs = send;
+        app.jobs = crate::worker::Jobs::capture(send);
         let item = QueueItem {
             source: dir.path().join("source.png"),
             output: dir.path().join("output.png"),

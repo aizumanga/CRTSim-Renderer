@@ -16,7 +16,7 @@ use std::{
     process::Command,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        mpsc, Arc,
     },
     time::Instant,
 };
@@ -750,57 +750,56 @@ pub fn export_with(
         ])
         .arg(&silent);
     let mut encoder = Process::spawn(&mut encode_cmd, cancel)?;
-    let mut input = encoder.stdin();
+    let input = encoder.stdin();
     let mut decoder = Process::spawn(&mut decode_command(video, Some(rate), 0., None), cancel)?;
     drop(decoder.stdin());
-    let mut decoded = decoder.stdout();
-    let mut frame = RgbaImage::new(video.size.0, video.size.1);
-    let started = Instant::now();
-    let mut frames = 0u64;
+    let decoded = decoder.stdout();
     progress(Progress {
         fraction: 0.,
         stage: "Decoding and rendering video".into(),
     });
-    loop {
-        check_cancel(cancel)?;
-        let bytes = frame.as_mut();
-        let count = decoded.read(&mut bytes[..1])?;
-        if count == 0 {
-            break;
-        }
-        decoded
-            .read_exact(&mut bytes[1..])
-            .context("Truncated decoded video frame")?;
-        let result = render(&frame, &c)?;
-        ensure!(
-            result.dimensions() == size,
-            "Renderer returned the wrong video dimensions"
-        );
-        check_cancel(cancel)?;
-        if let Err(error) = input.write_all(result.as_raw()) {
-            drop(input);
+    let frames = match pipeline(
+        decoded,
+        input,
+        video.size,
+        cancel,
+        |frame, count, started| {
+            let result = render(frame, &c)?;
+            ensure!(
+                result.dimensions() == size,
+                "Renderer returned the wrong video dimensions"
+            );
+            let fraction = ((count as f64 / fps) / video.duration).min(1.);
+            let remaining = if fraction > 0. {
+                started.elapsed().as_secs_f64() * (1. - fraction) / fraction
+            } else {
+                0.
+            };
+            progress(Progress {
+                fraction: (fraction * 0.9) as f32,
+                stage: format!(
+                    "Frame {count} · {:.1} FPS · approximately {:.0}s remaining",
+                    count as f64 / started.elapsed().as_secs_f64().max(0.001),
+                    remaining
+                ),
+            });
+            Ok(result)
+        },
+    ) {
+        Ok(frames) => frames,
+        Err(Failure::Write(error)) => {
+            // The encoder's own log says more than a broken pipe does.
             encoder.wait()?;
             return Err(error.into());
         }
-        frames += 1;
-        let fraction = ((frames as f64 / fps) / video.duration).min(1.);
-        let remaining = if fraction > 0. {
-            started.elapsed().as_secs_f64() * (1. - fraction) / fraction
-        } else {
-            0.
-        };
-        progress(Progress {
-            fraction: (fraction * 0.9) as f32,
-            stage: format!(
-                "Frame {frames} · {:.1} FPS · approximately {:.0}s remaining",
-                frames as f64 / started.elapsed().as_secs_f64().max(0.001),
-                remaining
-            ),
-        });
-    }
+        Err(Failure::Other(error)) => {
+            decoder.kill();
+            encoder.kill();
+            return Err(error);
+        }
+    };
     decoder.wait()?;
     ensure!(frames > 0, "No frames decoded");
-    drop(input);
     progress(Progress {
         fraction: 0.91,
         stage: "Finishing video encoding".into(),
@@ -928,6 +927,91 @@ pub fn export_with(
     Ok(())
 }
 
+/// How a pipelined export stopped early.
+enum Failure {
+    /// Writing to the encoder failed, usually because it exited; its log has the reason.
+    Write(std::io::Error),
+    Other(anyhow::Error),
+}
+
+/// Frames in flight between two stages. Enough to absorb one stage's jitter; more would only
+/// hold another full frame of memory each, which at 4K is 33 MB.
+const QUEUED_FRAMES: usize = 2;
+
+/// Decodes, renders and encodes at the same time instead of in turn: the decoder is read on
+/// one thread and the encoder written on another, so the render loop only waits on them when
+/// a queue between them runs empty or full. Order is kept -- each queue is first in, first
+/// out -- so frames reach the encoder exactly as they left the decoder.
+///
+/// `render` gets each frame with its 1-based number and the time the pipeline started.
+/// Returns the number of frames encoded. On `Failure::Other` the caller must kill both
+/// processes, so a stage blocked on its pipe returns and the scope can end.
+fn pipeline(
+    mut decoded: impl Read + Send,
+    mut encoded: impl Write + Send,
+    (width, height): (u32, u32),
+    cancel: &Arc<AtomicBool>,
+    mut render: impl FnMut(&RgbaImage, u64, Instant) -> Result<RgbaImage>,
+) -> std::result::Result<u64, Failure> {
+    std::thread::scope(|scope| {
+        let (frames_in, frames) = mpsc::sync_channel::<Result<RgbaImage>>(QUEUED_FRAMES);
+        // Buffers go back to the decoder once rendered, so steady state allocates nothing.
+        let (recycle, spare) = mpsc::channel::<RgbaImage>();
+        scope.spawn(move || loop {
+            let mut frame = spare
+                .try_recv()
+                .unwrap_or_else(|_| RgbaImage::new(width, height));
+            let bytes = frame.as_mut();
+            let read = match decoded.read(&mut bytes[..1]) {
+                Ok(0) => break,
+                Ok(_) => decoded
+                    .read_exact(&mut bytes[1..])
+                    .context("Truncated decoded video frame")
+                    .map(|()| frame),
+                Err(error) => Err(error.into()),
+            };
+            let failed = read.is_err();
+            if frames_in.send(read).is_err() || failed {
+                break;
+            }
+        });
+        let (results_in, results) = mpsc::sync_channel::<RgbaImage>(QUEUED_FRAMES);
+        let writer = scope.spawn(move || -> std::io::Result<()> {
+            for frame in results {
+                encoded.write_all(frame.as_raw())?;
+            }
+            // Dropping the pipe here is what tells the encoder the video has ended.
+            Ok(())
+        });
+        let started = Instant::now();
+        let mut count = 0u64;
+        let rendered = (|| -> Result<bool> {
+            for frame in frames.iter() {
+                check_cancel(cancel)?;
+                let frame = frame?;
+                count += 1;
+                let result = render(&frame, count, started)?;
+                let _ = recycle.send(frame);
+                check_cancel(cancel)?;
+                if results_in.send(result).is_err() {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        })();
+        // Let the writer finish what is queued and close the pipe, then collect it.
+        drop(results_in);
+        drop(frames);
+        let written = writer.join().expect("encoder writer panicked");
+        match (rendered, written) {
+            (Err(error), _) => Err(Failure::Other(error)),
+            (Ok(_), Err(error)) => Err(Failure::Write(error)),
+            (Ok(true), Ok(())) => Ok(count),
+            (Ok(false), Ok(())) => unreachable!("the writer only stops early on an error"),
+        }
+    })
+}
+
 pub fn export(
     video: &Video,
     output: &Path,
@@ -1002,6 +1086,98 @@ pub fn playback(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `count` 2x2 frames, each filled with its own index.
+    fn numbered_frames(count: u8) -> Vec<u8> {
+        (0..count).flat_map(|i| [i; 16]).collect()
+    }
+
+    #[test]
+    fn pipeline_keeps_frame_order_and_counts_what_it_encodes() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut encoded = Vec::new();
+        let mut seen = vec![];
+        let frames = pipeline(
+            std::io::Cursor::new(numbered_frames(40)),
+            &mut encoded,
+            (2, 2),
+            &cancel,
+            |frame, count, _| {
+                seen.push(count);
+                // The stages overlap, so a slow render must not let frames overtake it.
+                if count % 7 == 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Ok(frame.clone())
+            },
+        );
+        assert!(matches!(frames, Ok(40)));
+        assert_eq!(seen, (1..=40).collect::<Vec<_>>());
+        assert_eq!(encoded, numbered_frames(40));
+    }
+
+    #[test]
+    fn pipeline_reports_each_way_it_can_stop() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let identity = |frame: &RgbaImage, _, _| Ok(frame.clone());
+        let mut truncated = numbered_frames(3);
+        truncated.pop();
+        match pipeline(
+            std::io::Cursor::new(truncated),
+            std::io::sink(),
+            (2, 2),
+            &cancel,
+            identity,
+        ) {
+            Err(Failure::Other(error)) => assert!(error.to_string().contains("Truncated")),
+            _ => panic!("a truncated frame must fail"),
+        }
+        match pipeline(
+            std::io::Cursor::new(numbered_frames(5)),
+            std::io::sink(),
+            (2, 2),
+            &cancel,
+            |_, count, _| {
+                ensure!(count < 3, "render failed");
+                Ok(RgbaImage::new(2, 2))
+            },
+        ) {
+            Err(Failure::Other(error)) => assert_eq!(error.to_string(), "render failed"),
+            _ => panic!("a render error must stop the pipeline"),
+        }
+        struct Closed;
+        impl Write for Closed {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        match pipeline(
+            std::io::Cursor::new(numbered_frames(50)),
+            Closed,
+            (2, 2),
+            &cancel,
+            identity,
+        ) {
+            Err(Failure::Write(error)) => {
+                assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe)
+            }
+            _ => panic!("an encoder that stops reading must fail the export"),
+        }
+        cancel.store(true, Ordering::Relaxed);
+        match pipeline(
+            std::io::Cursor::new(numbered_frames(5)),
+            std::io::sink(),
+            (2, 2),
+            &cancel,
+            identity,
+        ) {
+            Err(Failure::Other(error)) => assert!(error.to_string().contains("cancel")),
+            _ => panic!("cancellation must stop the pipeline"),
+        }
+    }
 
     #[test]
     fn export_overrides_validate_and_old_options_keep_profile_defaults() {

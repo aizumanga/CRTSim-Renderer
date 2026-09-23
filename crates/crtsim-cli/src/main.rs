@@ -31,7 +31,7 @@ enum Command {
         /// JSON overrides; omitted fields use the public-reference defaults.
         #[arg(long)]
         config: Option<PathBuf>,
-        /// original, auto, native, 240p, 360p, 480p or WIDTHxHEIGHT
+        /// original, auto, native, 240p, 288p, 360p, 480p, 576p or WIDTHxHEIGHT
         #[arg(long)]
         signal: Option<String>,
         /// reference, 720p, 1080p, 1440p, 4k, match-input or WIDTHxHEIGHT
@@ -108,7 +108,7 @@ fn save_png(path: &Path, img: image::RgbaImage) -> Result<()> {
 fn main() -> Result<()> {
     match Args::parse().command {
         Command::Presets => {
-            println!("Signal: original (256x224), auto (up to 480 rows, preserves aspect), native, 240p, 360p, 480p, WIDTHxHEIGHT\nOutput: reference (1600x900), 720p, 1080p, 1440p, 4k, match-input, WIDTHxHEIGHT\nUse config --general for square-pixel images and contain fitting. Default is CRTSim Reference.");
+            println!("Signal: original (256x224), auto (up to 480 rows, preserves aspect), native, 240p, 288p, 360p, 480p, 576p, WIDTHxHEIGHT\nOutput: reference (1600x900), 720p, 1080p, 1440p, 4k, match-input, WIDTHxHEIGHT\nUse config --general for square-pixel images and contain fitting. Default is CRTSim Reference.");
         }
         Command::Config { output, general } => {
             let mut c = Config::default();

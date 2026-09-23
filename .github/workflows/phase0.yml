@@ -53,7 +53,9 @@ jobs:
       - name: Video history, FFmpeg and audio integration
         run: |
           cargo test --locked -p crtsim-core video_history -- --ignored --nocapture
+          cargo test --locked -p crtsim-core interlaced_ticks_scan_alternate_fields -- --ignored --nocapture
           cargo test --locked -p crtsim-media --test video -- --ignored --nocapture --test-threads=1
+          cargo test --locked -p crtsim-desktop a_preview_finishes_while_an_export_is_still_running -- --ignored --nocapture
       - name: Render resolution and phase fixtures
         shell: bash
         run: |

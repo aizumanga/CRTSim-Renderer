@@ -73,6 +73,10 @@ pub struct Config {
     pub bloom_spread: f32,
     pub color_mode: ColorMode,
     pub mask_antialias: bool,
+    /// Interlaced scanning: each tick refreshes only every other signal row, alternating
+    /// between the two fields, and the rows it skips only decay by `persistence`. Meant for
+    /// 480- or 576-row signals, as an interlaced set drew them. Off draws every row every tick.
+    pub interlace: bool,
     /// Optional YIQ hue rotation, in degrees. Not the game's unpublished NES palette LUT.
     pub hue: f32,
     pub chroma: f32,
@@ -116,6 +120,7 @@ impl Default for Config {
             bloom_spread: 0.025,
             color_mode: ColorMode::Reference,
             mask_antialias: false,
+            interlace: false,
             hue: 0.,
             chroma: 1.,
         }
@@ -218,8 +223,10 @@ impl Config {
             "native" => return Ok(input),
             "auto" => input.1.min(480),
             "240p" => 240,
+            "288p" => 288,
             "360p" => 360,
             "480p" => 480,
+            "576p" => 576,
             v if v.contains('x') => return dimensions(v),
             v => bail!("unknown signal preset: {v}"),
         };
@@ -391,6 +398,10 @@ mod tests {
         c.signal = "auto".into();
         assert_eq!(c.signal_size((1920, 1080)).unwrap(), (853, 480));
         assert_eq!(c.signal_size((320, 200)).unwrap(), (320, 200));
+        c.signal = "576p".into();
+        assert_eq!(c.signal_size((1920, 1080)).unwrap(), (1024, 576));
+        c.signal = "288p".into();
+        assert_eq!(c.signal_size((640, 480)).unwrap(), (384, 288));
         assert!(dimensions("0x10").is_err());
         assert!(dimensions("16384x16384").is_err());
         c.persistence[0] = 1.;

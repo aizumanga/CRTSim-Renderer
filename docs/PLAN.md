@@ -41,7 +41,7 @@ Reference screenshots from the commercial game are not golden test data.
 
 ## Phase 1: desktop implementation
 
-Native eframe desktop preview uses the same core. Image loading, rendering and PNG export run on a background worker.
+Native eframe desktop preview uses the same core. Image loading, rendering and PNG export run on a background worker; previews have a second worker of their own, so they keep working during an export.
 Only one preview can be in flight; revision numbers reject stale results and the next request uses the latest settings.
 Preview requests are debounced and wait until a slider drag finishes. Preview resolution is independent of export resolution.
 Exports capture the image and settings when the file dialog completes. After the native save dialog handles overwrite confirmation,

@@ -29,7 +29,9 @@ The welcome and credits also link to Pittman's
 [CRT Simulation in Super Win the Game](https://www.gamedeveloper.com/programming/crt-simulation-in-super-win-the-game),
 an interesting technical account of how the effect developed.
 
-**Preset gallery** includes General image, Original CRTSim, Soft television, Clean RGB, Pixel art 240p, Warm analog and Linear light.
+**Preset gallery** includes General image, Original CRTSim, Soft television, Clean RGB, Pixel art 240p, NTSC 240p, NTSC 480i, PAL 288p, PAL 576i, Warm analog and Linear light.
+The NTSC and PAL presets set the line count, interlacing and composite phase. The artifact model is the original NTSC-derived one, so the PAL presets approximate PAL's line-alternating color with gentler, stable artifacts rather than simulating it. Video frame rate is chosen separately in Export → Video.
+Each preset shows a thumbnail rendered from your current image. Point at a preset to preview it on the full image without applying it (nothing is changed or added to Undo), and click to apply it.
 Enter a name and choose **Save current** to add your exact settings to **My presets**; they reappear after restarting. Use **Edit description** on any personal preset to add, change or clear its description.
 Descriptions are saved beside gallery JSON files as UTF-8 `.txt` files; the JSON stays CLI-compatible.
 To add an existing JSON, load it, then use Save current in the gallery. JSON export remains available for sharing.
@@ -139,7 +141,7 @@ Audio defaults to copying compatible tracks, with AAC/Opus fallback; delayed tra
 The progress bar reports frames, rendering speed and an approximate remaining time. **Cancel** stops image export, video loading and video export;
 closing the app also terminates its FFmpeg processes. Existing destinations are replaced only after a successful export.
 Temporary encoded files require space on the destination drive, but decoded frames are streamed rather than saved as PNGs.
-Settings and the source are captured for each export; edits during export apply to the next job.
+Settings and the source are captured for each export; edits during export apply to the next job, and the preview keeps up with them while the export runs.
 
 Output is opaque SDR with software or optional hardware H.264 encoding. Video is explicitly converted from full-range RGB to limited-range BT.709 and tagged accordingly. HDR input uses FFmpeg's `zscale`/`tonemap` filters when available; HDR output remains outside this version.
 Audio tracks, supported subtitles, chapters and source metadata are preserved by default; MKV also supports attachments. See the [workflow guide](docs/WORKFLOW.md) for container limits and quality profiles.
@@ -219,6 +221,8 @@ cargo run -p crtsim-cli -- inspect-meshes --export-dir meshes-new
 Debug output contains `clean.png`, `signal.png`, and the resolved `settings.json`. Mesh export writes portable JSON with every original vertex attribute.
 Export directories must be new. Sixteen warm-up ticks means 17 total ticks; it is deterministic, not an assertion of complete convergence.
 `alternating` advances phase once per tick; the final phase depends on warm-up parity. Stable mode is recommended for still images.
+
+**Interlaced fields** (`"interlace": true`) makes each tick scan every other signal row, alternating fields, while the rows it skips only fade by persistence, as on an interlaced set. Use it with a 480- or 576-row signal. On a still, the last tick's field is the bright one, so warm-up parity picks which; in a video each frame is one field.
 
 ### GPU troubleshooting
 
