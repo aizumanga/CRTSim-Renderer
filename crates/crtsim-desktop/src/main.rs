@@ -1185,6 +1185,7 @@ impl App {
             egui::ComboBox::from_label("Phase").selected_text(format!("{:?}",self.config.phase)).show_ui(ui,|ui| {
                 for phase in [Phase::Stable,Phase::A,Phase::B,Phase::Alternating] { ui.selectable_value(&mut self.config.phase,phase,format!("{phase:?}")); }
             });
+            ui.checkbox(&mut self.config.interlace, "Interlaced fields").on_hover_text("Each tick scans every other row, alternating fields; the rows it skips only fade by persistence. Use with a 480- or 576-row signal.");
             ui.small("Each still starts from black. Higher persistence may require more warm-up ticks. Alternating phase depends on tick count.");
         });
         if self.config != before {

@@ -808,7 +808,12 @@ impl Renderer {
             ],
             camera: [camera.x, camera.y, camera.z, 0.],
             bloom: [c.bloom, c.bloom_power, c.bloom_spread, 0.],
-            processing: [if linear { 1. } else { 0. }, 0., 0., 0.],
+            processing: [
+                if linear { 1. } else { 0. },
+                if c.interlace { 1. } else { 0. },
+                0.,
+                0.,
+            ],
         };
         // Explicitly reset both feedback surfaces; each job is independent.
         for t in history.iter().filter(|_| first) {
@@ -838,6 +843,8 @@ impl Renderer {
                 Phase::B => 1.,
                 Phase::Alternating => (tick % 2) as f32,
             };
+            // The field this tick scans, when interlaced.
+            p.processing[2] = (tick % 2) as f32;
             let uniform = self
                 .device
                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1167,6 +1174,66 @@ mod tests {
         }
         println!("{differing} of {total} channels differ, by at most {worst} step(s)");
         assert!(worst <= 1, "GPU prepare differs by {worst} steps");
+    }
+
+    /// Read in the signal, where rows are rows: a tick scans one field, and the other keeps only
+    /// what persistence leaves of its last scan.
+    #[test]
+    #[ignore = "requires a Vulkan adapter"]
+    fn interlaced_ticks_scan_alternate_fields() {
+        let r = pollster::block_on(Renderer::new(wgpu::Backends::VULKAN)).unwrap();
+        let c = Config {
+            output: "64x48".into(),
+            signal: "32x16".into(),
+            warmup: 0,
+            persistence: [0.; 3],
+            artifacts: 0.,
+            sharpness: 0.,
+            interlace: true,
+            ..Config::default()
+        };
+        let white = RgbaImage::from_pixel(32, 16, image::Rgba([255; 4]));
+        let rows = |c: &Config| -> Vec<u8> {
+            let signal = r.render(&white, c).unwrap().signal;
+            (0..16).map(|y| signal.get_pixel(16, y)[0]).collect()
+        };
+        // One tick scans the first field only.
+        let first = rows(&c);
+        assert!(first.iter().step_by(2).all(|&v| v == 255), "{first:?}");
+        assert!(
+            first.iter().skip(1).step_by(2).all(|&v| v == 0),
+            "{first:?}"
+        );
+        // The second tick scans the other field; with no persistence the first goes dark.
+        let second = rows(&Config {
+            warmup: 1,
+            ..c.clone()
+        });
+        assert!(second.iter().step_by(2).all(|&v| v == 0), "{second:?}");
+        assert!(
+            second.iter().skip(1).step_by(2).all(|&v| v == 255),
+            "{second:?}"
+        );
+        // With persistence the unscanned field keeps a decayed copy instead.
+        let decayed = rows(&Config {
+            warmup: 1,
+            persistence: [0.5; 3],
+            ..c.clone()
+        });
+        assert!(
+            decayed.iter().step_by(2).all(|&v| (120..=135).contains(&v)),
+            "{decayed:?}"
+        );
+        assert!(
+            decayed.iter().skip(1).step_by(2).all(|&v| v == 255),
+            "{decayed:?}"
+        );
+        // Off, every tick scans every row.
+        let progressive = rows(&Config {
+            interlace: false,
+            ..c
+        });
+        assert!(progressive.iter().all(|&v| v == 255), "{progressive:?}");
     }
 
     #[test]

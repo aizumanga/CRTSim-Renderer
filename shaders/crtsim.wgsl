@@ -13,7 +13,7 @@ struct Params {
     light: vec4<f32>,
     camera: vec4<f32>,
     bloom: vec4<f32>, // amount, power, spread, unused
-    processing: vec4<f32>, // optional linear-light surface/bloom path
+    processing: vec4<f32>, // linear-light surface/bloom path, interlaced, field scanned this tick
 };
 @group(0) @binding(0) var<uniform> p: Params;
 @group(0) @binding(1) var source: texture_2d<f32>;
@@ -61,6 +61,8 @@ fn display_luma(c: vec3<f32>) -> f32 {
         offset += (2.*brt-lb-rb)*weights[i];
     }
     color = clamp(color+offset*p.signal.x*mix(vec3(1.),a,p.signal.z),vec3(0.),vec3(1.));
+    // Interlaced: the beam skips the other field's rows this tick; they only decay below.
+    if p.processing.y>0.5 && (u32(q.position.y)%2u)!=u32(p.processing.z) { color=vec3(0.); }
     let pl = textureSampleLevel(previous,point_clamp,q.uv-dx,0.).rgb;
     let pr = textureSampleLevel(previous,point_clamp,q.uv+dx,0.).rgb;
     let pc = textureSampleLevel(previous,point_clamp,q.uv,0.).rgb;

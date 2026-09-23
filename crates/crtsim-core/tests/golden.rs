@@ -182,6 +182,18 @@ fn cases(renderer: &Renderer) -> Vec<(&'static str, RgbaImage)> {
         .crt,
     ));
 
+    // Interlaced scanning: a 480-row signal whose last tick scanned one field, the other left
+    // to decay, as a still of an interlaced set shows it.
+    cases.push((
+        "interlaced",
+        render(&Config {
+            signal: "480p".into(),
+            interlace: true,
+            ..base()
+        })
+        .crt,
+    ));
+
     let lut = nes_luts::load(0).expect("bundled LUT");
     cases.push((
         "nes-lut",

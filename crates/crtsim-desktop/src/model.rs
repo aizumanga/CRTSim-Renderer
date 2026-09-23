@@ -154,6 +154,7 @@ const LABELS: &[(&str, &str)] = &[
     ("persistence", "Persistence (R, G, B)"),
     ("warmup", "Warm-up ticks"),
     ("phase", "Phase"),
+    ("interlace", "Interlaced fields"),
 ];
 
 /// A setting's label and its place in `LABELS`. A setting missing from the table goes last,

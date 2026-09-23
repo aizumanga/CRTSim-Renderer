@@ -73,6 +73,10 @@ pub struct Config {
     pub bloom_spread: f32,
     pub color_mode: ColorMode,
     pub mask_antialias: bool,
+    /// Interlaced scanning: each tick refreshes only every other signal row, alternating
+    /// between the two fields, and the rows it skips only decay by `persistence`. Meant for
+    /// 480- or 576-row signals, as an interlaced set drew them. Off draws every row every tick.
+    pub interlace: bool,
     /// Optional YIQ hue rotation, in degrees. Not the game's unpublished NES palette LUT.
     pub hue: f32,
     pub chroma: f32,
@@ -116,6 +120,7 @@ impl Default for Config {
             bloom_spread: 0.025,
             color_mode: ColorMode::Reference,
             mask_antialias: false,
+            interlace: false,
             hue: 0.,
             chroma: 1.,
         }

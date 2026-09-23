@@ -221,6 +221,8 @@ Debug output contains `clean.png`, `signal.png`, and the resolved `settings.json
 Export directories must be new. Sixteen warm-up ticks means 17 total ticks; it is deterministic, not an assertion of complete convergence.
 `alternating` advances phase once per tick; the final phase depends on warm-up parity. Stable mode is recommended for still images.
 
+**Interlaced fields** (`"interlace": true`) makes each tick scan every other signal row, alternating fields, while the rows it skips only fade by persistence, as on an interlaced set. Use it with a 480- or 576-row signal. On a still, the last tick's field is the bright one, so warm-up parity picks which; in a video each frame is one field.
+
 ### GPU troubleshooting
 
 - Linux: use your distribution's Vulkan driver for your GPU. On Arch/NVIDIA this normally comes with the Vulkan loader and matching NVIDIA userspace driver.
