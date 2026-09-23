@@ -2,7 +2,7 @@ use anyhow::{ensure, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use crtsim_core::{
     config::{self, Config, Filter, Fit, Phase},
-    mesh, Renderer,
+    mesh, PrepareOn, Renderer,
 };
 use image::{DynamicImage, ImageOutputFormat};
 use std::{
@@ -44,6 +44,10 @@ enum Command {
         warmup: Option<u32>,
         #[arg(long, value_enum, default_value = "auto")]
         backend: Backend,
+        /// Where to resize, edit and grade the input. The GPU by default; cpu runs the
+        /// original implementation, for comparing the two.
+        #[arg(long, value_enum, default_value = "gpu")]
+        prepare: PrepareArg,
         /// Save clean.png, signal.png and settings.json into a NEW directory.
         #[arg(long)]
         debug_dir: Option<PathBuf>,
@@ -69,6 +73,11 @@ enum Backend {
     Vulkan,
     Dx12,
     Metal,
+}
+#[derive(Clone, Copy, ValueEnum)]
+enum PrepareArg {
+    Gpu,
+    Cpu,
 }
 #[derive(Clone, Copy, ValueEnum)]
 enum PhaseArg {
@@ -141,6 +150,7 @@ fn main() -> Result<()> {
             phase,
             warmup,
             backend,
+            prepare,
             debug_dir,
         } => {
             ensure!(!output.exists(), "Output already exists; choose a new path");
@@ -206,7 +216,11 @@ fn main() -> Result<()> {
                 Backend::Dx12 => wgpu::Backends::DX12,
                 Backend::Metal => wgpu::Backends::METAL,
             };
-            let renderer = pollster::block_on(Renderer::new(backends))?;
+            let mut renderer = pollster::block_on(Renderer::new(backends))?;
+            renderer.prepare = match prepare {
+                PrepareArg::Gpu => PrepareOn::Gpu,
+                PrepareArg::Cpu => PrepareOn::Cpu,
+            };
             eprintln!(
                 "Adapter: {} ({:?}, {:?})",
                 renderer.adapter.name, renderer.adapter.backend, renderer.adapter.device_type

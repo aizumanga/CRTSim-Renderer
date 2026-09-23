@@ -6,7 +6,7 @@ The root CC0 dedication applies to this project's original contributions, not to
 
 J. Kyle Pittman, CC0 1.0. Original dedication: `assets/original-crtsim/COPYING.txt`.
 Repository and exact source commit: `assets/original-crtsim/SOURCES.md`.
-The WGSL shader is a translation/adaptation of the shared effect.
+The CRT shader, `shaders/crtsim.wgsl`, is a translation/adaptation of the shared effect. `shaders/prepare.wgsl` is original to this project.
 
 ## Rust dependencies
 

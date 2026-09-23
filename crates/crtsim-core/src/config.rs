@@ -241,6 +241,20 @@ impl Config {
         validate_size(d)?;
         Ok(d)
     }
+    /// Whether prepare takes the source-edit route -- resampled through the crop, rotation,
+    /// zoom and pan -- rather than the plain resize.
+    pub fn edits_source(&self) -> bool {
+        let s = &self.source;
+        s.crop != [0.; 4]
+            || s.rotation != 0.
+            || s.zoom != 1.
+            || s.position != [0.; 2]
+            || s.checkerboard
+    }
+    /// Whether the YIQ grade does anything; neutral values leave the signal untouched.
+    pub fn grades(&self) -> bool {
+        self.hue != 0. || self.chroma != 1.
+    }
     pub fn uv_scale(&self, signal: (u32, u32)) -> [f32; 2] {
         let ratio = signal.0 as f32 / signal.1 as f32 * self.pixel_aspect / (4. / 3.);
         match self.fit {
@@ -256,15 +270,13 @@ impl Config {
 
 /// Produces the logical signal; alpha is composited onto the selected background before filtering.
 /// Explicit custom sizes/original may change aspect: the caller must opt into them.
+///
+/// Renders run this on the GPU (see `gpu_prepare`); this is the reference that port is held to,
+/// and the fallback for an input too large to prepare on the device.
 pub fn prepare(input: &RgbaImage, config: &Config) -> Result<RgbaImage> {
     config.validate()?;
     let (w, h) = config.signal_size(input.dimensions())?;
-    let transformed = config.source.crop != [0.; 4]
-        || config.source.rotation != 0.
-        || config.source.zoom != 1.
-        || config.source.position != [0.; 2]
-        || config.source.checkerboard;
-    let mut resized = if transformed {
+    let mut resized = if config.edits_source() {
         config
             .source
             .prepare(input, (w, h), config.filter == Filter::Nearest)
@@ -289,7 +301,7 @@ pub fn prepare(input: &RgbaImage, config: &Config) -> Result<RgbaImage> {
     if let Some(lut) = &config.lut {
         lut.apply(&mut resized);
     }
-    if config.hue != 0. || config.chroma != 1. {
+    if config.grades() {
         let (sin, cos) = config.hue.to_radians().sin_cos();
         for p in resized.pixels_mut() {
             let [r, g, b] = [p[0] as f32 / 255., p[1] as f32 / 255., p[2] as f32 / 255.];

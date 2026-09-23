@@ -4,12 +4,18 @@ This is a runnable prototype, not a claim of completed cross-platform visual par
 
 ## Golden-image rendering regression
 
-`cargo test -p crtsim-core --test golden -- --ignored --nocapture` compares nine rendered
-frames against images committed in `crates/crtsim-core/tests/golden/`. The CI fixtures show
+`cargo test -p crtsim-core --test golden -- --ignored --nocapture` compares nineteen rendered
+images against images committed in `crates/crtsim-core/tests/golden/`. The CI fixtures show
 that a render finished; these show that it still produces the same picture. One case per route
 the renderer can take: the reference frame and its signal, both composite phases, linear-light,
 the antialiased mask, screen-only, a bundled NES LUT, and the second frame of a sequence, which
 is the only case that sees frame-to-frame persistence.
+
+The other ten capture the prepare step's output -- the clean signal, before the simulation --
+since the test card reaches it only as an identity: Lanczos down, up and along one axis, Nearest
+down and up, the alpha composite, source edits with each sampler, the grade, and a LUT with the
+grade. They were rendered by the CPU prepare step and still pass bit-exactly now that it runs on
+the GPU.
 
 Comparison is effectively bit-exact (max one 0-255 step on any channel, mean under 0.002).
 That is not a cosmetic choice: perceptual limits loose enough to survive a driver change were
@@ -21,6 +27,24 @@ fail at all.
 The driver that produced the goldens is recorded in `tests/golden/driver.txt`, and a different
 driver version fails with that message rather than with pixel differences. A Mesa upgrade in CI
 is therefore a deliberate review point, not a silent shift.
+
+## GPU prepare step
+
+Resize, alpha composite, source edits, LUT and grade run on the GPU (`shaders/prepare.wgsl`).
+The shader repeats the CPU implementation's arithmetic rather than improving on it -- the image
+crate's separable resize with weights computed on the CPU exactly as that crate computes them,
+and the rounding to 8 bits between stages -- so the move changes where the work runs and not
+the picture. `config::prepare` stays as the reference, and as the fallback for an input too
+large to prepare on the device.
+
+- `gpu_prepare::tests::kernels_reproduce_the_image_crates_resize_exactly` (no GPU) checks the
+  weight tables against `image::imageops::resize` for both filters.
+- `gpu_prepare_matches_cpu_prepare` (Vulkan) renders 48 varied settings both ways and allows at
+  most one step on any channel. On lavapipe no channel differs at all. Elsewhere, float rounding
+  can put a value on the other side of a half step. A source edit sampled Nearest can also pick
+  the neighbouring pixel where a sample falls within float error of a pixel edge.
+- `crtsim render --prepare cpu` renders with the CPU implementation for a direct comparison on
+  real hardware.
 
 After an intended rendering change, refresh and review the image diff:
 
