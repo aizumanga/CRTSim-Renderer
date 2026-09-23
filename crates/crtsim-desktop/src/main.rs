@@ -1463,7 +1463,7 @@ impl App {
                 if let Some(ref error) = self.error { ui.colored_label(ui.visuals().error_fg_color,error); }
                 if !self.gallery_warnings.is_empty() { egui::CollapsingHeader::new("Skipped preset files").show(ui,|ui| { for warning in &self.gallery_warnings { ui.label(warning); } }); }
                 ui.separator();
-                egui::ScrollArea::vertical().max_height(360.).show(ui, |ui| {
+                egui::ScrollArea::vertical().max_height(ui.available_height().max(200.)).show(ui, |ui| {
                     for user in [false,true] {
                         ui.heading(if user { "My presets" } else { "Included presets" });
                         let mut count = 0;
@@ -1484,6 +1484,33 @@ impl App {
                                             }
                                         });
                                         ui.add(egui::Label::new(if entry.description.is_empty() { "No description" } else { &entry.description }).wrap(true));
+                                        if entry.config == self.config {
+                                            ui.small("Matches your settings");
+                                        } else {
+                                            let changes = model::differences(&self.config, &entry.config);
+                                            egui::CollapsingHeader::new(format!(
+                                                "Differs from your settings in {} {}",
+                                                changes.len(),
+                                                if changes.len() == 1 { "setting" } else { "settings" }
+                                            ))
+                                            .id_source(("preset differences", &entry.name, entry.user))
+                                            .show(ui, |ui| {
+                                                egui::Grid::new(("preset difference grid", &entry.name, entry.user))
+                                                    .striped(true)
+                                                    .show(ui, |ui| {
+                                                        ui.strong("Setting");
+                                                        ui.strong("Yours");
+                                                        ui.strong("Preset");
+                                                        ui.end_row();
+                                                        for change in &changes {
+                                                            ui.label(&change.setting);
+                                                            ui.label(&change.from);
+                                                            ui.label(&change.to);
+                                                            ui.end_row();
+                                                        }
+                                                    });
+                                            });
+                                        }
                                     });
                                 });
                             });
