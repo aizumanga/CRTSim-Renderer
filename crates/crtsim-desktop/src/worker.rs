@@ -16,25 +16,25 @@ pub enum Gpu {
     Own(wgpu::Backends),
     /// Render on the device the interface draws with, so a finished frame can reach the
     /// screen without a round trip through system memory.
-    Shared {
-        device: Arc<wgpu::Device>,
-        queue: Arc<wgpu::Queue>,
-        adapter: wgpu::AdapterInfo,
-    },
+    Shared(eframe::egui_wgpu::RenderState),
 }
 impl Gpu {
     fn renderer(&self) -> anyhow::Result<Renderer> {
         match self {
             Self::Own(backends) => pollster::block_on(Renderer::new(*backends)),
-            Self::Shared {
-                device,
-                queue,
-                adapter,
-            } => pollster::block_on(Renderer::with_device(
-                device.clone(),
-                queue.clone(),
-                adapter.clone(),
+            Self::Shared(state) => pollster::block_on(Renderer::with_device(
+                state.device.clone(),
+                state.queue.clone(),
+                state.adapter.get_info(),
             )),
+        }
+    }
+    /// The interface's own device, where there is one. Only a frame rendered on it can be
+    /// drawn without being copied through system memory first.
+    pub fn render_state(&self) -> Option<&eframe::egui_wgpu::RenderState> {
+        match self {
+            Self::Own(_) => None,
+            Self::Shared(state) => Some(state),
         }
     }
 }
@@ -92,6 +92,21 @@ pub struct PlaybackFrame {
     pub source: RgbaImage,
     pub crt: RgbaImage,
 }
+/// A finished preview. A renderer on its own device cannot hand its textures to the
+/// interface, so it still sends pixels.
+pub enum Preview {
+    Pixels(RgbaImage),
+    Frame(crtsim_core::PreviewFrame),
+}
+impl Preview {
+    pub fn dimensions(&self) -> (u32, u32) {
+        match self {
+            Self::Pixels(image) => image.dimensions(),
+            Self::Frame(frame) => (frame.width, frame.height),
+        }
+    }
+}
+
 pub enum Event {
     Progress {
         progress: RenderProgress,
@@ -101,7 +116,7 @@ pub enum Event {
     PresetImported(Result<(PathBuf, Config, Option<crtsim_media::Options>), String>),
     Preview {
         revision: u64,
-        result: Result<(RgbaImage, f32), String>,
+        result: Result<(Preview, f32), String>,
     },
     Exported(Result<PathBuf, String>),
 }
@@ -360,8 +375,8 @@ pub fn start(
                     config,
                 } => {
                     let started = Instant::now();
-                    let result = render(&mut renderer, &gpu, &input, &config, None, |_| {})
-                        .map(|im| (im, started.elapsed().as_secs_f32()));
+                    let result = preview(&mut renderer, &gpu, &input, &config)
+                        .map(|p| (p, started.elapsed().as_secs_f32()));
                     Event::Preview { revision, result }
                 }
                 Job::Export {
@@ -406,6 +421,34 @@ pub fn start(
     });
     (send, receive, thread)
 }
+/// A frame for the screen. On the interface's own device it is left there; otherwise it is
+/// read back, which is what the interface then has to upload again.
+fn preview(
+    renderer: &mut Option<Renderer>,
+    gpu: &Gpu,
+    input: &RgbaImage,
+    c: &Config,
+) -> Result<Preview, String> {
+    if gpu.render_state().is_none() {
+        return render(renderer, gpu, input, c, None, |_| {}).map(Preview::Pixels);
+    }
+    // Surface backend validation/device errors in the window, leaving settings usable.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> anyhow::Result<_> {
+        if renderer.is_none() {
+            *renderer = Some(gpu.renderer()?);
+        }
+        renderer.as_ref().unwrap().render_preview(input, c)
+    }));
+    match result {
+        Ok(Ok(frame)) => Ok(Preview::Frame(frame)),
+        Ok(Err(e)) => Err(format!("{e:#}")),
+        Err(_) => {
+            *renderer = None;
+            Err("Graphics device failed while rendering the preview".into())
+        }
+    }
+}
+
 fn render(
     renderer: &mut Option<Renderer>,
     gpu: &Gpu,
