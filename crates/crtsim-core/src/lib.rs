@@ -7,7 +7,10 @@ use anyhow::{ensure, Context, Result};
 use bytemuck::{Pod, Zeroable};
 use config::{ColorMode, Config, Phase};
 use image::RgbaImage;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use wgpu::util::DeviceExt;
 
 pub const SHADER: &str = include_str!("../../../shaders/crtsim.wgsl");
@@ -215,8 +218,8 @@ impl GpuMesh {
 
 /// One reusable GPU device; individual still jobs own and reset their history.
 pub struct Renderer {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
     layout: wgpu::BindGroupLayout,
     samplers: Vec<wgpu::Sampler>,
     pipelines: Vec<wgpu::RenderPipeline>,
@@ -249,6 +252,16 @@ pub struct RenderProgress {
 }
 
 impl Renderer {
+    /// The limits the renderer needs. A host sharing its own device must request at least
+    /// these, or a large export will fail validation on a device that only ever had to be big
+    /// enough for a window.
+    pub fn limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
+        wgpu::Limits::default().using_resolution(adapter.limits())
+    }
+
+    /// Creates a renderer that owns its device. Headless callers -- the CLI, the tests --
+    /// want this; a windowed application should share its own device with `with_device`
+    /// instead, so rendered frames and the interface drawing them are on one device.
     pub async fn new(backends: wgpu::Backends) -> Result<Self> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends,
@@ -258,7 +271,7 @@ impl Renderer {
             power_preference:wgpu::PowerPreference::HighPerformance,compatible_surface:None,force_fallback_adapter:false,
         }).await.context("No compatible graphics adapter. Install a Vulkan/DX12/Metal driver; no window is required.")?;
         let info = adapter.get_info();
-        let limits = wgpu::Limits::default().using_resolution(adapter.limits());
+        let limits = Self::limits(&adapter);
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
@@ -269,6 +282,20 @@ impl Renderer {
                 None,
             )
             .await?;
+        Self::with_device(Arc::new(device), Arc::new(queue), info).await
+    }
+
+    /// Builds a renderer on a device someone else owns, so its output can be handed to that
+    /// device's other users without a round trip through system memory. The device must have
+    /// been requested with at least `Renderer::limits`.
+    ///
+    /// Note that a shared device cannot be replaced: where `new` lets a caller rebuild after a
+    /// driver failure, here a lost device takes its owner down too.
+    pub async fn with_device(
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+        info: wgpu::AdapterInfo,
+    ) -> Result<Self> {
         let mut entries = vec![wgpu::BindGroupLayoutEntry {
             binding: 0,
             visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,

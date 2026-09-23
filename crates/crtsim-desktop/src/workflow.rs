@@ -845,7 +845,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = App::new(
             &ctx,
-            wgpu::Backends::PRIMARY,
+            crate::worker::Gpu::Own(wgpu::Backends::PRIMARY),
             None,
             Some("unused-smoke.png".into()),
         );
@@ -884,7 +884,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut app = App::new(
             &ctx,
-            wgpu::Backends::PRIMARY,
+            crate::worker::Gpu::Own(wgpu::Backends::PRIMARY),
             None,
             Some("unused-smoke.png".into()),
         );

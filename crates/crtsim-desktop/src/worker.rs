@@ -8,6 +8,37 @@ use std::{
     time::Instant,
 };
 
+/// Where the worker's renderer gets its device.
+#[derive(Clone)]
+pub enum Gpu {
+    /// Make one. For callers with no window -- the tests, and any platform where the
+    /// interface could not hand its own device over.
+    Own(wgpu::Backends),
+    /// Render on the device the interface draws with, so a finished frame can reach the
+    /// screen without a round trip through system memory.
+    Shared {
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+        adapter: wgpu::AdapterInfo,
+    },
+}
+impl Gpu {
+    fn renderer(&self) -> anyhow::Result<Renderer> {
+        match self {
+            Self::Own(backends) => pollster::block_on(Renderer::new(*backends)),
+            Self::Shared {
+                device,
+                queue,
+                adapter,
+            } => pollster::block_on(Renderer::with_device(
+                device.clone(),
+                queue.clone(),
+                adapter.clone(),
+            )),
+        }
+    }
+}
+
 pub enum Job {
     Playback {
         video: crtsim_media::Video,
@@ -76,7 +107,7 @@ pub enum Event {
 }
 pub fn start(
     ctx: egui::Context,
-    backends: wgpu::Backends,
+    gpu: Gpu,
 ) -> (
     mpsc::Sender<Job>,
     mpsc::Receiver<Event>,
@@ -100,7 +131,7 @@ pub fn start(
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
                         || -> anyhow::Result<()> {
                             if renderer.is_none() {
-                                renderer = Some(pollster::block_on(Renderer::new(backends))?);
+                                renderer = Some(gpu.renderer()?);
                             }
                             crtsim_media::playback(
                                 &video,
@@ -171,10 +202,7 @@ pub fn start(
                                 let video = crtsim_media::probe(&source, &cancel)
                                     .map_err(|e| format!("{e:#}"))?;
                                 if renderer.is_none() {
-                                    renderer = Some(
-                                        pollster::block_on(Renderer::new(backends))
-                                            .map_err(|e| format!("{e:#}"))?,
-                                    );
+                                    renderer = Some(gpu.renderer().map_err(|e| format!("{e:#}"))?);
                                 }
                                 crtsim_media::export(
                                     &video,
@@ -199,7 +227,7 @@ pub fn start(
                                     files::load_image(&source).map_err(|e| format!("{e:#}"))?;
                                 let im = render(
                                     &mut renderer,
-                                    backends,
+                                    &gpu,
                                     &input,
                                     &config,
                                     Some(&cancel),
@@ -278,7 +306,7 @@ pub fn start(
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
                         || -> anyhow::Result<_> {
                             if renderer.is_none() {
-                                renderer = Some(pollster::block_on(Renderer::new(backends))?);
+                                renderer = Some(gpu.renderer()?);
                             }
                             crtsim_media::export(
                                 &video,
@@ -332,7 +360,7 @@ pub fn start(
                     config,
                 } => {
                     let started = Instant::now();
-                    let result = render(&mut renderer, backends, &input, &config, None, |_| {})
+                    let result = render(&mut renderer, &gpu, &input, &config, None, |_| {})
                         .map(|im| (im, started.elapsed().as_secs_f32()));
                     Event::Preview { revision, result }
                 }
@@ -344,7 +372,7 @@ pub fn start(
                 } => Event::Exported(
                     render(
                         &mut renderer,
-                        backends,
+                        &gpu,
                         &input,
                         &config,
                         Some(&cancel),
@@ -380,7 +408,7 @@ pub fn start(
 }
 fn render(
     renderer: &mut Option<Renderer>,
-    backends: wgpu::Backends,
+    gpu: &Gpu,
     input: &RgbaImage,
     c: &Config,
     cancel: Option<&AtomicBool>,
@@ -393,7 +421,7 @@ fn render(
                 fraction: 0.,
                 stage: "Initializing graphics device".into(),
             });
-            *renderer = Some(pollster::block_on(Renderer::new(backends))?);
+            *renderer = Some(gpu.renderer()?);
         }
         let renderer = renderer.as_ref().unwrap();
         let image = match cancel {

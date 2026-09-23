@@ -121,14 +121,14 @@ fn texture(ctx: &egui::Context, name: &str, image: &RgbaImage, limit: u32) -> Te
 impl App {
     fn new(
         ctx: &egui::Context,
-        backend: wgpu::Backends,
+        gpu: worker::Gpu,
         input_path: Option<PathBuf>,
         smoke: Option<PathBuf>,
     ) -> Self {
         let input = Arc::new(config::test_card());
         let original = texture(ctx, "original", &input, 2048);
         let config = model::general();
-        let (jobs, events, worker_thread) = worker::start(ctx.clone(), backend);
+        let (jobs, events, worker_thread) = worker::start(ctx.clone(), gpu);
         let (dialog_send, dialog_receive) = mpsc::channel();
         let loading = false;
         let (store, mut storage_error) = match gallery::Store::discover() {
@@ -1633,6 +1633,7 @@ fn main() -> eframe::Result<()> {
     let mut input = None;
     let mut smoke = None;
     let mut backends = wgpu::Backends::PRIMARY;
+    let mut pinned_backend = false;
     let mut smoke_welcome = false;
     let mut smoke_gallery = false;
     let mut smoke_lut_gallery = false;
@@ -1645,11 +1646,15 @@ fn main() -> eframe::Result<()> {
             "--smoke-lut-gallery" => smoke_lut_gallery = true,
             "--smoke-export" => smoke_export = true,
             "--backend" => {
+                pinned_backend = true;
                 backends = match args.next().as_deref() {
                     Some("vulkan") => wgpu::Backends::VULKAN,
                     Some("dx12") => wgpu::Backends::DX12,
                     Some("metal") => wgpu::Backends::METAL,
-                    Some("auto") => wgpu::Backends::PRIMARY,
+                    Some("auto") => {
+                        pinned_backend = false;
+                        wgpu::Backends::PRIMARY
+                    }
                     _ => {
                         eprintln!("Expected --backend auto|vulkan|dx12|metal");
                         std::process::exit(2);
@@ -1682,11 +1687,54 @@ fn main() -> eframe::Result<()> {
             viewport: egui::ViewportBuilder::default()
                 .with_inner_size([1280., 850.])
                 .with_min_inner_size([900., 620.]),
-            renderer: eframe::Renderer::Glow,
+            // wgpu, so the interface draws on the same device the CRT frames are rendered on.
+            renderer: eframe::Renderer::Wgpu,
+            wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
+                // Honour --backend, which egui would otherwise pick for itself. Without one
+                // pinned, OpenGL stays available so the window still opens on a machine with
+                // no modern backend and can say so, as it could when the interface drew with
+                // GL; rendering there falls back to its own device, exactly as before.
+                supported_backends: if pinned_backend {
+                    backends
+                } else {
+                    backends | wgpu::Backends::GL
+                },
+                // The window only needs a device big enough for the window; the renderer needs
+                // one big enough for a full-resolution export, so ask for the larger of the
+                // two. Not of a GL adapter, which cannot meet them -- asking would stop the
+                // window opening at all, which is the failure this fallback exists to avoid.
+                device_descriptor: std::sync::Arc::new(|adapter: &wgpu::Adapter| {
+                    wgpu::DeviceDescriptor {
+                        label: Some("CRTSim"),
+                        required_features: wgpu::Features::empty(),
+                        required_limits: if adapter.get_info().backend == wgpu::Backend::Gl {
+                            wgpu::Limits::downlevel_webgl2_defaults()
+                                .using_resolution(adapter.limits())
+                        } else {
+                            crtsim_core::Renderer::limits(adapter)
+                        },
+                    }
+                }),
+                ..Default::default()
+            },
             ..Default::default()
         },
         Box::new(move |cc| {
-            let mut app = App::new(&cc.egui_ctx, backends, input, smoke);
+            // Without a wgpu device -- an unsupported platform, or a backend that failed to
+            // start -- the worker falls back to making its own, as it always did.
+            let gpu = match cc.wgpu_render_state.as_ref() {
+                // Sharing is only worth it on a device that can also do the rendering. A GL
+                // fallback window keeps the interface alive; the renderer makes its own.
+                Some(state) if state.adapter.get_info().backend != wgpu::Backend::Gl => {
+                    worker::Gpu::Shared {
+                        device: state.device.clone(),
+                        queue: state.queue.clone(),
+                        adapter: state.adapter.get_info(),
+                    }
+                }
+                _ => worker::Gpu::Own(backends),
+            };
+            let mut app = App::new(&cc.egui_ctx, gpu, input, smoke);
             if app.smoke.is_some() {
                 app.smoke_welcome = smoke_welcome;
                 app.smoke_gallery = smoke_gallery;
@@ -1709,7 +1757,7 @@ mod tests {
     #[test]
     fn obsolete_preview_cannot_replace_current_settings() {
         let ctx = egui::Context::default();
-        let mut app = App::new(&ctx, wgpu::Backends::PRIMARY, None, None);
+        let mut app = App::new(&ctx, worker::Gpu::Own(wgpu::Backends::PRIMARY), None, None);
         let (send, receive) = mpsc::channel();
         app.events = receive;
         app.rendering = true;
@@ -1739,7 +1787,7 @@ mod tests {
     #[test]
     fn export_captures_full_resolution_and_original_source() {
         let ctx = egui::Context::default();
-        let mut app = App::new(&ctx, wgpu::Backends::PRIMARY, None, None);
+        let mut app = App::new(&ctx, worker::Gpu::Own(wgpu::Backends::PRIMARY), None, None);
         let (send, receive) = mpsc::channel();
         app.jobs = send;
         let dir = tempfile::tempdir().unwrap();
