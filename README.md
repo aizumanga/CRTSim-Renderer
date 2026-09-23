@@ -139,7 +139,7 @@ Audio defaults to copying compatible tracks, with AAC/Opus fallback; delayed tra
 The progress bar reports frames, rendering speed and an approximate remaining time. **Cancel** stops image export, video loading and video export;
 closing the app also terminates its FFmpeg processes. Existing destinations are replaced only after a successful export.
 Temporary encoded files require space on the destination drive, but decoded frames are streamed rather than saved as PNGs.
-Settings and the source are captured for each export; edits during export apply to the next job.
+Settings and the source are captured for each export; edits during export apply to the next job, and the preview keeps up with them while the export runs.
 
 Output is opaque SDR with software or optional hardware H.264 encoding. Video is explicitly converted from full-range RGB to limited-range BT.709 and tagged accordingly. HDR input uses FFmpeg's `zscale`/`tonemap` filters when available; HDR output remains outside this version.
 Audio tracks, supported subtitles, chapters and source metadata are preserved by default; MKV also supports attachments. See the [workflow guide](docs/WORKFLOW.md) for container limits and quality profiles.

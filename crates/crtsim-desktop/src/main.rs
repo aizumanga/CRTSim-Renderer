@@ -90,7 +90,7 @@ struct App {
     loading: bool,
     exporting: bool,
     dialog_open: bool,
-    jobs: mpsc::Sender<Job>,
+    jobs: worker::Jobs,
     events: mpsc::Receiver<Event>,
     dialog_send: mpsc::Sender<(Dialog, Option<PathBuf>)>,
     dialog_receive: mpsc::Receiver<(Dialog, Option<PathBuf>)>,
@@ -710,8 +710,10 @@ impl App {
             }
         }
     }
+    /// Also while exporting: previews have their own worker, and the export works from the
+    /// settings it captured, so the ones on screen are free to change.
     fn request_preview(&mut self) {
-        if self.rendering || self.loading || self.exporting || self.workflow.playback.is_some() {
+        if self.rendering || self.loading || self.workflow.playback.is_some() {
             return;
         }
         self.history.commit(&self.config);
@@ -1077,7 +1079,7 @@ impl App {
             ui.checkbox(&mut self.live, "Live preview");
             if ui
                 .add_enabled(
-                    !self.rendering && !self.loading && !self.exporting,
+                    !self.rendering && !self.loading,
                     egui::Button::new("Refresh"),
                 )
                 .clicked()
@@ -1855,11 +1857,30 @@ mod tests {
     }
 
     #[test]
+    fn settings_changed_during_an_export_are_previewed() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(&ctx, worker::Gpu::Own(wgpu::Backends::PRIMARY), None, None);
+        let (send, receive) = mpsc::channel();
+        app.jobs = worker::Jobs::capture(send);
+        let dir = tempfile::tempdir().unwrap();
+        app.export(dir.path().join("rendered.png"));
+        assert!(matches!(receive.try_recv(), Ok(Job::Export { .. })));
+        app.config.bloom = 0.;
+        app.changed();
+        app.request_preview();
+        match receive.try_recv() {
+            Ok(Job::Preview { config, .. }) => assert_eq!(config.bloom, 0.),
+            _ => panic!("expected a preview while exporting"),
+        }
+        assert!(app.exporting && app.rendering);
+    }
+
+    #[test]
     fn export_captures_full_resolution_and_original_source() {
         let ctx = egui::Context::default();
         let mut app = App::new(&ctx, worker::Gpu::Own(wgpu::Backends::PRIMARY), None, None);
         let (send, receive) = mpsc::channel();
-        app.jobs = send;
+        app.jobs = worker::Jobs::capture(send);
         let dir = tempfile::tempdir().unwrap();
         app.config.output = "4k".into();
         app.preview_limit = Some(800);
