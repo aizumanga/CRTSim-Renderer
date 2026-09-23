@@ -6,6 +6,7 @@ mod gallery;
 mod lut_gallery;
 mod model;
 mod theme;
+mod thumbnails;
 mod worker;
 mod workflow;
 
@@ -68,6 +69,7 @@ struct App {
     /// An audition started or ended, so the preview must be redrawn even with live preview off.
     audition_pending: bool,
     included_luts: std::collections::HashMap<usize, Arc<crtsim_core::workflow::Lut>>,
+    thumbnails: thumbnails::Thumbnails,
     gallery_warnings: Vec<String>,
     gallery_name: String,
     description_edit: Option<(String, String)>,
@@ -217,6 +219,7 @@ impl App {
             offered: None,
             audition_pending: false,
             included_luts: Default::default(),
+            thumbnails: Default::default(),
             gallery_warnings,
             gallery_name: String::new(),
             description_edit: None,
@@ -702,6 +705,11 @@ impl App {
                         Err(e) => self.preview_error = Some(e),
                     }
                 }
+                Event::Thumbnail {
+                    generation,
+                    key,
+                    result,
+                } => self.thumbnail_ready(ctx, generation, key, result),
                 Event::Exported(result) => {
                     self.queue_finished(&result);
                     self.video_job = false;
@@ -1323,6 +1331,18 @@ impl App {
         let mut selected = None;
         let mut hovered = None;
         let mut edit = None;
+        let wanted: Vec<(String, Config)> = self
+            .gallery_entries
+            .iter()
+            .map(|e| (e.name.clone(), e.config.clone()))
+            .collect();
+        let pictures: std::collections::HashMap<String, TextureHandle> = wanted
+            .into_iter()
+            .filter_map(|(name, config)| {
+                let picture = self.preset_thumbnail(&name, &config)?;
+                Some((name, picture))
+            })
+            .collect();
         let mut window = self.window_state("Preset gallery");
         let open = chrome::tool_window(ctx, "Preset gallery", [600., 500.], &mut window, |ui| {
             ui.add_enabled_ui(!self.dialog_open, |ui| {
@@ -1354,15 +1374,22 @@ impl App {
                         for entry in self.gallery_entries.iter().filter(|e| e.user == user) {
                             count += 1;
                             ui.group(|ui| {
+                                ui.set_min_width(ui.available_width());
                                 ui.horizontal(|ui| {
-                                    let label = ui.selectable_label(self.config == entry.config, &entry.name);
-                                    if label.clicked() { selected = Some(entry.config.clone()); }
-                                    if label.hovered() && ui.is_enabled() { hovered = Some((format!("preset “{}”", entry.name), entry.config.clone())); }
-                                    if entry.user && ui.small_button("Edit description").clicked() {
-                                        edit = Some((entry.name.clone(), entry.description.clone()));
-                                    }
+                                    let picture = thumbnails::show(ui, pictures.get(&entry.name), 72., 16. / 9.)
+                                        .on_hover_text("Point to preview this preset on your image; click to apply it");
+                                    ui.vertical(|ui| {
+                                        ui.horizontal(|ui| {
+                                            let label = ui.selectable_label(self.config == entry.config, &entry.name);
+                                            if label.clicked() || picture.clicked() { selected = Some(entry.config.clone()); }
+                                            if (label.hovered() || picture.hovered()) && ui.is_enabled() { hovered = Some((format!("preset “{}”", entry.name), entry.config.clone())); }
+                                            if entry.user && ui.small_button("Edit description").clicked() {
+                                                edit = Some((entry.name.clone(), entry.description.clone()));
+                                            }
+                                        });
+                                        ui.add(egui::Label::new(if entry.description.is_empty() { "No description" } else { &entry.description }).wrap(true));
+                                    });
                                 });
-                                ui.add(egui::Label::new(if entry.description.is_empty() { "No description" } else { &entry.description }).wrap(true));
                             });
                         }
                         if count == 0 { ui.label("No personal presets yet. Adjust an image and save your first look above."); }
@@ -1703,7 +1730,8 @@ impl eframe::App for App {
                 );
                 std::process::exit(1);
             }
-            if (self.smoke_welcome || self.rendered_revision == Some(self.revision))
+            if (self.smoke_welcome
+                || self.rendered_revision == Some(self.revision) && !self.thumbnails_pending())
                 && !self.smoke_requested
             {
                 self.smoke_requested = true;

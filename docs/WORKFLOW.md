@@ -20,7 +20,9 @@ Choose black, white, a custom color or a checkerboard for transparent pixels and
 The background becomes part of the rendered image, including exports. This is not alpha-channel export.
 **Screen only · no bezel** omits the physical frame mesh while retaining the curved glass, its lighting and output canvas.
 
-**Color & LUT → LUT gallery…** opens 38 included NES LUTs with a searchable list.
+**Color & LUT → LUT gallery…** opens 38 included NES LUTs with a searchable list. Each
+shows its color mapping on a thumbnail of the current image. Point at one to preview it on
+the full image without applying it; move away to return to your settings.
 Click a name to apply it while keeping your CRT and source framing settings. The gallery
 stays open for comparisons; **Remove LUT** restores the ungraded input. Changes support
 Undo/Redo and use Live preview when enabled. The collection is embedded and works offline.

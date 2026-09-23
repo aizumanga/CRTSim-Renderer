@@ -30,6 +30,7 @@ The welcome and credits also link to Pittman's
 an interesting technical account of how the effect developed.
 
 **Preset gallery** includes General image, Original CRTSim, Soft television, Clean RGB, Pixel art 240p, Warm analog and Linear light.
+Each preset shows a thumbnail rendered from your current image. Point at a preset to preview it on the full image without applying it (nothing is changed or added to Undo), and click to apply it.
 Enter a name and choose **Save current** to add your exact settings to **My presets**; they reappear after restarting. Use **Edit description** on any personal preset to add, change or clear its description.
 Descriptions are saved beside gallery JSON files as UTF-8 `.txt` files; the JSON stays CLI-compatible.
 To add an existing JSON, load it, then use Save current in the gallery. JSON export remains available for sharing.

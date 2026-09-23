@@ -61,7 +61,7 @@ pub struct Stopped;
 impl Jobs {
     pub fn send(&self, job: Job) -> Result<(), Stopped> {
         match job {
-            Job::Preview { .. } => self.preview.send(job),
+            Job::Preview { .. } | Job::Thumbnail { .. } => self.preview.send(job),
             Job::Shutdown => {
                 let _ = self.preview.send(Job::Shutdown);
                 self.work.send(job)
@@ -121,12 +121,34 @@ pub enum Job {
         input: Arc<RgbaImage>,
         config: Config,
     },
+    /// A small picture for a gallery entry. Always waits for a pending preview, and is dropped
+    /// unrendered once a thumbnail of a newer source is queued behind it.
+    Thumbnail {
+        generation: u64,
+        key: ThumbnailKey,
+        input: Arc<RgbaImage>,
+        look: Look,
+    },
     Export {
         input: Arc<RgbaImage>,
         config: Config,
         path: PathBuf,
         cancel: Arc<AtomicBool>,
     },
+}
+/// Which gallery entry a thumbnail belongs to.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ThumbnailKey {
+    Preset(String),
+    Lut(usize),
+}
+/// What a thumbnail shows.
+pub enum Look {
+    /// The whole CRT picture with these settings, at thumbnail size.
+    Crt(Box<Config>),
+    /// Only an included LUT's color mapping, applied to an input already at thumbnail size:
+    /// that is all a LUT changes, and it needs no GPU and no re-render when other settings move.
+    Lut(usize),
 }
 pub struct PlaybackFrame {
     pub time: f64,
@@ -160,6 +182,11 @@ pub enum Event {
         result: Result<(Preview, f32), String>,
     },
     Exported(Result<PathBuf, String>),
+    Thumbnail {
+        generation: u64,
+        key: ThumbnailKey,
+        result: Result<RgbaImage, String>,
+    },
 }
 /// Starts the two worker threads. The handle returned joins both.
 pub fn start(
@@ -197,22 +224,83 @@ fn preview_worker(
     events: mpsc::Sender<Event>,
 ) {
     let mut renderer: Option<Renderer> = None;
-    while let Ok(job) = jobs.recv() {
-        let Job::Preview {
-            revision,
-            input,
-            config,
-        } = job
-        else {
-            break;
+    let mut backlog = std::collections::VecDeque::new();
+    loop {
+        // Collect everything waiting, blocking only when there is nothing to do.
+        if backlog.is_empty() {
+            match jobs.recv() {
+                Ok(job) => backlog.push_back(job),
+                Err(_) => return,
+            }
+        }
+        backlog.extend(jobs.try_iter());
+        let Some(job) = next_job(&mut backlog) else {
+            return;
         };
-        let started = Instant::now();
-        let result = preview(&mut renderer, &gpu, &input, &config)
-            .map(|p| (p, started.elapsed().as_secs_f32()));
-        if events.send(Event::Preview { revision, result }).is_err() {
-            break;
+        let event = match job {
+            Job::Preview {
+                revision,
+                input,
+                config,
+            } => {
+                let started = Instant::now();
+                let result = preview(&mut renderer, &gpu, &input, &config)
+                    .map(|p| (p, started.elapsed().as_secs_f32()));
+                Event::Preview { revision, result }
+            }
+            Job::Thumbnail {
+                generation,
+                key,
+                input,
+                look,
+            } => {
+                let result = match look {
+                    Look::Crt(config) => render(&mut renderer, &gpu, &input, &config, None, |_| {}),
+                    Look::Lut(index) => crtsim_core::nes_luts::load(index)
+                        .map(|lut| {
+                            let mut image = (*input).clone();
+                            lut.apply(&mut image);
+                            image
+                        })
+                        .map_err(|e| format!("{e:#}")),
+                };
+                Event::Thumbnail {
+                    generation,
+                    key,
+                    result,
+                }
+            }
+            _ => return,
+        };
+        if events.send(event).is_err() {
+            return;
         }
         ctx.request_repaint();
+    }
+}
+
+/// The preview thread's next job: shutdown first, then the preview someone is waiting to see,
+/// then thumbnails in the order asked for, skipping any whose source has since been replaced.
+fn next_job(backlog: &mut std::collections::VecDeque<Job>) -> Option<Job> {
+    if backlog.iter().any(|job| matches!(job, Job::Shutdown)) {
+        return None;
+    }
+    let newest = backlog
+        .iter()
+        .filter_map(|job| match job {
+            Job::Thumbnail { generation, .. } => Some(*generation),
+            _ => None,
+        })
+        .max();
+    backlog.retain(
+        |job| !matches!(job, Job::Thumbnail { generation, .. } if Some(*generation) < newest),
+    );
+    match backlog
+        .iter()
+        .position(|job| matches!(job, Job::Preview { .. }))
+    {
+        Some(index) => backlog.remove(index),
+        None => backlog.pop_front(),
     }
 }
 
@@ -447,7 +535,9 @@ fn work(ctx: egui::Context, gpu: Gpu, jobs: mpsc::Receiver<Job>, events: mpsc::S
                     })
                     .map_err(|e| format!("{e:#}")),
             ),
-            Job::Preview { .. } => unreachable!("previews are routed to their own thread"),
+            Job::Preview { .. } | Job::Thumbnail { .. } => {
+                unreachable!("previews and thumbnails are routed to their own thread")
+            }
             Job::Export {
                 input,
                 config,
@@ -556,6 +646,45 @@ fn render(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn thumbnail(generation: u64, index: usize) -> Job {
+        Job::Thumbnail {
+            generation,
+            key: ThumbnailKey::Lut(index),
+            input: Arc::new(RgbaImage::new(1, 1)),
+            look: Look::Lut(index),
+        }
+    }
+
+    #[test]
+    fn a_preview_goes_before_thumbnails_and_stale_thumbnails_are_dropped() {
+        let mut backlog: std::collections::VecDeque<Job> = [
+            thumbnail(1, 0),
+            thumbnail(1, 1),
+            Job::Preview {
+                revision: 3,
+                input: Arc::new(RgbaImage::new(1, 1)),
+                config: Config::default(),
+            },
+            thumbnail(2, 0),
+        ]
+        .into();
+        assert!(matches!(
+            next_job(&mut backlog),
+            Some(Job::Preview { revision: 3, .. })
+        ));
+        // The source changed after the first two were asked for: only the newer one is left.
+        assert!(matches!(
+            next_job(&mut backlog),
+            Some(Job::Thumbnail { generation: 2, .. })
+        ));
+        assert!(next_job(&mut backlog).is_none());
+        backlog.extend([thumbnail(3, 0), Job::Shutdown]);
+        assert!(
+            next_job(&mut backlog).is_none(),
+            "shutdown is never kept waiting"
+        );
+    }
 
     /// The point of the second thread: a preview finishes while an export is still running,
     /// where it used to wait in the queue behind all of it.

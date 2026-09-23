@@ -6,6 +6,18 @@ impl App {
         if !self.show_lut_gallery || self.show_welcome {
             return;
         }
+        let query = self.lut_gallery_search.trim().to_lowercase();
+        // Asked for before the window borrows `self`; only for the entries the search shows.
+        let pictures: Vec<Option<TextureHandle>> = (0..nes_luts::ENTRIES.len())
+            .map(|index| {
+                nes_luts::ENTRIES[index]
+                    .name
+                    .to_lowercase()
+                    .contains(&query)
+                    .then(|| self.lut_thumbnail(index))
+                    .flatten()
+            })
+            .collect();
         let mut selected = None;
         let mut hovered = None;
         let mut hovered_none = false;
@@ -72,17 +84,27 @@ impl App {
                                             .lut
                                             .as_ref()
                                             .is_some_and(|lut| lut.name == entry.name);
-                                        let label = ui
-                                            .selectable_label(active, entry.name)
-                                            .on_hover_text(
-                                                "Point to preview this LUT; click to apply it. CRT and framing settings are kept",
+                                        ui.horizontal(|ui| {
+                                            let picture = crate::thumbnails::show(
+                                                ui,
+                                                pictures[index].as_ref(),
+                                                40.,
+                                                4. / 3.,
                                             );
-                                        if label.clicked() {
-                                            selected = Some(index);
-                                        }
-                                        if label.hovered() && ui.is_enabled() {
-                                            hovered = Some(index);
-                                        }
+                                            let label = ui
+                                                .selectable_label(active, entry.name)
+                                                .on_hover_text(
+                                                    "Point to preview this LUT; click to apply it. CRT and framing settings are kept",
+                                                );
+                                            if label.clicked() || picture.clicked() {
+                                                selected = Some(index);
+                                            }
+                                            if (label.hovered() || picture.hovered())
+                                                && ui.is_enabled()
+                                            {
+                                                hovered = Some(index);
+                                            }
+                                        });
                                     });
                                 }
                                 if count == 0 {
