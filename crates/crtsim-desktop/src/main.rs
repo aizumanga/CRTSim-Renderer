@@ -922,7 +922,9 @@ impl App {
             ui,
             "Signal",
             &mut self.config.signal,
-            &["auto", "native", "original", "240p", "360p", "480p"],
+            &[
+                "auto", "native", "original", "240p", "288p", "360p", "480p", "576p",
+            ],
         );
         resolution(
             ui,
