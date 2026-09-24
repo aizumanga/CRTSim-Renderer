@@ -1,5 +1,5 @@
 //! The settings panel: CRT settings by section, then source framing and color.
-use crate::widgets::{numbers, resolution};
+use crate::widgets::{numbers, resolution, Keyed};
 use crate::*;
 
 impl App {
@@ -215,7 +215,11 @@ impl App {
                 {
                     self.config.warmup = defaults.warmup;
                 }
-                ui.add(egui::Slider::new(&mut self.config.warmup, 0..=240).text("Warm-up ticks"));
+                Keyed::new(0..=240).reset_to(defaults.warmup).show(
+                    ui,
+                    &mut self.config.warmup,
+                    |s| s.text("Warm-up ticks"),
+                );
             });
             egui::ComboBox::from_label("Phase")
                 .selected_text(format!("{:?}", self.config.phase))
@@ -273,29 +277,29 @@ impl App {
                         let opposite = (i + 2) % 4;
                         let max = (0.98 - self.config.source.crop[opposite]).max(0.);
                         let mut percent = self.config.source.crop[i] * 100.;
-                        if ui
-                            .add(egui::Slider::new(&mut percent, 0.0..=max * 100.).text(*name))
+                        if Keyed::new(0.0..=max * 100.)
+                            .reset_to(0.)
+                            .show(ui, &mut percent, |s| s.text(*name))
                             .changed()
                         {
                             self.config.source.crop[i] = percent / 100.;
                         }
                     }
                 });
-                ui.add(
-                    egui::Slider::new(&mut self.config.source.rotation, -180.0..=180.)
-                        .text("Rotation °"),
+                let source = &mut self.config.source;
+                Keyed::new(-180.0..=180.)
+                    .reset_to(0.)
+                    .show(ui, &mut source.rotation, |s| s.text("Rotation °"));
+                Keyed::new(0.05..=4.).logarithmic(true).reset_to(1.).show(
+                    ui,
+                    &mut source.zoom,
+                    |s| s.text("Source zoom"),
                 );
-                ui.add(
-                    egui::Slider::new(&mut self.config.source.zoom, 0.05..=4.)
-                        .logarithmic(true)
-                        .text("Source zoom"),
-                );
-                ui.add(
-                    egui::Slider::new(&mut self.config.source.position[0], -1.0..=1.).text("Pan X"),
-                );
-                ui.add(
-                    egui::Slider::new(&mut self.config.source.position[1], -1.0..=1.).text("Pan Y"),
-                );
+                for (position, label) in source.position.iter_mut().zip(["Pan X", "Pan Y"]) {
+                    Keyed::new(-1.0..=1.)
+                        .reset_to(0.)
+                        .show(ui, position, |s| s.text(label));
+                }
                 ui.label("Transparency background (included in exports)");
                 ui.horizontal(|ui| {
                     if ui

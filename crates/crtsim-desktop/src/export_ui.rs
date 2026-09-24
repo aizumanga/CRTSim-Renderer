@@ -1,4 +1,4 @@
-use crate::{App, Dialog};
+use crate::{widgets::Keyed, App, Dialog};
 use crtsim_media::{
     AnimationFormat, AnimationOptions, AnimationSummary, Audio, Container, Dither, Encoder,
     EncodingSpeed, Options, Quality, Timing,
@@ -336,7 +336,7 @@ fn video_settings(
                 options.crf = custom.then(|| options.effective_crf(container));
             }
             if let Some(crf) = options.crf.as_mut() {
-                ui.add(egui::Slider::new(crf, 0..=51).text("CRF"));
+                Keyed::new(0..=51).show(ui, crf, |s| s.text("CRF"));
             }
             ui.small(
                 "Lower CRF keeps more detail and usually produces larger \
@@ -369,7 +369,7 @@ fn video_settings(
                 options.bitrate_mbps = custom.then_some(12);
             }
             if let Some(rate) = options.bitrate_mbps.as_mut() {
-                ui.add(egui::Slider::new(rate, 1..=200).text("Mbps"));
+                Keyed::new(1..=200).show(ui, rate, |s| s.text("Mbps"));
             }
             ui.small(
                 "Higher bitrate allows more detail and larger files. \
@@ -391,7 +391,9 @@ fn animation_settings(
 ) {
     ui.separator();
     ui.horizontal(|ui| {
-        ui.add(egui::Slider::new(&mut options.max_side, 64..=1920).text("Longest side · px"));
+        Keyed::new(64..=1920)
+            .reset_to(640)
+            .show(ui, &mut options.max_side, |s| s.text("Longest side · px"));
         for side in [480, 640, 800, 1024] {
             ui.selectable_value(&mut options.max_side, side, side.to_string());
         }
@@ -403,7 +405,9 @@ fn animation_settings(
     let top = format.max_fps();
     options.fps = options.fps.min(top);
     ui.horizontal(|ui| {
-        ui.add(egui::Slider::new(&mut options.fps, 1..=top).text("Frames per second"));
+        Keyed::new(1..=top)
+            .reset_to(24)
+            .show(ui, &mut options.fps, |s| s.text("Frames per second"));
         for fps in [12, 15, 24, 30].into_iter().chain((top > 30).then_some(60)) {
             ui.selectable_value(&mut options.fps, fps, fps.to_string());
         }
@@ -470,7 +474,9 @@ fn animation_settings(
                 "Lossless · exact colors, larger files",
             );
             if !options.lossless {
-                ui.add(egui::Slider::new(&mut options.quality, 0..=100).text("Quality"));
+                Keyed::new(0..=100)
+                    .reset_to(75)
+                    .show(ui, &mut options.quality, |s| s.text("Quality"));
                 ui.small(
                     "Lossy WebP keeps color at half resolution, which softens the \
                      mask's colored stripes. Lossless keeps them.",

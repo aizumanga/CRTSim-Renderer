@@ -1,5 +1,5 @@
 //! The preview area: the rendered picture, its comparison split and the video controls.
-use crate::widgets::show_image;
+use crate::widgets::{show_image, Keyed};
 use crate::*;
 
 impl App {
@@ -38,7 +38,9 @@ impl App {
             }
             ui.checkbox(&mut self.fit_preview, "Fit view");
             if !self.fit_preview {
-                ui.add(egui::Slider::new(&mut self.zoom, 0.25..=4.).text("Zoom"));
+                Keyed::new(0.25..=4.)
+                    .reset_to(1.)
+                    .show(ui, &mut self.zoom, |s| s.text("Zoom"));
             }
         });
         ui.small("Preview monitor").on_hover_text(
@@ -205,19 +207,23 @@ impl App {
                         self.start_playback();
                     }
                 }
-                if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft)) {
+                // A slider that has the keyboard takes the arrows for itself.
+                let stepping = ui.ctx().memory(|m| m.focused().is_none());
+                let arrow =
+                    |key| stepping && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, key));
+                if arrow(egui::Key::ArrowLeft) {
                     self.selected_frame = self.video_frame.saturating_sub(1);
                     seek = true;
                 }
-                if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight)) {
+                if arrow(egui::Key::ArrowRight) {
                     self.selected_frame = (self.video_frame + 1).min(last);
                     seek = true;
                 }
             }
         });
         ui.small(format!(
-            "Showing frame {} · Left/Right arrow keys step frames · \
-            Export frame saves this settled CRT still as PNG.",
+            "Showing frame {} · Left/Right arrow keys step frames unless a slider is \
+            selected (Esc lets go of it) · Export frame saves this settled CRT still as PNG.",
             self.video_frame + 1
         ));
         if seek && enabled && self.selected_frame != self.video_frame {
