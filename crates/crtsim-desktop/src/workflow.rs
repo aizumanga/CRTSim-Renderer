@@ -1,6 +1,6 @@
 use crate::{files, model, texture, worker, App, Dialog, Job, Work};
 use anyhow::{ensure, Result};
-use crtsim_core::config::Config;
+use crtsim_core::{config::Config, settings};
 use crtsim_media::Options;
 use eframe::egui;
 use serde::{Deserialize, Serialize};
@@ -781,8 +781,12 @@ impl App {
             if ui.button("Import 3D .cube…").clicked() {
                 self.dialog(Dialog::Lut, &ui.ctx().clone());
             }
-            if self.config.lut.is_some() && ui.button("Remove LUT").clicked() {
-                self.config.lut = None;
+            if self.config.lut.is_some() {
+                if ui.button("Remove LUT").clicked() {
+                    self.config.lut = None;
+                }
+                let defaults = Config::general();
+                crate::numbers(ui, &mut self.config, &defaults, settings::Section::Color);
             }
             ui.small(
                 "Applied before CRT simulation. The table is embedded in presets and projects.",

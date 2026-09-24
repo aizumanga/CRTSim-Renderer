@@ -216,6 +216,11 @@ impl Lut {
         Ok(())
     }
     pub fn apply(&self, image: &mut RgbaImage) {
+        self.apply_with_strength(image, 1.);
+    }
+    /// Applies the table with `strength` of its colour and the rest of the original: 1 is the
+    /// table alone, 0 leaves the image as it is.
+    pub fn apply_with_strength(&self, image: &mut RgbaImage, strength: f32) {
         for p in image.pixels_mut() {
             let xyz: [f32; 3] = std::array::from_fn(|i| {
                 ((p[i] as f32 / 255. - self.domain_min[i])
@@ -243,7 +248,8 @@ impl Lut {
                 }
             }
             for i in 0..3 {
-                p[i] = (out[i].clamp(0., 1.) * 255.).round() as u8;
+                let mixed = out[i] * strength + (p[i] as f32 / 255.) * (1. - strength);
+                p[i] = (mixed.clamp(0., 1.) * 255.).round() as u8;
             }
         }
     }
@@ -260,6 +266,17 @@ mod tests {
         let original = im.clone();
         lut.apply(&mut im);
         assert_eq!(im, original);
+        // A table that inverts, at half strength, meets the original half-way.
+        let inverted = Lut {
+            values: lut.values.iter().map(|v| v.map(|c| 1. - c)).collect(),
+            ..lut.clone()
+        };
+        let mut half = RgbaImage::from_pixel(1, 1, Rgba([0, 255, 0, 255]));
+        inverted.apply_with_strength(&mut half, 0.5);
+        assert_eq!(half.get_pixel(0, 0).0, [128, 128, 128, 255]);
+        let mut none = im.clone();
+        inverted.apply_with_strength(&mut none, 0.);
+        assert_eq!(none, original);
         assert!(Lut::parse_cube("bad".into(), "LUT_3D_SIZE 65\n0 0 0").is_err());
         assert!(Lut::parse_cube("bad".into(), &text.replace("1 1 1", "NaN 1 1")).is_err());
     }

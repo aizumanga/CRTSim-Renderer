@@ -92,6 +92,9 @@ pub struct Config {
     pub source: crate::workflow::SourceEdit,
     pub screen_only: bool,
     pub lut: Option<std::sync::Arc<crate::workflow::Lut>>,
+    /// How much of the LUT's colour applies, as Super Win the Game's NTSC Palette does: 1 the
+    /// LUT alone, 0 none of it.
+    pub lut_strength: f32,
     pub version: u32,
     pub signal: String,
     pub output: String,
@@ -148,6 +151,7 @@ impl Default for Config {
             source: Default::default(),
             screen_only: false,
             lut: None,
+            lut_strength: 1.,
             version: 1,
             signal: "original".into(),
             output: "reference".into(),
@@ -325,7 +329,7 @@ pub fn prepare(input: &RgbaImage, config: &Config) -> Result<RgbaImage> {
         imageops::resize(&opaque, w, h, filter)
     };
     if let Some(lut) = &config.lut {
-        lut.apply(&mut resized);
+        lut.apply_with_strength(&mut resized, config.lut_strength);
     }
     if config.grades() {
         let (sin, cos) = config.hue.to_radians().sin_cos();

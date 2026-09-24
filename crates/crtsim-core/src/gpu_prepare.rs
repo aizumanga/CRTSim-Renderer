@@ -42,6 +42,7 @@ struct Params {
     lut_min: [f32; 4],
     lut_max: [f32; 4],
     grade: [f32; 4],
+    lut_strength: [f32; 4],
 }
 
 impl Params {
@@ -83,6 +84,7 @@ impl Params {
             lut_min,
             lut_max,
             grade: [hue_sin, hue_cos, c.chroma, flag(c.grades())],
+            lut_strength: [c.lut_strength, 0., 0., 0.],
         }
     }
 }

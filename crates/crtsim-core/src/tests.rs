@@ -139,6 +139,9 @@ fn gpu_prepare_matches_cpu_prepare() {
         }
         if case % 4 == 1 {
             c.lut = Some(lut.clone());
+            if case % 8 == 5 {
+                c.lut_strength = next(1.).abs();
+            }
         }
         if case % 5 < 2 {
             c.hue = next(180.);

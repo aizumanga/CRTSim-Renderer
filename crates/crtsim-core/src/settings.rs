@@ -14,6 +14,8 @@ use std::ops::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Section {
     Image,
+    /// The LUT's controls.
+    Color,
     Grade,
     Signal,
     Glass,
@@ -192,6 +194,11 @@ pub static SETTINGS: &[Setting] = &[
     Setting::other("source.background", "Transparency background"),
     Setting::other("source.checkerboard", "Checker background"),
     Setting::other("lut", "LUT"),
+    Setting::numbers(
+        "lut_strength",
+        "LUT strength",
+        Numbers::slider(Color, access!(lut_strength), 0.0..=1.),
+    ),
     Setting::other("color_mode", "Color processing"),
     Setting::numbers(
         "hue",

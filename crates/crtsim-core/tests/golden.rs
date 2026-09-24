@@ -348,6 +348,15 @@ fn prepare_cases(renderer: &Renderer) -> Vec<(&'static str, RgbaImage)> {
             },
         ),
         (
+            "prepare-lut-half",
+            &detailed,
+            Config {
+                lut: Some(lut.clone()),
+                lut_strength: 0.5,
+                ..lanczos("200x150")
+            },
+        ),
+        (
             "prepare-lut-grade",
             &detailed,
             Config {
