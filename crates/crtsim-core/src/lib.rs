@@ -4,6 +4,7 @@ mod gpu_prepare;
 pub mod input;
 pub mod mesh;
 pub mod nes_luts;
+pub mod palette;
 pub mod settings;
 #[cfg(test)]
 mod tests;

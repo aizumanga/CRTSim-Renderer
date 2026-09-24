@@ -117,6 +117,7 @@ impl App {
                 let label = format!("LUT “{}”", lut.name);
                 let config = Config {
                     lut: Some(lut),
+                    palette: None,
                     ..self.config.clone()
                 };
                 self.offer_audition(label, config);
@@ -134,6 +135,7 @@ impl App {
                     let name = lut.name.clone();
                     let mut config = self.config.clone();
                     config.lut = Some(lut);
+                    config.palette = None;
                     if config != self.config {
                         self.replace_config(config);
                     }

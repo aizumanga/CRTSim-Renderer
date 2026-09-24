@@ -95,6 +95,9 @@ pub struct Config {
     /// How much of the LUT's colour applies, as Super Win the Game's NTSC Palette does: 1 the
     /// LUT alone, 0 none of it.
     pub lut_strength: f32,
+    /// The NES palette made from its composite signal, with the game's Tint controls, in place
+    /// of a LUT. See `palette`.
+    pub palette: Option<crate::palette::NesPalette>,
     pub version: u32,
     pub signal: String,
     pub output: String,
@@ -152,6 +155,7 @@ impl Default for Config {
             screen_only: false,
             lut: None,
             lut_strength: 1.,
+            palette: None,
             version: 1,
             signal: "original".into(),
             output: "reference".into(),
@@ -225,6 +229,14 @@ impl Config {
         }
     }
 
+    /// The colour table prepare applies: the NES palette's when one is set, else the LUT.
+    pub fn lut_in_use(&self) -> Option<std::sync::Arc<crate::workflow::Lut>> {
+        match &self.palette {
+            Some(palette) => Some(palette.lut()),
+            None => self.lut.clone(),
+        }
+    }
+
     /// One version-aware entry point for presets. Future migrations belong here instead of
     /// being duplicated across the CLI, desktop JSON loader and embedded metadata readers.
     pub fn from_json_slice(bytes: &[u8]) -> Result<Self> {
@@ -243,6 +255,10 @@ impl Config {
         if let Some(lut) = &self.lut {
             lut.validate()?;
         }
+        ensure!(
+            self.lut.is_none() || self.palette.is_none(),
+            "Use either a LUT or the NES palette, not both"
+        );
         ensure!(self.version == 1, "unsupported config version");
         ensure!(self.warmup <= 240, "warmup must be <=240 ticks");
         crate::settings::validate(self)
@@ -328,7 +344,7 @@ pub fn prepare(input: &RgbaImage, config: &Config) -> Result<RgbaImage> {
         };
         imageops::resize(&opaque, w, h, filter)
     };
-    if let Some(lut) = &config.lut {
+    if let Some(lut) = config.lut_in_use() {
         lut.apply_with_strength(&mut resized, config.lut_strength);
     }
     if config.grades() {
@@ -416,6 +432,27 @@ mod tests {
         .unwrap();
         assert!(gray.pixels().all(|p| p[0] == p[1] && p[1] == p[2]));
         assert_ne!(prepare(&src, &Config { hue: 30., ..c }).unwrap(), src);
+    }
+
+    #[test]
+    fn a_preset_holds_the_nes_palette_as_its_three_controls() {
+        let json = br#"{"palette":{"tint":5.0,"tint_i":2.0,"tint_q":0.5}}"#;
+        let c = Config::from_json_slice(json).unwrap();
+        let palette = c.palette.unwrap();
+        assert_eq!(
+            (palette.tint, palette.tint_i, palette.tint_q),
+            (5., 2., 0.5)
+        );
+        assert!(c.lut_in_use().unwrap().name.starts_with("NES palette"));
+        // Controls it leaves out take the game's defaults.
+        let c = Config::from_json_slice(br#"{"palette":{}}"#).unwrap();
+        assert_eq!(c.palette, Some(crate::palette::NesPalette::default()));
+        let both = Config {
+            lut: Some(std::sync::Arc::new(crate::nes_luts::load(0).unwrap())),
+            ..c
+        };
+        assert!(both.validate().is_err());
+        assert!(Config::from_json_slice(br#"{"palette":{"tint_i":11}}"#).is_err());
     }
 
     #[test]

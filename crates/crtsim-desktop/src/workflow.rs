@@ -768,12 +768,11 @@ impl App {
                 }
             });
         crate::chrome::Section::new("Color & LUT").show(ui, |ui| {
-            ui.label(
-                self.config
-                    .lut
-                    .as_ref()
-                    .map_or("No LUT", |l| l.name.as_str()),
-            );
+            ui.label(match (&self.config.palette, &self.config.lut) {
+                (Some(_), _) => "NES palette from the composite signal",
+                (None, Some(lut)) => lut.name.as_str(),
+                (None, None) => "No LUT",
+            });
             if ui.button("LUT gallery…").clicked() {
                 self.stop_playback();
                 self.show_lut_gallery = true;
@@ -781,11 +780,29 @@ impl App {
             if ui.button("Import 3D .cube…").clicked() {
                 self.dialog(Dialog::Lut, &ui.ctx().clone());
             }
-            if self.config.lut.is_some() {
-                if ui.button("Remove LUT").clicked() {
+            if self.config.lut.is_some() && ui.button("Remove LUT").clicked() {
+                self.config.lut = None;
+            }
+            let mut generated = self.config.palette.is_some();
+            let toggled = ui
+                .checkbox(&mut generated, "NES palette from the composite signal")
+                .on_hover_text(
+                    "Super Win the Game's NTSC palette: the NES's colours decoded from its \
+                     signal, turned by Tint and scaled along I and Q. It recolours images drawn \
+                     in MAME's NES palette, and replaces any LUT.",
+                )
+                .changed();
+            if toggled {
+                self.config.palette = generated.then(Default::default);
+                if generated {
                     self.config.lut = None;
                 }
-                let defaults = Config::general();
+            }
+            if self.config.lut.is_some() || self.config.palette.is_some() {
+                let defaults = Config {
+                    palette: Some(Default::default()),
+                    ..Config::general()
+                };
                 crate::numbers(ui, &mut self.config, &defaults, settings::Section::Color);
             }
             ui.small(

@@ -142,6 +142,11 @@ fn gpu_prepare_matches_cpu_prepare() {
             if case % 8 == 5 {
                 c.lut_strength = next(1.).abs();
             }
+        } else if case % 4 == 2 {
+            c.palette = Some(crate::palette::NesPalette {
+                tint: 5.18 + next(1.),
+                ..Default::default()
+            });
         }
         if case % 5 < 2 {
             c.hue = next(180.);

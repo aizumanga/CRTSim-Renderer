@@ -603,6 +603,7 @@ impl App {
                             Ok(lut) => {
                                 let mut c = self.config.clone();
                                 c.lut = Some(Arc::new(lut));
+                                c.palette = None;
                                 self.replace_config(c);
                                 self.status = "LUT imported".into();
                             }

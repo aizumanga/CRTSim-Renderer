@@ -53,7 +53,7 @@ impl Params {
         let (hue_sin, hue_cos) = c.hue.to_radians().sin_cos();
         let flag = |on: bool| if on { 1. } else { 0. };
         let [r, g, b] = edit.background.map(f32::from);
-        let (lut_min, lut_max) = match &c.lut {
+        let (lut_min, lut_max) = match &c.lut_in_use() {
             Some(lut) => (
                 [lut.domain_min[0], lut.domain_min[1], lut.domain_min[2], 1.],
                 [
@@ -380,7 +380,7 @@ impl Pipelines {
         source.upload(queue, input);
         let source = cache.input.insert(source);
 
-        let lut = match &c.lut {
+        let lut = match &c.lut_in_use() {
             Some(lut) => {
                 // The same table arrives every frame of a video, usually as the same allocation.
                 if !matches!(&cache.lut, Some((cached, _)) if Arc::ptr_eq(cached, lut) || cached == lut)

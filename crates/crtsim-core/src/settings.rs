@@ -106,6 +106,22 @@ macro_rules! access {
     };
 }
 
+/// One of the NES palette's controls, which have no numbers while there is no palette.
+macro_rules! palette {
+    ($field:ident) => {
+        Access {
+            get: |c| match &c.palette {
+                Some(palette) => palette.$field.values(),
+                None => &[],
+            },
+            get_mut: |c| match &mut c.palette {
+                Some(palette) => palette.$field.values_mut(),
+                None => &mut [],
+            },
+        }
+    };
+}
+
 impl Setting {
     const fn other(key: &'static str, label: &'static str) -> Self {
         Self {
@@ -198,6 +214,21 @@ pub static SETTINGS: &[Setting] = &[
         "lut_strength",
         "LUT strength",
         Numbers::slider(Color, access!(lut_strength), 0.0..=1.),
+    ),
+    Setting::numbers(
+        "palette.tint",
+        "Tint",
+        Numbers::slider(Color, palette!(tint), 0.0..=std::f32::consts::TAU),
+    ),
+    Setting::numbers(
+        "palette.tint_i",
+        "Tint I",
+        Numbers::slider(Color, palette!(tint_i), 0.0..=4.).accepting((Included(0.), Included(10.))),
+    ),
+    Setting::numbers(
+        "palette.tint_q",
+        "Tint Q",
+        Numbers::slider(Color, palette!(tint_q), 0.0..=4.).accepting((Included(0.), Included(10.))),
     ),
     Setting::other("color_mode", "Color processing"),
     Setting::numbers(
@@ -392,11 +423,12 @@ mod tests {
     #[test]
     fn every_preset_key_has_one_setting() {
         let mut found = vec![];
-        keys(
-            "",
-            &serde_json::to_value(Config::default()).unwrap(),
-            &mut found,
-        );
+        // Every optional part present, so its keys are listed too.
+        let full = Config {
+            palette: Some(Default::default()),
+            ..Config::default()
+        };
+        keys("", &serde_json::to_value(full).unwrap(), &mut found);
         found.retain(|key| key != "version");
         let mut listed: Vec<_> = SETTINGS.iter().map(|s| s.key.to_owned()).collect();
         found.sort();

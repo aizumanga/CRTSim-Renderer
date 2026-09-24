@@ -282,6 +282,12 @@ fn translucent_source() -> RgbaImage {
 fn prepare_cases(renderer: &Renderer) -> Vec<(&'static str, RgbaImage)> {
     let detailed = detailed_source();
     let translucent = translucent_source();
+    // MAME's 64 NES colours as 4×4 blocks, the input the NES palette is made for.
+    let mame = crtsim_core::palette::mame_colors();
+    let mame_chart = RgbaImage::from_fn(64, 32, |x, y| {
+        let [r, g, b] = mame[(y / 8 * 16 + x / 4) as usize].map(|c| (c * 255.).round() as u8);
+        image::Rgba([r, g, b, 255])
+    });
     let card = config::test_card();
     let edit = crtsim_core::workflow::SourceEdit {
         crop: [0.05, 0.1, 0.15, 0.02],
@@ -345,6 +351,14 @@ fn prepare_cases(renderer: &Renderer) -> Vec<(&'static str, RgbaImage)> {
                 hue: 33.,
                 chroma: 1.6,
                 ..lanczos("200x150")
+            },
+        ),
+        (
+            "prepare-nes-palette",
+            &mame_chart,
+            Config {
+                palette: Some(Default::default()),
+                ..nearest("64x32")
             },
         ),
         (

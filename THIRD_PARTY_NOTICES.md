@@ -34,3 +34,12 @@ and other creators identified in the original palette names, which are preserved
 The unmodified PNGs, upstream dedication, source notes and SHA-256 digests are in
 `assets/nes-luts/`. Release packages include `NES_LUTS_README.md`, `NES_LUTS_SOURCES.md`
 and `NES_LUTS_SHA256SUMS`; the LUT data is embedded in the executable.
+
+## NES palette generator
+
+`crtsim-core/src/palette.rs` reproduces MAME's NES palette (the formula in
+`ppu2c0x_device::nespal_to_RGB`, [mamedev/mame](https://github.com/mamedev/mame),
+BSD-3-Clause, copyright holders Ernesto Corvi, Brad Oliver and Fabio Priuli) as the input
+side of its LUT, since the bundled NES LUTs expect that palette. The composite decode uses the
+NES PPU's measured output levels as documented by the [NESdev Wiki](https://www.nesdev.org/wiki/NTSC_video),
+with its chroma scale and phase fitted to the FirebrandX Composite Direct palette above.
