@@ -45,6 +45,19 @@ impl Video {
     pub fn tracks_of(&self, kind: TrackKind) -> impl Iterator<Item = &Track> {
         self.tracks.iter().filter(move |track| track.kind == kind)
     }
+
+    /// When decoded frame `frame`, counting from 0, starts, in seconds: exactly for an
+    /// animation, whose frame times are known, and at the average rate for a video.
+    pub fn frame_time(&self, frame: u64) -> f64 {
+        match &self.source {
+            Source::Animated { delays, .. } => {
+                let shown = delays.iter().take(frame as usize);
+                shown.map(|&delay| f64::from(delay)).sum::<f64>() / 1000.
+            }
+            Source::Ffmpeg => frame as f64 / self.fps,
+        }
+        .min(self.duration)
+    }
 }
 
 #[derive(Clone, Debug)]

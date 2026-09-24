@@ -171,6 +171,13 @@ pub enum Job {
         path: PathBuf,
         cancel: Arc<AtomicBool>,
     },
+    ExportAnimation {
+        video: Video,
+        options: crtsim_media::AnimationOptions,
+        config: Config,
+        path: PathBuf,
+        cancel: Arc<AtomicBool>,
+    },
     Batch {
         source: PathBuf,
         config: Config,
@@ -478,6 +485,26 @@ fn work(ctx: egui::Context, gpu: Gpu, jobs: mpsc::Receiver<Job>, events: mpsc::S
                     .guard(
                         "Video graphics driver failed. Try a smaller resolution.",
                         |g| export_video(g, &video, &config, &options, &path, &cancel, &progress),
+                    )
+                    .map(|()| path)
+                    .map_err(|e| Failure::of(e, &cancel)),
+            ),
+            Job::ExportAnimation {
+                video,
+                options,
+                config,
+                path,
+                cancel,
+            } => Event::Exported(
+                graphics
+                    .guard(
+                        "Animation graphics driver failed. Try a smaller size.",
+                        |g| {
+                            let renderer = g.renderer(|| {})?;
+                            crtsim_media::export_animation(
+                                &video, &path, &config, &options, renderer, &cancel, &progress,
+                            )
+                        },
                     )
                     .map(|()| path)
                     .map_err(|e| Failure::of(e, &cancel)),

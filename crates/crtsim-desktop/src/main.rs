@@ -51,7 +51,7 @@ struct Chooser {
 }
 
 impl Dialog {
-    fn chooser(self, video_extension: &'static str) -> Chooser {
+    fn chooser(self, export: export_ui::ExportFormat) -> Chooser {
         let (filter, extensions, save_as) = match self {
             Self::OpenProject => ("CRT project", vec![workflow::PROJECT_EXTENSION], None),
             Self::SaveProject => (
@@ -61,7 +61,7 @@ impl Dialog {
             ),
             Self::Lut => ("3D color LUT", vec!["cube"], None),
             Self::File => ("Images and videos", files::media_extensions(), None),
-            Self::ExportVideo => ("Video", vec![video_extension], Some("rendered")),
+            Self::ExportVideo => (export.filter(), vec![export.extension()], Some("rendered")),
             Self::ImportPreset => (
                 "Rendered image/video",
                 [&["png"], crtsim_media::VIDEO_EXTENSIONS].concat(),
@@ -167,6 +167,7 @@ struct App {
     selected_frame: u64,
     video_frames: u64,
     video_options: crtsim_media::Options,
+    animation_options: crtsim_media::AnimationOptions,
     work: Work,
     worker_thread: Option<std::thread::JoinHandle<()>>,
     store: Option<gallery::Store>,
@@ -325,6 +326,7 @@ impl App {
             selected_frame: 0,
             video_frames: 0,
             video_options: crtsim_media::Options::default(),
+            animation_options: Default::default(),
             work: Work::Idle,
             worker_thread: Some(worker_thread),
             store,
@@ -493,9 +495,9 @@ impl App {
         self.dialog_open = true;
         let send = self.dialog_send.clone();
         let ctx = ctx.clone();
-        let video_extension = self.workflow.export_container.extension();
+        let export = self.workflow.export_format;
         std::thread::spawn(move || {
-            let chooser = kind.chooser(video_extension);
+            let chooser = kind.chooser(export);
             let dialog = rfd::FileDialog::new().add_filter(chooser.filter, &chooser.extensions);
             let path = match chooser.save_as {
                 None => dialog.pick_file(),

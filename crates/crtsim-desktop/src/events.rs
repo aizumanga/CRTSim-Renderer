@@ -1,4 +1,5 @@
 //! Applying what the worker reports: loaded sources, previews, progress and finished exports.
+use crate::export_ui::ExportFormat;
 use crate::*;
 
 impl App {
@@ -33,11 +34,14 @@ impl App {
                     }
                     Dialog::File => self.load(path),
                     Dialog::ExportVideo => {
-                        let container = self.workflow.export_container;
-                        if crtsim_media::Container::of(&path) != Some(container) {
+                        let format = self.workflow.export_format;
+                        let extension = format.extension();
+                        if !path
+                            .extension()
+                            .is_some_and(|e| e.eq_ignore_ascii_case(extension))
+                        {
                             self.error = Some(format!(
-                                "Choose a .{} filename for the selected format.",
-                                container.extension()
+                                "Choose a .{extension} filename for the selected format."
                             ));
                             continue;
                         }
@@ -50,14 +54,30 @@ impl App {
                                     stage: "Queued for video export".into(),
                                 }),
                             };
-                            self.status = "Exporting video…".into();
-                            self.send(Job::ExportVideo {
-                                video,
-                                options: self.video_options.clone(),
-                                config: self.config.clone(),
-                                path,
-                                cancel,
-                            });
+                            let config = self.config.clone();
+                            let job = match format {
+                                ExportFormat::Video(_) => Job::ExportVideo {
+                                    video,
+                                    options: self.video_options.clone(),
+                                    config,
+                                    path,
+                                    cancel,
+                                },
+                                ExportFormat::Animation(_) => Job::ExportAnimation {
+                                    video,
+                                    options: self.animation_options.clone(),
+                                    config,
+                                    path,
+                                    cancel,
+                                },
+                            };
+                            self.status = match format {
+                                ExportFormat::Video(_) => "Exporting video…".into(),
+                                ExportFormat::Animation(animation) => {
+                                    format!("Exporting {}…", animation.name())
+                                }
+                            };
+                            self.send(job);
                         }
                     }
                     Dialog::ImportPreset => {
