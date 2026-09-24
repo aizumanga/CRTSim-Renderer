@@ -130,7 +130,7 @@ pub enum PreviewJob {
     Preview {
         revision: u64,
         input: Arc<RgbaImage>,
-        config: Config,
+        config: Box<Config>,
     },
     /// A small picture for a gallery entry. Always waits for a pending preview, and is dropped
     /// unrendered once a thumbnail of a newer source is queued behind it.
@@ -725,7 +725,7 @@ mod tests {
             PreviewJob::Preview {
                 revision: 3,
                 input: Arc::new(RgbaImage::new(1, 1)),
-                config: Config::default(),
+                config: Box::default(),
             },
             thumbnail(2, 0),
         ]
@@ -773,11 +773,11 @@ mod tests {
         jobs.preview(PreviewJob::Preview {
             revision: 7,
             input,
-            config: Config {
+            config: Box::new(Config {
                 output: "320x180".into(),
                 warmup: 0,
                 ..Config::default()
-            },
+            }),
         })
         .unwrap();
         let timeout = Duration::from_secs(120);

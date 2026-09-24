@@ -92,13 +92,16 @@ impl Params {
         }
     }
 
-    /// The composite phase for `tick`, and the field it scans when interlaced.
-    fn tick(&mut self, phase: Phase, tick: u64) {
+    /// The composite phase for `tick`, and the field it scans when interlaced. `blending` moves
+    /// the two phases towards each other.
+    fn tick(&mut self, phase: Phase, blending: f32, tick: u64) {
+        let (a, b) = (blending, 1. - blending);
         self.signal[3] = match phase {
             Phase::Stable => 0.5,
-            Phase::A => 0.,
-            Phase::B => 1.,
-            Phase::Alternating => (tick % 2) as f32,
+            Phase::A => a,
+            Phase::B => b,
+            Phase::Alternating if tick.is_multiple_of(2) => a,
+            Phase::Alternating => b,
         };
         self.processing[2] = (tick % 2) as f32;
     }
@@ -595,7 +598,7 @@ impl Renderer {
         for step in 0..ticks {
             ensure!(!cancelled(), "Render cancelled");
             let tick = sequence.tick;
-            params.tick(c.phase, tick);
+            params.tick(c.phase, c.ntsc_blending, tick);
             let uniform = self.uniform(&params, "tick settings");
             let bindings = self.bind(
                 &uniform,

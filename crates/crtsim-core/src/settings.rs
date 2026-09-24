@@ -225,6 +225,11 @@ pub static SETTINGS: &[Setting] = &[
         Numbers::slider(Signal, access!(artifacts), 0.0..=2.),
     ),
     Setting::numbers(
+        "ntsc_blending",
+        "NTSC blending",
+        Numbers::slider(Signal, access!(ntsc_blending), 0.0..=1.),
+    ),
+    Setting::numbers(
         "barrel",
         "Barrel distortion",
         Numbers::slider(Glass, access!(barrel), -2.0..=2.),

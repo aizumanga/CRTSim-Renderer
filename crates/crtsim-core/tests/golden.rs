@@ -151,6 +151,17 @@ fn cases(renderer: &Renderer) -> Vec<(&'static str, RgbaImage)> {
     for (name, phase) in [("phase-a", Phase::A), ("phase-b", Phase::B)] {
         cases.push((name, render(&Config { phase, ..base() }).crt));
     }
+    // The blend between the two patterns, at Super Win the Game's setting, seen in the signal
+    // where the composite pass writes it.
+    cases.push((
+        "ntsc-blending",
+        render(&Config {
+            phase: Phase::A,
+            ntsc_blending: 0.35,
+            ..base()
+        })
+        .signal,
+    ));
 
     // The only non-default color path. `ColorMode::Reference` needs no case of its own: it is
     // what `reference` above already renders.

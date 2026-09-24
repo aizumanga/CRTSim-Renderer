@@ -62,6 +62,32 @@ fn preview_frame_matches_the_pixels_a_read_back_render_produces() {
     );
 }
 
+#[test]
+fn ntsc_blending_moves_the_two_phases_towards_each_other() {
+    let artifact_mix = |phase, ntsc_blending, tick| {
+        let c = Config {
+            phase,
+            ntsc_blending,
+            ..Config::default()
+        };
+        let mut params = Params::new(&c, (256, 224), (320, 240));
+        params.tick(c.phase, c.ntsc_blending, tick);
+        params.signal[3]
+    };
+    // Unblended, the public source's switch between the two patterns.
+    assert_eq!(artifact_mix(Phase::A, 0., 0), 0.);
+    assert_eq!(artifact_mix(Phase::B, 0., 0), 1.);
+    assert_eq!(artifact_mix(Phase::Alternating, 0., 7), 1.);
+    // Super Win the Game's 0.35: each tick mixes in some of the other pattern.
+    assert_eq!(artifact_mix(Phase::A, 0.35, 0), 0.35);
+    assert_eq!(artifact_mix(Phase::B, 0.35, 0), 0.65);
+    assert_eq!(artifact_mix(Phase::Alternating, 0.35, 4), 0.35);
+    assert_eq!(artifact_mix(Phase::Alternating, 0.35, 5), 0.65);
+    // Half-way, every tick shows the average, as stable phase always does.
+    assert_eq!(artifact_mix(Phase::Alternating, 0.5, 1), 0.5);
+    assert_eq!(artifact_mix(Phase::Stable, 0.35, 0), 0.5);
+}
+
 /// The GPU prepare step against the CPU one it replaced, across a spread of routes and
 /// settings wider than the goldens pin. Not tied to a recorded driver like the goldens: the
 /// shader repeats the CPU's arithmetic, so on any driver the two differ only where float

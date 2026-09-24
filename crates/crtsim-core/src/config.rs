@@ -104,6 +104,11 @@ pub struct Config {
     pub sharpness: f32,
     pub bleed: f32,
     pub artifacts: f32,
+    /// How far the two composite artifact patterns blend into each other, as Super Win the
+    /// Game's NTSC Blending does. With alternating phase, ticks show them mixed this far and
+    /// then the other way round; 0 switches cleanly between them, as the public source does,
+    /// and 0.5 shows their average on every tick. Stable phase always shows the average.
+    pub ntsc_blending: f32,
     pub persistence: [f32; 3],
     pub overscan: f32,
     pub barrel: f32,
@@ -154,6 +159,7 @@ impl Default for Config {
             sharpness: 0.8,
             bleed: 0.5,
             artifacts: 0.5,
+            ntsc_blending: 0.,
             persistence: [0.7, 0.525, 0.42],
             overscan: 1.,
             barrel: -0.115,

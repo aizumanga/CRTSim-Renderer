@@ -828,7 +828,7 @@ impl App {
                 self.send_preview(PreviewJob::Preview {
                     revision: self.revision,
                     input: self.input.clone(),
-                    config,
+                    config: Box::new(config),
                 });
             }
             Err(e) => self.preview_error = Some(format!("Cannot preview: {e:#}")),
