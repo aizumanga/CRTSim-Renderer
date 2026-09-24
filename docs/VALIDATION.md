@@ -4,12 +4,12 @@ This is a runnable prototype, not a claim of completed cross-platform visual par
 
 ## Golden-image rendering regression
 
-`cargo test -p crtsim-core --test golden -- --ignored --nocapture` compares nineteen rendered
+`cargo test -p crtsim-core --test golden -- --ignored --nocapture` compares twenty rendered
 images against images committed in `crates/crtsim-core/tests/golden/`. The CI fixtures show
 that a render finished; these show that it still produces the same picture. One case per route
 the renderer can take: the reference frame and its signal, both composite phases, linear-light,
-the antialiased mask, screen-only, a bundled NES LUT, and the second frame of a sequence, which
-is the only case that sees frame-to-frame persistence.
+the unfiltered mask, screen-only, interlaced scanning, a bundled NES LUT, and the second frame
+of a sequence, which is the only case that sees frame-to-frame persistence.
 
 The other ten capture the prepare step's output -- the clean signal, before the simulation --
 since the test card reaches it only as an identity: Lanczos down, up and along one axis, Nearest
@@ -116,7 +116,7 @@ These are reproducible diagnostics, not approved golden images or a real-GPU per
 ## Remaining fidelity checks
 
 - Compare the same input against a running D3D9 upstream reference, not a compressed game video.
-- Check mask aliasing at all output/display sizes; reference mode samples mip zero, while the optional filter chooses mip levels from screen-space derivatives.
+- Check mask aliasing at all output/display sizes. The filtered mask, the default as in the original, chooses mip levels from screen-space derivatives; with filtering off it samples only mip zero.
 - Check mesh projection, channel order, UV orientation and reflected corners on multiple adapters.
 - Compare Vulkan and DX12 captures of the same preset using perceptual tolerance, not exact hashes.
 - Test Metal on actual Mac hardware. A CI build alone is insufficient.

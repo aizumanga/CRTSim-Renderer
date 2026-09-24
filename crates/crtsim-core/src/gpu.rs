@@ -232,19 +232,66 @@ pub(crate) fn artifacts(device: &wgpu::Device, queue: &wgpu::Queue) -> Result<Ta
     Ok(target)
 }
 
-/// The shadow mask with a full mip chain, for sampling it smaller than it is.
+/// The shadow mask with a full mip chain, for sampling it smaller than it is. Each level
+/// averages 2×2 texels of the one above, as the original's box-filtered mipmaps did.
 pub(crate) fn shadow_mask(device: &wgpu::Device, queue: &wgpu::Queue) -> Result<Target> {
     let mut level = bmp(include_bytes!("../../../assets/original-crtsim/mask.bmp"))?;
     let levels = level.width().max(level.height()).ilog2() + 1;
     let mask = Target::with_format(device, "shadow mask", level.dimensions(), FORMAT, levels);
     for mip in 0..levels {
         mask.upload_level(queue, mip, &level);
-        level = image::imageops::resize(
-            &level,
-            (level.width() / 2).max(1),
-            (level.height() / 2).max(1),
-            image::imageops::FilterType::Triangle,
-        );
+        level = halve(&level);
     }
     Ok(mask)
+}
+
+/// `image` at half size, each texel the rounded average of the 2×2 it replaces. A side that is
+/// already one texel stays one, and those texels average in pairs.
+fn halve(image: &RgbaImage) -> RgbaImage {
+    let (width, height) = image.dimensions();
+    RgbaImage::from_fn((width / 2).max(1), (height / 2).max(1), |x, y| {
+        let (left, top) = (2 * x, 2 * y);
+        let (right, bottom) = ((left + 1).min(width - 1), (top + 1).min(height - 1));
+        let corners = [(left, top), (right, top), (left, bottom), (right, bottom)];
+        image::Rgba(std::array::from_fn(|channel| {
+            let sum: u32 = corners
+                .iter()
+                .map(|&(x, y)| u32::from(image.get_pixel(x, y)[channel]))
+                .sum();
+            ((sum + 2) / 4) as u8
+        }))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mask_levels_average_the_texels_they_replace() {
+        let image = RgbaImage::from_fn(4, 2, |x, y| image::Rgba([(x * 10 + y * 100) as u8; 4]));
+        let half = halve(&image);
+        assert_eq!(half.dimensions(), (2, 1));
+        // (0 + 10 + 100 + 110) / 4 and (20 + 30 + 120 + 130) / 4.
+        assert_eq!(half.get_pixel(0, 0)[0], 55);
+        assert_eq!(half.get_pixel(1, 0)[0], 75);
+        // Down to one row, then one texel: pairs, then the last pair.
+        let last = halve(&half);
+        assert_eq!((last.dimensions(), last.get_pixel(0, 0)[0]), ((1, 1), 65));
+        assert_eq!(halve(&last), last);
+        // The original's 64×32 mask keeps its average all the way down, give or take the
+        // rounding of six halvings.
+        let mask = bmp(include_bytes!("../../../assets/original-crtsim/mask.bmp")).unwrap();
+        let mean = |image: &RgbaImage, channel: usize| {
+            let total: f64 = image.pixels().map(|p| f64::from(p[channel])).sum();
+            total / image.pixels().len() as f64
+        };
+        let mut level = mask.clone();
+        while level.dimensions() != (1, 1) {
+            level = halve(&level);
+        }
+        for channel in 0..3 {
+            assert!((mean(&level, channel) - mean(&mask, channel)).abs() < 1.);
+        }
+    }
 }

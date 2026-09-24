@@ -72,6 +72,9 @@ pub struct Config {
     pub bloom_power: f32,
     pub bloom_spread: f32,
     pub color_mode: ColorMode,
+    /// Samples the mask from mipmaps, each the average of the level above, and between them,
+    /// as the original did: the mask stays smooth where it is drawn smaller than it is. Off
+    /// samples only the full-size mask, which shimmers into moiré when shrunk.
     pub mask_antialias: bool,
     /// Interlaced scanning: each tick refreshes only every other signal row, alternating
     /// between the two fields, and the rows it skips only decay by `persistence`. Meant for
@@ -119,7 +122,7 @@ impl Default for Config {
             bloom_power: 2.,
             bloom_spread: 0.025,
             color_mode: ColorMode::Reference,
-            mask_antialias: false,
+            mask_antialias: true,
             interlace: false,
             hue: 0.,
             chroma: 1.,
@@ -144,8 +147,8 @@ pub fn validate_size((w, h): (u32, u32)) -> Result<()> {
 }
 impl Config {
     /// The starting point for ordinary images rather than 256x224 game frames: square pixels,
-    /// smooth resizing, contain fitting, neutral saturation and a filtered mask. `default` stays
-    /// the public reference's settings.
+    /// smooth resizing, contain fitting and neutral saturation. `default` stays the public
+    /// reference's settings.
     pub fn general() -> Self {
         Self {
             signal: "auto".into(),
@@ -154,7 +157,6 @@ impl Config {
             filter: Filter::Lanczos,
             pixel_aspect: 1.,
             saturation: 1.,
-            mask_antialias: true,
             ..Self::default()
         }
     }
@@ -334,7 +336,10 @@ mod tests {
     fn old_presets_keep_reference_behavior_and_neutral_grade_is_exact() {
         let c = Config::from_json_slice(b"{\"version\":1,\"signal\":\"native\"}").unwrap();
         assert_eq!(c.color_mode, ColorMode::Reference);
-        assert!(!c.mask_antialias);
+        // A setting a preset leaves out takes the original's value; one it holds is kept.
+        assert!(c.mask_antialias);
+        let unfiltered = br#"{"version":1,"mask_antialias":false}"#;
+        assert!(!Config::from_json_slice(unfiltered).unwrap().mask_antialias);
         let src = test_card();
         assert_eq!(prepare(&src, &c).unwrap(), src);
         let gray = prepare(

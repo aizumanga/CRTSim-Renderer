@@ -36,7 +36,8 @@ The video demonstrates adjustable effects; it is not an interface specification.
 
 Public reference defaults are preserved where practical, but stable phase, safety validation, dynamic dimensions, black-luma division protection,
 and the new GPU API are intentional adaptations. The camera retains a 4:3 physical tube on an independently sized output canvas.
-Mask mipmapping/minification and exact D3D9 rasterization differ; visual equivalence must be reviewed before naming the port faithful.
+The mask is sampled from box-filtered mipmaps with trilinear filtering, as the original loaded it, but D3D9's exact mip selection
+and rasterization may still differ; visual equivalence must be reviewed before naming the port faithful.
 Reference screenshots from the commercial game are not golden test data.
 
 ## Phase 1: desktop implementation
@@ -60,7 +61,7 @@ This phase does not promise continuous real-time frame rates, cancellable GPU su
 - Export-only progress based on completed warm-up batches plus surface/readback/save stages; live preview changes do not show a progress bar.
 - Settings undo/redo buttons plus `Ctrl+Z` and `Ctrl+Shift+Z` shortcuts; the renderer's adapter name is not displayed in the application window.
 - Exported PNGs embed the exact JSON configuration in a private text chunk; the desktop can inspect/import that preset from an image.
-- Optional mipmapped mask filtering; legacy sampling is retained for old/reference presets.
+- Mipmapped mask filtering as in the original, on by default; presets saved with it off keep the unfiltered sampling.
 - Optional YIQ hue/chroma grade, explicitly not the unpublished NES LUT or a complete NTSC decoder.
 - Experimental linear-light glass/lighting/bloom with float intermediates and SDR output. Composite/history stays in gamma space.
 - Existing frame lighting, reflection attributes, mask density, geometry and resolution controls remain shared with the CLI.

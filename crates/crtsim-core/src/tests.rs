@@ -230,7 +230,6 @@ fn gpu_smoke() {
     let a = r.render(&source, &c).unwrap();
     assert_eq!(a.clean, a.signal);
     c.color_mode = ColorMode::LinearLight;
-    c.mask_antialias = true;
     let mut progress = vec![];
     let linear = r
         .render_frame(&source, &c, &mut Sequence::default(), None, |p| {
@@ -244,7 +243,11 @@ fn gpu_smoke() {
     assert!(progress.windows(2).all(|w| w[0] <= w[1]));
     c.color_mode = ColorMode::Reference;
     let filtered = r.render(&source, &c).unwrap();
-    assert_ne!(filtered.crt, a.crt);
+    let unfiltered = Config {
+        mask_antialias: false,
+        ..c.clone()
+    };
+    assert_ne!(filtered.crt, r.render(&source, &unfiltered).unwrap().crt);
     if let Ok(dir) = std::env::var("CRTSIM_TEST_OUTPUT") {
         std::fs::create_dir_all(&dir).unwrap();
         linear

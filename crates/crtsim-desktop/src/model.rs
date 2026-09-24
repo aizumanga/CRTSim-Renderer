@@ -132,7 +132,6 @@ mod tests {
             })
         );
         assert_eq!(find("Pixel aspect").unwrap().to, "1.143");
-        assert_eq!(find("Filter mask when shrinking").unwrap().from, "On");
         assert!(
             find("Bloom amount").is_none(),
             "unchanged settings are not listed"
@@ -147,11 +146,17 @@ mod tests {
         let mut edited = Config::general();
         edited.source.position = [0.25, 0.];
         edited.persistence[2] = 0.5;
+        edited.mask_antialias = false;
         edited.lut = Some(std::sync::Arc::new(crtsim_core::nes_luts::load(0).unwrap()));
         let found = differences(&Config::general(), &edited);
         let settings: Vec<_> = found.iter().map(|d| d.setting.as_str()).collect();
         assert!(settings.contains(&"Pan (X, Y)"));
         assert!(settings.contains(&"Persistence (R, G, B)"));
+        let filter = found
+            .iter()
+            .find(|d| d.setting == "Filter mask when shrinking")
+            .unwrap();
+        assert_eq!((filter.from.as_str(), filter.to.as_str()), ("On", "Off"));
         let lut = found.iter().find(|d| d.setting == "LUT").unwrap();
         assert_eq!(
             (lut.from.as_str(), lut.to.as_str()),

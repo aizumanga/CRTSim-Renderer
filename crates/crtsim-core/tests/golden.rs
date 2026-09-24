@@ -163,12 +163,12 @@ fn cases(renderer: &Renderer) -> Vec<(&'static str, RgbaImage)> {
         .crt,
     ));
 
-    // Mask sampling and the bezel are each a branch of their own in the shader and the pass
-    // list, and neither shows up in a frame rendered with the defaults.
+    // Unfiltered mask sampling and the bezel are each a branch of their own in the shader and
+    // the pass list, and neither shows up in a frame rendered with the defaults.
     cases.push((
-        "antialiased-mask",
+        "unfiltered-mask",
         render(&Config {
-            mask_antialias: true,
+            mask_antialias: false,
             ..base()
         })
         .crt,

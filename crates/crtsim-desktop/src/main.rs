@@ -1090,8 +1090,9 @@ impl App {
                 "Filter mask when shrinking",
             )
             .on_hover_text(
-                "Mipmapped mask filtering reduces moiré during minification. Turn off for \
-                 Phase 0/1 reference sampling.",
+                "Samples the mask from averaged, smaller copies of itself, as the original \
+                 did, so it stays smooth where it is drawn smaller than it is. Off samples only \
+                 the full-size mask, which can shimmer into moiré.",
             );
         });
         ui.separator();
