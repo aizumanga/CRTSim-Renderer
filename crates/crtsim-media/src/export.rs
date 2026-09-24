@@ -1,10 +1,12 @@
-//! Rendering a whole video: decode, render and encode at once, then mux the source's tracks.
+//! Rendering a whole video or animation: decode, render and encode at once, then finish the
+//! file, such as by muxing the source's tracks, and only then replace the output.
 use crate::{
+    animation::AnimationPlan,
     check_cancel, command,
     decode::{Decoder, Request},
     plan::ExportPlan,
     process::Process,
-    Encoder, Options, Timing, Video,
+    AnimationFormat, AnimationOptions, Options, Timing, Video,
 };
 use anyhow::{ensure, Context, Result};
 use crtsim_core::{
@@ -15,11 +17,12 @@ use image::RgbaImage;
 use std::{
     io::{Read, Write},
     path::Path,
+    process::Command,
     sync::{atomic::AtomicBool, mpsc, Arc},
     time::Instant,
 };
 
-fn require_encoder(name: &str, cancel: &Arc<AtomicBool>) -> Result<()> {
+pub(crate) fn require_encoder(name: &str, cancel: &Arc<AtomicBool>) -> Result<()> {
     let mut cmd = command("ffmpeg");
     cmd.args(["-hide_banner", "-encoders"]);
     let bytes = Process::output(
@@ -38,9 +41,10 @@ fn require_encoder(name: &str, cancel: &Arc<AtomicBool>) -> Result<()> {
     Ok(())
 }
 
-pub fn render_config(config: &Config, options: &Options, fps: f64) -> Config {
+/// The settings frames are rendered with at `fps` frames per second under `timing`.
+pub fn render_config(config: &Config, timing: Timing, fps: f64) -> Config {
     let mut c = config.clone();
-    match options.timing {
+    match timing {
         Timing::Stable => {
             c.phase = Phase::Stable;
             for weight in &mut c.persistence {
@@ -82,6 +86,100 @@ impl Rate {
     }
 }
 
+/// What exporting needs from a plan: the frames to render, and how to encode and finish them.
+/// A video and an animation differ only here.
+pub(crate) trait Encoding {
+    fn frames(&self) -> Frames<'_>;
+    /// Checks that FFmpeg can encode this, before anything is rendered.
+    fn check(&self, cancel: &Arc<AtomicBool>) -> Result<()>;
+    /// The extension of a temporary file the frames are encoded to first, or `None` to
+    /// encode them straight to the output.
+    fn intermediate(&self) -> Option<&'static str>;
+    /// The encoder: rendered frames in as raw RGBA, written to `encoded`.
+    fn encoder(&self, encoded: &Path) -> Command;
+    /// What the finishing steps read from `Work::metadata`, if they need anything.
+    fn metadata_file(&self) -> Result<Option<String>>;
+    /// What turns the `frames` encoded frames into the output, in order.
+    fn finishing(&self, work: &Work, frames: u64) -> Vec<Step>;
+}
+
+/// The frames an export renders.
+pub(crate) struct Frames<'p> {
+    pub video: &'p Video,
+    /// The settings each frame is rendered with.
+    pub render: &'p Config,
+    /// The rendered size.
+    pub size: (u32, u32),
+    pub rate: &'p Rate,
+    /// Where in the video to start, in seconds.
+    pub start: f64,
+    /// At most this many seconds.
+    pub limit: Option<f64>,
+}
+
+impl Frames<'_> {
+    /// How long `count` frames last.
+    pub fn duration(&self, count: u64) -> f64 {
+        count as f64 / self.rate.fps
+    }
+
+    /// How much of the video is rendered, in seconds.
+    pub fn length(&self) -> f64 {
+        let rest = self.video.duration - self.start;
+        self.limit.map_or(rest, |limit| rest.min(limit))
+    }
+}
+
+/// Where an export's files are while it runs.
+pub(crate) struct Work<'a> {
+    /// The encoded frames.
+    pub encoded: &'a Path,
+    /// What `Encoding::metadata_file` gave, written out.
+    pub metadata: &'a Path,
+    /// A temporary folder for anything else.
+    pub folder: &'a Path,
+    /// The finished file, before it replaces the output.
+    pub destination: &'a Path,
+}
+
+/// One command that finishes an export, with alternatives tried in turn when it fails.
+pub(crate) struct Step {
+    pub stage: &'static str,
+    pub commands: Vec<Command>,
+    /// The error when every alternative failed.
+    pub failed: &'static str,
+}
+
+impl Step {
+    pub fn new(stage: &'static str, command: Command) -> Self {
+        Self {
+            stage,
+            commands: vec![command],
+            failed: "",
+        }
+    }
+
+    fn run(&mut self, cancel: &Arc<AtomicBool>) -> Result<()> {
+        let count = self.commands.len();
+        for (index, command) in self.commands.iter_mut().enumerate() {
+            match Process::run(command, cancel) {
+                Ok(()) => return Ok(()),
+                Err(error) => {
+                    check_cancel(cancel)?;
+                    if index + 1 == count {
+                        return Err(if count > 1 {
+                            error.context(self.failed)
+                        } else {
+                            error
+                        });
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 /// The caller supplies the renderer, so the same media pipeline can be tested without a GPU.
 pub fn export_with(
     video: &Video,
@@ -89,30 +187,41 @@ pub fn export_with(
     config: &Config,
     options: &Options,
     cancel: &Arc<AtomicBool>,
-    mut render: impl FnMut(&RgbaImage, &Config) -> Result<RgbaImage>,
-    mut progress: impl FnMut(RenderProgress),
+    render: impl FnMut(&RgbaImage, &Config) -> Result<RgbaImage>,
+    progress: impl FnMut(RenderProgress),
 ) -> Result<()> {
     check_cancel(cancel)?;
     let plan = ExportPlan::new(video, output, config, options)?;
-    require_encoder(plan.codec, cancel)?;
-    if options.encoder != Encoder::Software {
-        let mut check = command("ffmpeg");
-        check.args([
-            "-f",
-            "lavfi",
-            "-i",
-            "color=size=128x128:rate=30",
-            "-frames:v",
-            "2",
-            "-c:v",
-            plan.codec,
-            "-f",
-            "null",
-            "-",
-        ]);
-        Process::run(&mut check, cancel)
-            .context("Selected hardware encoder is unavailable on this machine; choose Software")?;
-    }
+    run(&plan, output, cancel, render, progress)
+}
+
+/// An animated GIF or WebP, as `output`'s extension asks. The caller supplies the renderer.
+pub fn export_animation_with(
+    video: &Video,
+    output: &Path,
+    config: &Config,
+    options: &AnimationOptions,
+    cancel: &Arc<AtomicBool>,
+    render: impl FnMut(&RgbaImage, &Config) -> Result<RgbaImage>,
+    progress: impl FnMut(RenderProgress),
+) -> Result<()> {
+    check_cancel(cancel)?;
+    let format = AnimationFormat::of(output).context("Choose a GIF or WebP filename")?;
+    let plan = AnimationPlan::new(video, format, config, options)?;
+    run(&plan, output, cancel, render, progress)
+}
+
+/// Renders the plan's frames, encodes and finishes them, and only then replaces `output`.
+fn run(
+    plan: &impl Encoding,
+    output: &Path,
+    cancel: &Arc<AtomicBool>,
+    mut render: impl FnMut(&RgbaImage, &Config) -> Result<RgbaImage>,
+    mut progress: impl FnMut(RenderProgress),
+) -> Result<()> {
+    plan.check(cancel)?;
+    let frames = plan.frames();
+    let video = frames.video;
     if output.exists() {
         ensure!(
             output.canonicalize()? != video.path,
@@ -124,20 +233,23 @@ pub fn export_with(
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     let folder = tempfile::tempdir_in(parent)?;
-    let silent = folder
-        .path()
-        .join(format!("video.{}", plan.container.extension()));
     let final_file = tempfile::NamedTempFile::new_in(parent)?;
     // Use a file: embedded LUTs are too large for OS command-line limits.
     let metadata = folder.path().join("preset.ffmeta");
-    std::fs::write(&metadata, plan.metadata()?)?;
-    let mut encoder = Process::spawn(&mut plan.encode(&silent), cancel)?;
+    if let Some(text) = plan.metadata_file()? {
+        std::fs::write(&metadata, text)?;
+    }
+    let encoded = match plan.intermediate() {
+        Some(extension) => folder.path().join(format!("video.{extension}")),
+        None => final_file.path().to_owned(),
+    };
+    let mut encoder = Process::spawn(&mut plan.encoder(&encoded), cancel)?;
     let input = encoder.stdin();
     let request = Request {
-        rate: Some(&plan.rate),
-        start: 0.,
+        rate: Some(frames.rate),
+        start: frames.start,
         frame: None,
-        limit: None,
+        limit: frames.limit,
     };
     let mut decoder = Decoder::open(video, &request, cancel)?;
     let decoded = decoder.frames();
@@ -145,18 +257,18 @@ pub fn export_with(
         fraction: 0.,
         stage: "Decoding and rendering video".into(),
     });
-    let frames = match pipeline(
+    let count = match pipeline(
         decoded,
         input,
         video.size,
         cancel,
         |frame, count, started| {
-            let result = render(frame, &plan.render)?;
+            let result = render(frame, frames.render)?;
             ensure!(
-                result.dimensions() == plan.size,
+                result.dimensions() == frames.size,
                 "Renderer returned the wrong video dimensions"
             );
-            let fraction = (plan.duration(count) / video.duration).min(1.);
+            let fraction = (frames.duration(count) / frames.length()).min(1.);
             let remaining = if fraction > 0. {
                 started.elapsed().as_secs_f64() * (1. - fraction) / fraction
             } else {
@@ -173,7 +285,7 @@ pub fn export_with(
             Ok(result)
         },
     ) {
-        Ok(frames) => frames,
+        Ok(count) => count,
         Err(Failure::Write(error)) => {
             // The encoder's own log says more than a broken pipe does.
             encoder.wait()?;
@@ -186,31 +298,29 @@ pub fn export_with(
         }
     };
     decoder.wait()?;
-    ensure!(frames > 0, "No frames decoded");
+    ensure!(count > 0, "No frames decoded");
     progress(RenderProgress {
         fraction: 0.91,
-        stage: "Finishing video encoding".into(),
+        stage: "Finishing encoding".into(),
     });
     encoder.wait()?;
     check_cancel(cancel)?;
-    progress(RenderProgress {
-        fraction: 0.95,
-        stage: "Preserving audio and finalizing container".into(),
-    });
-    let mux = |copy_audio| {
-        let mut mux = plan.mux(&silent, &metadata, final_file.path(), frames, copy_audio);
-        Process::run(&mut mux, cancel)
+    let work = Work {
+        encoded: &encoded,
+        metadata: &metadata,
+        folder: folder.path(),
+        destination: final_file.path(),
     };
-    let copy = plan.copies_audio();
-    if let Err(error) = mux(copy) {
+    let mut steps = plan.finishing(&work, count);
+    let total = steps.len();
+    for (index, step) in steps.iter_mut().enumerate() {
+        progress(RenderProgress {
+            fraction: 0.95 + 0.05 * index as f32 / total as f32,
+            stage: step.stage.into(),
+        });
+        step.run(cancel)?;
         check_cancel(cancel)?;
-        if copy {
-            mux(false).context("Audio remux and re-encoding both failed")?;
-        } else {
-            return Err(error);
-        }
     }
-    check_cancel(cancel)?;
     final_file.as_file().sync_all()?;
     final_file
         .persist(output)
@@ -218,8 +328,8 @@ pub fn export_with(
     progress(RenderProgress {
         fraction: 1.,
         stage: format!(
-            "Saved {frames} frames with {:.3}s duration",
-            plan.duration(frames)
+            "Saved {count} frames with {:.3}s duration",
+            frames.duration(count)
         ),
     });
     Ok(())
@@ -331,6 +441,28 @@ pub fn export(
     )
 }
 
+/// An animated GIF or WebP, as `output`'s extension asks, rendered on `renderer`.
+pub fn export_animation(
+    video: &Video,
+    output: &Path,
+    config: &Config,
+    options: &AnimationOptions,
+    renderer: &Renderer,
+    cancel: &Arc<AtomicBool>,
+    progress: impl FnMut(RenderProgress),
+) -> Result<()> {
+    let mut sequence = Sequence::default();
+    export_animation_with(
+        video,
+        output,
+        config,
+        options,
+        cancel,
+        |frame, config| renderer.render_frame(frame, config, &mut sequence, Some(cancel), |_| {}),
+        progress,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -431,17 +563,10 @@ mod tests {
     #[test]
     fn persistence_uses_media_time() {
         let config = Config::default();
-        let at30 = render_config(&config, &Options::default(), 30.);
-        let at60 = render_config(&config, &Options::default(), 60.);
+        let at30 = render_config(&config, Timing::Stable, 30.);
+        let at60 = render_config(&config, Timing::Stable, 60.);
         assert!((at30.persistence[0] - at60.persistence[0].powi(2)).abs() < 0.00001);
-        let disabled = render_config(
-            &config,
-            &Options {
-                timing: Timing::Disabled,
-                ..Options::default()
-            },
-            30.,
-        );
+        let disabled = render_config(&config, Timing::Disabled, 30.);
         assert_eq!(disabled.persistence, [0.; 3]);
     }
 }

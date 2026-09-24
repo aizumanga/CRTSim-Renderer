@@ -296,6 +296,21 @@ impl Config {
         validate_size(d)?;
         Ok(d)
     }
+    /// The same settings with the output canvas scaled down, keeping its aspect, so that its
+    /// longer side is at most `max_side`. The signal, and so the look, stays as it is.
+    pub fn with_max_output_side(&self, input: (u32, u32), max_side: Option<u32>) -> Result<Self> {
+        self.validate()?;
+        self.signal_size(input)?;
+        let (w, h) = self.output_size(input)?;
+        let scale = max_side.map_or(1., |m| (m as f64 / w.max(h) as f64).min(1.));
+        let mut scaled = self.clone();
+        scaled.output = format!(
+            "{}x{}",
+            (w as f64 * scale).round().max(1.) as u32,
+            (h as f64 * scale).round().max(1.) as u32
+        );
+        Ok(scaled)
+    }
     /// Whether prepare takes the source-edit route -- resampled through the crop, rotation,
     /// zoom and pan -- rather than the plain resize.
     pub fn edits_source(&self) -> bool {

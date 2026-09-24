@@ -3,17 +3,7 @@ use crtsim_core::{config::Config, settings};
 
 /// Limit only the canvas, preserving its aspect and the logical signal.
 pub fn preview_config(c: &Config, input: (u32, u32), max_side: Option<u32>) -> Result<Config> {
-    c.validate()?;
-    c.signal_size(input)?;
-    let (w, h) = c.output_size(input)?;
-    let scale = max_side.map_or(1., |m| (m as f64 / w.max(h) as f64).min(1.));
-    let mut preview = c.clone();
-    preview.output = format!(
-        "{}x{}",
-        (w as f64 * scale).round().max(1.) as u32,
-        (h as f64 * scale).round().max(1.) as u32
-    );
-    Ok(preview)
+    c.with_max_output_side(input, max_side)
 }
 
 /// One setting that differs between two looks, written for a person to read.

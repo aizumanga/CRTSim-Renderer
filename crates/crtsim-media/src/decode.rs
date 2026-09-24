@@ -203,7 +203,7 @@ pub fn playback(
     let mut decoder = Decoder::open(video, &request, cancel)?;
     let mut output = decoder.frames();
     let mut input = RgbaImage::new(video.size.0, video.size.1);
-    let c = render_config(config, options, rate.fps);
+    let c = render_config(config, options.timing, rate.fps);
     let mut sequence = Sequence::default();
     let mut index = 0u64;
     loop {

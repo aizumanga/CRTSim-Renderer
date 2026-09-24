@@ -1,5 +1,6 @@
 //! Bounded-memory FFmpeg decode -> ordered GPU frames -> encode -> audio mux.
 mod animated;
+mod animation;
 mod decode;
 mod export;
 mod plan;
@@ -7,9 +8,10 @@ mod probe;
 mod process;
 
 pub use animated::AnimationFormat;
+pub use animation::{AnimationOptions, AnimationSummary, Dither};
 pub use decode::{playback, preview, preview_frame};
 pub(crate) use export::Rate;
-pub use export::{export, export_with, render_config};
+pub use export::{export, export_animation, export_animation_with, export_with, render_config};
 pub use probe::{frame_count, probe, Source, Track, TrackKind, Video};
 
 use anyhow::{ensure, Context, Result};

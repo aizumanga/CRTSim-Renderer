@@ -655,7 +655,11 @@ fn animated_gif_and_webp_open_and_export_to_video() {
         let info = crtsim_media::probe(&source, &cancel).unwrap();
         assert_eq!(info.size, (64, 48), "{name}");
         assert_eq!(crtsim_media::frame_count(&info, &cancel).unwrap(), 5);
-        assert!((info.duration - 0.5).abs() < 1e-6, "{name}: {}", info.duration);
+        assert!(
+            (info.duration - 0.5).abs() < 1e-6,
+            "{name}: {}",
+            info.duration
+        );
         let third = crtsim_media::preview_frame(&info, 2, &cancel).unwrap();
         assert_eq!(third.dimensions(), (64, 48));
         let output = dir.path().join(format!("{name}.mp4"));
@@ -676,4 +680,183 @@ fn animated_gif_and_webp_open_and_export_to_video() {
         let preset = crtsim_media::import_preset(&output, info.size, &cancel).unwrap();
         assert_eq!(preset.config, config);
     }
+}
+
+/// Each frame's display time in seconds, as ffprobe reads a GIF.
+fn gif_delays(path: &Path) -> Vec<f64> {
+    let out = Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "frame=duration_time",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(path)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|line| line.trim().parse().unwrap())
+        .collect()
+}
+
+#[test]
+#[ignore = "requires FFmpeg, ffprobe with libx264 and libwebp, and a Vulkan adapter"]
+fn animation_exports_are_small_timed_and_replace_the_output_only_when_done() {
+    use crtsim_media::{AnimationFormat, AnimationOptions, Dither};
+    let dir = tempfile::tempdir().unwrap();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let renderer = pollster::block_on(crtsim_core::Renderer::new(wgpu::Backends::VULKAN)).unwrap();
+    // Busy, moving test footage and a still test card: the extremes of what compresses.
+    let mut sources = vec![];
+    for (name, input) in [
+        ("busy.mkv", "testsrc2=size=640x480:rate=30"),
+        ("still.mkv", "smptebars=size=640x480:rate=30"),
+    ] {
+        let path = dir.path().join(name);
+        let output = Command::new("ffmpeg")
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", input])
+            .args(["-t", "3", "-c:v", "libx264", "-pix_fmt", "yuv420p"])
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        sources.push((name, crtsim_media::probe(&path, &cancel).unwrap()));
+    }
+    let config = Config {
+        output: "1920x1080".into(),
+        ..Config::default()
+    };
+    let two_seconds = AnimationOptions {
+        max_seconds: Some(2.),
+        ..AnimationOptions::default()
+    };
+    let exports = [
+        ("bayer.gif", two_seconds.clone()),
+        (
+            "diffusion.gif",
+            AnimationOptions {
+                dither: Dither::Diffusion,
+                ..two_seconds.clone()
+            },
+        ),
+        (
+            "plain.gif",
+            AnimationOptions {
+                dither: Dither::None,
+                ..two_seconds.clone()
+            },
+        ),
+        ("lossy.webp", two_seconds.clone()),
+        (
+            "lossless.webp",
+            AnimationOptions {
+                lossless: true,
+                ..two_seconds.clone()
+            },
+        ),
+    ];
+    for (source_name, source) in &sources {
+        for (name, options) in &exports {
+            let output = dir.path().join(format!("{source_name}-{name}"));
+            let format = AnimationFormat::of(&output).unwrap();
+            let summary = options.summary(source, &config, format).unwrap();
+            assert_eq!((summary.size, summary.frames), ((640, 360), 48));
+            crtsim_media::export_animation(
+                source,
+                &output,
+                &config,
+                options,
+                &renderer,
+                &cancel,
+                |_| {},
+            )
+            .unwrap();
+            let bytes = std::fs::metadata(&output).unwrap().len();
+            let per_pixel = bytes as f64 / (640. * 360. * 48.);
+            println!(
+                "{source_name} {name}: {bytes} bytes, {per_pixel:.3} per pixel; estimated {:?}",
+                summary.bytes
+            );
+            if *source_name == "still.mkv" {
+                // libwebp stores a run of identical frames as one longer frame.
+                continue;
+            }
+            // Opened again as the animation it is.
+            let back = crtsim_media::probe(&output, &cancel).unwrap();
+            assert_eq!((back.size, back.frames), ((640, 360), Some(48)), "{name}");
+            assert!(
+                (back.duration - 2.).abs() < 0.03,
+                "{name}: {}",
+                back.duration
+            );
+        }
+    }
+    // 24 per second in hundredths: each frame shows for 4 or 5, averaging exactly 24.
+    let delays = gif_delays(&dir.path().join("busy.mkv-bayer.gif"));
+    assert_eq!(delays.len(), 48);
+    assert!(delays.iter().all(|&d| d == 0.04 || d == 0.05), "{delays:?}");
+    assert!((delays.iter().sum::<f64>() - 2.).abs() < 0.011);
+    let gif = std::fs::read(dir.path().join("busy.mkv-bayer.gif")).unwrap();
+    assert!(
+        gif.windows(11).any(|w| w == b"NETSCAPE2.0"),
+        "loops forever"
+    );
+
+    // A later start and a shorter limit, from an animated source.
+    let (_, busy) = &sources[0];
+    let clip = dir.path().join("clip.gif");
+    let options = AnimationOptions {
+        start: 1.,
+        max_seconds: Some(0.5),
+        fps: 10,
+        ..AnimationOptions::default()
+    };
+    crtsim_media::export_animation(busy, &clip, &config, &options, &renderer, &cancel, |_| {})
+        .unwrap();
+    let clip_info = crtsim_media::probe(&clip, &cancel).unwrap();
+    assert_eq!(clip_info.frames, Some(5));
+    let again = dir.path().join("again.webp");
+    crtsim_media::export_animation(
+        &clip_info,
+        &again,
+        &config,
+        &AnimationOptions::default(),
+        &renderer,
+        &cancel,
+        |_| {},
+    )
+    .unwrap();
+    // Half a second at 24 per second; libwebp may merge frames that came out identical.
+    let again = crtsim_media::probe(&again, &cancel).unwrap();
+    assert!((again.duration - 0.5).abs() < 0.03, "{}", again.duration);
+
+    // A cancelled GIF leaves the old file and no temporary files behind.
+    let kept = dir.path().join("kept.gif");
+    std::fs::write(&kept, b"keep existing destination").unwrap();
+    let files = std::fs::read_dir(dir.path()).unwrap().count();
+    let error = crtsim_media::export_animation_with(
+        busy,
+        &kept,
+        &config,
+        &two_seconds,
+        &cancel,
+        |image, _| {
+            cancel.store(true, Ordering::Relaxed);
+            Ok(image::imageops::resize(
+                image,
+                640,
+                360,
+                image::imageops::FilterType::Nearest,
+            ))
+        },
+        |_| {},
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("cancelled"));
+    assert_eq!(std::fs::read(&kept).unwrap(), b"keep existing destination");
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), files);
 }

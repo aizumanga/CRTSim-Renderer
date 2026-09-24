@@ -1,12 +1,19 @@
 //! What an export tells FFmpeg, worked out before any process starts, so it can be checked
 //! without FFmpeg installed.
 use crate::{
-    command, render_config, Audio, Container, Encoder, EncodingSpeed, Options, Preset, Quality,
-    Rate, Source, TrackKind, Video, PRESET_PREFIX,
+    command,
+    export::{require_encoder, Encoding, Frames, Step, Work},
+    process::Process,
+    render_config, Audio, Container, Encoder, EncodingSpeed, Options, Preset, Quality, Rate,
+    Source, TrackKind, Video, PRESET_PREFIX,
 };
 use anyhow::{ensure, Context, Result};
 use crtsim_core::config::Config;
-use std::{path::Path, process::Command};
+use std::{
+    path::Path,
+    process::Command,
+    sync::{atomic::AtomicBool, Arc},
+};
 
 /// Largest metadata an export writes, in bytes.
 const METADATA_LIMIT: usize = 16 * 1024 * 1024;
@@ -47,7 +54,7 @@ impl<'a> ExportPlan<'a> {
             video,
             options,
             config,
-            render: render_config(config, options, rate.fps),
+            render: render_config(config, options.timing, rate.fps),
             container,
             codec,
             size,
@@ -282,6 +289,79 @@ impl<'a> ExportPlan<'a> {
         }
         cmd.args(["-f", container.format()]).arg(destination);
         cmd
+    }
+}
+
+impl Encoding for ExportPlan<'_> {
+    fn frames(&self) -> Frames<'_> {
+        Frames {
+            video: self.video,
+            render: &self.render,
+            size: self.size,
+            rate: &self.rate,
+            start: 0.,
+            limit: None,
+        }
+    }
+
+    fn check(&self, cancel: &Arc<AtomicBool>) -> Result<()> {
+        require_encoder(self.codec, cancel)?;
+        if self.options.encoder != Encoder::Software {
+            let mut check = command("ffmpeg");
+            check.args([
+                "-f",
+                "lavfi",
+                "-i",
+                "color=size=128x128:rate=30",
+                "-frames:v",
+                "2",
+                "-c:v",
+                self.codec,
+                "-f",
+                "null",
+                "-",
+            ]);
+            Process::run(&mut check, cancel).context(
+                "Selected hardware encoder is unavailable on this machine; choose Software",
+            )?;
+        }
+        Ok(())
+    }
+
+    fn intermediate(&self) -> Option<&'static str> {
+        Some(self.container.extension())
+    }
+
+    fn encoder(&self, encoded: &Path) -> Command {
+        self.encode(encoded)
+    }
+
+    fn metadata_file(&self) -> Result<Option<String>> {
+        self.metadata().map(Some)
+    }
+
+    /// Muxes the source's audio and other tracks back in, copying the audio as it is when it
+    /// can and re-encoding it when copying fails.
+    fn finishing(&self, work: &Work, frames: u64) -> Vec<Step> {
+        let mux = |copy_audio| {
+            self.mux(
+                work.encoded,
+                work.metadata,
+                work.destination,
+                frames,
+                copy_audio,
+            )
+        };
+        let commands = if self.copies_audio() {
+            vec![mux(true), mux(false)]
+        } else {
+            vec![mux(false)]
+        };
+        vec![Step {
+            stage: "Preserving audio and finalizing container",
+            commands,
+            failed: "Audio remux and re-encoding both failed",
+        }]
     }
 }
 
