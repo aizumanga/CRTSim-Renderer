@@ -256,7 +256,7 @@ impl App {
                 return;
             }
             self.workflow.pending_project = Some(p.clone());
-            if crtsim_media::is_video(source) {
+            if crtsim_media::MediaKind::of(source).is_moving() {
                 self.load_video(source.clone(), p.frame, false);
             } else {
                 self.load(source.clone());
@@ -494,7 +494,7 @@ impl App {
                                 break;
                             }
                             let stem = source.file_stem().unwrap_or_default().to_string_lossy();
-                            let ext = if crtsim_media::is_video(&source) {
+                            let ext = if crtsim_media::MediaKind::of(&source).batch_as_video() {
                                 "mkv"
                             } else {
                                 "png"

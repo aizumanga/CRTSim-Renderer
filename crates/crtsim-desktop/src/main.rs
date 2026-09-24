@@ -520,7 +520,7 @@ impl App {
             self.open_project(path);
             return;
         }
-        if crtsim_media::is_video(&path) {
+        if crtsim_media::MediaKind::of(&path).is_moving() {
             self.load_video(path, 0, false);
             return;
         }

@@ -1,7 +1,10 @@
 //! Rendering a whole video: decode, render and encode at once, then mux the source's tracks.
 use crate::{
-    check_cancel, command, decode::decode_command, plan::ExportPlan, process::Process, Encoder,
-    Options, Timing, Video,
+    check_cancel, command,
+    decode::{Decoder, Request},
+    plan::ExportPlan,
+    process::Process,
+    Encoder, Options, Timing, Video,
 };
 use anyhow::{ensure, Context, Result};
 use crtsim_core::{
@@ -130,12 +133,14 @@ pub fn export_with(
     std::fs::write(&metadata, plan.metadata()?)?;
     let mut encoder = Process::spawn(&mut plan.encode(&silent), cancel)?;
     let input = encoder.stdin();
-    let mut decoder = Process::spawn(
-        &mut decode_command(video, Some(&plan.rate.text), 0., None),
-        cancel,
-    )?;
-    drop(decoder.stdin());
-    let decoded = decoder.stdout();
+    let request = Request {
+        rate: Some(&plan.rate),
+        start: 0.,
+        frame: None,
+        limit: None,
+    };
+    let mut decoder = Decoder::open(video, &request, cancel)?;
+    let decoded = decoder.frames();
     progress(RenderProgress {
         fraction: 0.,
         stage: "Decoding and rendering video".into(),
@@ -229,7 +234,7 @@ enum Failure {
 
 /// Frames in flight between two stages. Enough to absorb one stage's jitter; more would only
 /// hold another full frame of memory each, which at 4K is 33 MB.
-const QUEUED_FRAMES: usize = 2;
+pub(crate) const QUEUED_FRAMES: usize = 2;
 
 /// Decodes, renders and encodes at the same time instead of in turn: the decoder is read on
 /// one thread and the encoder written on another, so the render loop only waits on them when

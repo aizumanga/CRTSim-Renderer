@@ -4,3 +4,5 @@ assets/original-crtsim/*.fx -text -whitespace
 assets/original-crtsim/COPYING.txt -text -whitespace
 *.bmp binary
 *.m3d binary
+*.gif binary
+*.webp binary

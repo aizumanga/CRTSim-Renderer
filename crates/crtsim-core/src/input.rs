@@ -4,7 +4,7 @@ use image::RgbaImage;
 use std::path::Path;
 
 /// The formats `load_image` decodes, as file extensions: the `image` features this crate enables.
-pub const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "bmp"];
+pub const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "bmp", "gif"];
 
 /// Decodes an image after checking its dimensions against the renderer's limits, and caps the
 /// decoder's allocation so a malformed file cannot exhaust memory.
@@ -18,6 +18,6 @@ pub fn load_image(path: &Path) -> Result<RgbaImage> {
     reader.limits(limits);
     Ok(reader
         .decode()
-        .context("Cannot decode image (PNG, JPEG, WebP or BMP expected)")?
+        .context("Cannot decode image (PNG, JPEG, WebP, BMP or GIF expected)")?
         .to_rgba8())
 }

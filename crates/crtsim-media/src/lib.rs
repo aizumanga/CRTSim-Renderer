@@ -1,14 +1,16 @@
 //! Bounded-memory FFmpeg decode -> ordered GPU frames -> encode -> audio mux.
+mod animated;
 mod decode;
 mod export;
 mod plan;
 mod probe;
 mod process;
 
+pub use animated::AnimationFormat;
 pub use decode::{playback, preview, preview_frame};
 pub(crate) use export::Rate;
 pub use export::{export, export_with, render_config};
-pub use probe::{frame_count, probe, Track, TrackKind, Video};
+pub use probe::{frame_count, probe, Source, Track, TrackKind, Video};
 
 use anyhow::{ensure, Context, Result};
 use crtsim_core::config::Config;
@@ -27,11 +29,44 @@ use std::{
 /// Files opened as video, by extension; FFmpeg decodes them.
 pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mkv", "mov", "webm", "avi", "m4v"];
 
-/// Whether a file is opened as video rather than as an image.
-pub fn is_video(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| VIDEO_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
+/// How a file opens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MediaKind {
+    /// A still image.
+    Still,
+    /// A video, by its extension. FFmpeg decodes it.
+    Video,
+    /// A GIF or WebP with more than one frame, decoded here.
+    Animation(AnimationFormat),
+}
+
+impl MediaKind {
+    /// Reads the file's header, and for a GIF up to two frames, to tell an animation from a
+    /// still image of the same format.
+    pub fn of(path: &Path) -> Self {
+        let video = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| VIDEO_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()));
+        if video {
+            Self::Video
+        } else if let Some(format) = animated::detect(path) {
+            Self::Animation(format)
+        } else {
+            Self::Still
+        }
+    }
+
+    /// Whether it opens with frame navigation and playback, rather than as a still.
+    pub fn is_moving(self) -> bool {
+        self != Self::Still
+    }
+
+    /// Whether a batch renders it to a video rather than to a PNG. An animated WebP stays a
+    /// PNG of its first frame, as batches made it before animations could be opened.
+    pub fn batch_as_video(self) -> bool {
+        matches!(self, Self::Video | Self::Animation(AnimationFormat::Gif))
+    }
 }
 
 /// The kinds of file a video is exported to.

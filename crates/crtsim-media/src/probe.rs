@@ -1,5 +1,5 @@
 //! What a video file holds, as ffprobe reports it.
-use crate::{check_cancel, command, process::Process};
+use crate::{animated, check_cancel, command, process::Process, AnimationFormat, MediaKind};
 use anyhow::{ensure, Context, Result};
 use crtsim_core::config;
 use serde_json::Value;
@@ -24,6 +24,20 @@ pub struct Video {
     pub stream: u64,
     /// Container-provided decoded-frame count. Missing for many streaming/Matroska sources.
     pub frames: Option<u64>,
+    pub source: Source,
+}
+
+/// What decodes a video's frames.
+#[derive(Clone, Debug)]
+pub enum Source {
+    /// FFmpeg, which also reads the file's other tracks.
+    Ffmpeg,
+    /// An animated GIF or WebP, decoded here. It has no other tracks. `delays` is how long
+    /// each frame shows, in milliseconds.
+    Animated {
+        format: AnimationFormat,
+        delays: std::sync::Arc<[u32]>,
+    },
 }
 
 impl Video {
@@ -116,6 +130,9 @@ fn positive_integer(value: &Value) -> Option<u64> {
 pub fn probe(path: &Path, cancel: &Arc<AtomicBool>) -> Result<Video> {
     let path = path.canonicalize().context("Cannot open video")?;
     ensure!(path.is_file(), "Choose a local video file");
+    if let MediaKind::Animation(format) = MediaKind::of(&path) {
+        return animated::probe(path, format, cancel);
+    }
     let mut cmd = command("ffprobe");
     cmd.args(["-show_streams", "-show_format", "-of", "json"])
         .arg(&path);
@@ -217,6 +234,7 @@ fn parse_probe(path: PathBuf, root: &Value) -> Result<Video> {
         ),
         stream: v["index"].as_u64().context("Missing video stream index")?,
         frames: positive_integer(&v["nb_frames"]),
+        source: Source::Ffmpeg,
     })
 }
 

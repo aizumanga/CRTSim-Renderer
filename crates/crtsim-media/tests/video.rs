@@ -622,3 +622,58 @@ fn exact_frame_navigation_including_variable_rate() {
         cancel.store(false, Ordering::Relaxed);
     }
 }
+
+/// A 64x48 animation of `seconds` at 10 frames per second, made by FFmpeg's `encoder`.
+fn animation(path: &Path, encoder: &str, seconds: &str) {
+    let output = Command::new("ffmpeg")
+        .args(["-v", "error", "-y", "-f", "lavfi", "-i"])
+        .arg("testsrc2=size=64x48:rate=10")
+        .args(["-t", seconds, "-c:v", encoder, "-loop", "0"])
+        .arg(path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+#[ignore = "requires FFmpeg and ffprobe with libx264 and libwebp"]
+fn animated_gif_and_webp_open_and_export_to_video() {
+    let dir = tempfile::tempdir().unwrap();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let config = Config {
+        output: "64x48".into(),
+        ..Config::default()
+    };
+    for (name, encoder) in [("clip.gif", "gif"), ("clip.webp", "libwebp_anim")] {
+        let source = dir.path().join(name);
+        animation(&source, encoder, "0.5");
+        assert!(crtsim_media::MediaKind::of(&source).is_moving());
+        let info = crtsim_media::probe(&source, &cancel).unwrap();
+        assert_eq!(info.size, (64, 48), "{name}");
+        assert_eq!(crtsim_media::frame_count(&info, &cancel).unwrap(), 5);
+        assert!((info.duration - 0.5).abs() < 1e-6, "{name}: {}", info.duration);
+        let third = crtsim_media::preview_frame(&info, 2, &cancel).unwrap();
+        assert_eq!(third.dimensions(), (64, 48));
+        let output = dir.path().join(format!("{name}.mp4"));
+        crtsim_media::export_with(
+            &info,
+            &output,
+            &config,
+            &Options::default(),
+            &cancel,
+            |image, _| Ok(image.clone()),
+            |_| {},
+        )
+        .unwrap();
+        let data = inspect(&output);
+        let streams = data["streams"].as_array().unwrap();
+        assert_eq!(streams.len(), 1, "{name}: only the picture");
+        assert_eq!(streams[0]["nb_read_frames"], "5", "{name}");
+        let preset = crtsim_media::import_preset(&output, info.size, &cancel).unwrap();
+        assert_eq!(preset.config, config);
+    }
+}

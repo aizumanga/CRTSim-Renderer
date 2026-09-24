@@ -2,7 +2,7 @@
 //! without FFmpeg installed.
 use crate::{
     command, render_config, Audio, Container, Encoder, EncodingSpeed, Options, Preset, Quality,
-    Rate, TrackKind, Video, PRESET_PREFIX,
+    Rate, Source, TrackKind, Video, PRESET_PREFIX,
 };
 use anyhow::{ensure, Context, Result};
 use crtsim_core::config::Config;
@@ -221,10 +221,14 @@ impl<'a> ExportPlan<'a> {
         copy_audio: bool,
     ) -> Command {
         let (video, options, container) = (self.video, self.options, self.container);
+        // An animation decoded here has no other tracks, and FFmpeg may not read it at all.
+        let source = matches!(video.source, Source::Ffmpeg);
         let mut cmd = command("ffmpeg");
         cmd.args(["-y", "-copyts", "-i"]).arg(silent);
-        cmd.args(["-itsoffset", &(-video.start).to_string(), "-i"])
-            .arg(&video.path);
+        if source {
+            cmd.args(["-itsoffset", &(-video.start).to_string(), "-i"])
+                .arg(&video.path);
+        }
         cmd.args(["-f", "ffmetadata", "-i"]).arg(metadata);
         cmd.args(["-map", "0:v:0", "-c:v", "copy"]);
         if video.audio && options.audio != Audio::Mute {
@@ -248,7 +252,7 @@ impl<'a> ExportPlan<'a> {
                 }
             }
         }
-        if options.preserve_streams {
+        if options.preserve_streams && source {
             let subtitles = video
                 .tracks_of(TrackKind::Subtitle)
                 .filter_map(|track| Some((track, container.subtitle_codec(&track.codec)?)));
@@ -271,7 +275,7 @@ impl<'a> ExportPlan<'a> {
             "-t",
             &self.duration(frames).to_string(),
             "-map_metadata",
-            "2",
+            if source { "2" } else { "1" },
         ]);
         if container == Container::Mp4 {
             cmd.args(["-movflags", "+faststart+use_metadata_tags"]);
@@ -322,6 +326,7 @@ mod tests {
             hdr: false,
             stream: 0,
             frames: None,
+            source: Source::Ffmpeg,
         }
     }
 
@@ -406,6 +411,23 @@ mod tests {
                 "Data track 6 is not copied.",
             ]
         );
+    }
+
+    #[test]
+    fn an_animation_is_muxed_without_reading_its_file_again() {
+        let mut source = video(&[]);
+        source.source = Source::Animated {
+            format: crate::AnimationFormat::Gif,
+            delays: [100, 100].into(),
+        };
+        let config = config();
+        let options = Options::default();
+        let plan = ExportPlan::new(&source, Path::new("out.mkv"), &config, &options).unwrap();
+        let args = mux(&plan, true);
+        assert_eq!(values(&args, "-i"), ["video.tmp", "preset.ffmeta"]);
+        assert_eq!(values(&args, "-map"), ["0:v:0"]);
+        assert_eq!(values(&args, "-map_metadata"), ["1"]);
+        assert_eq!(values(&args, "-map_chapters"), ["-1"]);
     }
 
     #[test]

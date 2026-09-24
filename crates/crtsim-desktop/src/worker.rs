@@ -493,7 +493,8 @@ fn work(ctx: egui::Context, gpu: Gpu, jobs: mpsc::Receiver<Job>, events: mpsc::S
                     .guard(
                         "Batch graphics driver failed. Try a smaller resolution.",
                         |g| {
-                            if crtsim_media::is_video(&source) {
+                            // The queue chose PNG or video when it named the output.
+                            if crtsim_media::Container::of(&path).is_some() {
                                 let video = crtsim_media::probe(&source, &cancel)?;
                                 export_video(
                                     g, &video, &config, &options, &path, &cancel, &progress,

@@ -1,5 +1,11 @@
 //! Decoded frames of a video, one at a time: single previews and continuous playback.
-use crate::{check_cancel, command, process::Process, render_config, Options, Rate, Video};
+//!
+//! FFmpeg decodes videos. Animated GIF and WebP are decoded by `animated` instead; both come
+//! out as the same stream of packed RGBA frames at the video's size.
+use crate::{
+    animated, check_cancel, command, export::QUEUED_FRAMES, probe::Source, process::Process,
+    render_config, Options, Rate, Video,
+};
 use anyhow::{ensure, Context, Result};
 use crtsim_core::{config::Config, Renderer, Sequence};
 use image::RgbaImage;
@@ -9,16 +15,81 @@ use std::{
     sync::{atomic::AtomicBool, Arc},
 };
 
-pub(crate) fn decode_command(
-    video: &Video,
-    fps: Option<&str>,
-    time: f64,
-    frame: Option<u64>,
-) -> Command {
+/// Which frames to decode.
+pub(crate) struct Request<'a> {
+    /// A constant rate to take frames at, or `None` for a single frame.
+    pub rate: Option<&'a Rate>,
+    /// Seconds into the video to start from.
+    pub start: f64,
+    /// Instead, one frame by its number in decoding order, counting from 0.
+    pub frame: Option<u64>,
+    /// At most this many seconds of frames.
+    pub limit: Option<f64>,
+}
+
+/// A decode in progress. Its frames are read from `frames`; `wait` then reports how it ended.
+pub(crate) struct Decoder {
+    frames: Option<Box<dyn Read + Send>>,
+    work: Work,
+}
+
+enum Work {
+    Ffmpeg(Process),
+    Animated(animated::Decoding),
+}
+
+impl Decoder {
+    pub fn open(video: &Video, request: &Request, cancel: &Arc<AtomicBool>) -> Result<Self> {
+        Ok(match &video.source {
+            Source::Ffmpeg => {
+                let mut process = Process::spawn(&mut decode_command(video, request), cancel)?;
+                drop(process.stdin());
+                Self {
+                    frames: Some(Box::new(process.stdout())),
+                    work: Work::Ffmpeg(process),
+                }
+            }
+            Source::Animated { format, delays } => {
+                let plan = animated::schedule(delays, request)?;
+                let (decoding, frames) =
+                    animated::Decoding::start(&video.path, *format, plan, QUEUED_FRAMES, cancel);
+                Self {
+                    frames: Some(Box::new(frames)),
+                    work: Work::Animated(decoding),
+                }
+            }
+        })
+    }
+
+    /// The decoded frames, as packed RGBA. Taken once.
+    pub fn frames(&mut self) -> Box<dyn Read + Send> {
+        self.frames
+            .take()
+            .expect("a decode's frames are taken once")
+    }
+
+    /// Stops the decode now, so a reader blocked on it gets the end of its frames.
+    pub fn kill(&self) {
+        match &self.work {
+            Work::Ffmpeg(process) => process.kill(),
+            Work::Animated(decoding) => decoding.kill(),
+        }
+    }
+
+    /// Waits for the decode to end, with its error if it failed.
+    pub fn wait(&mut self) -> Result<()> {
+        match &mut self.work {
+            Work::Ffmpeg(process) => process.wait(),
+            Work::Animated(decoding) => decoding.wait(),
+        }
+    }
+}
+
+fn decode_command(video: &Video, request: &Request) -> Command {
     let mut cmd = command("ffmpeg");
     // Seeking is input-relative and preview-only; full exports always start at zero.
-    if time > 0. {
-        cmd.args(["-ss", &time.to_string()]);
+    if request.start > 0. {
+        cmd.args(["-ss", &request.start.to_string()]);
     }
     cmd.arg("-i").arg(&video.path).args([
         "-map",
@@ -28,13 +99,13 @@ pub(crate) fn decode_command(
         "-dn",
     ]);
     let mut filters = vec!["setpts=PTS-STARTPTS".to_string()];
-    if let Some(frame) = frame {
+    if let Some(frame) = request.frame {
         // Select by decoded frame ordinal, including VFR sources. Decode from the start
         // to avoid timestamp rounding and keyframe seeks skipping or repeating frames.
         filters.push(format!("select=eq(n\\,{frame})"));
     }
-    if let Some(fps) = fps {
-        filters.push(format!("fps={fps}:start_time=0:round=near"));
+    if let Some(rate) = request.rate {
+        filters.push(format!("fps={}:start_time=0:round=near", rate.text));
     }
     if video.hdr {
         filters.push(
@@ -48,8 +119,11 @@ pub(crate) fn decode_command(
         video.size.0, video.size.1
     ));
     cmd.args(["-vf", &filters.join(",")]);
-    if fps.is_none() {
+    if request.rate.is_none() {
         cmd.args(["-frames:v", "1"]);
+    }
+    if let Some(limit) = request.limit {
+        cmd.args(["-t", &limit.to_string()]);
     }
     cmd.args(["-pix_fmt", "rgba", "-f", "rawvideo", "pipe:1"]);
     cmd
@@ -61,10 +135,15 @@ pub fn preview(video: &Video, time: f64, cancel: &Arc<AtomicBool>) -> Result<Rgb
         time.is_finite() && time >= 0. && time < video.duration,
         "Preview time is outside the video"
     );
-    let mut decode = decode_command(video, None, time, None);
+    let request = Request {
+        rate: None,
+        start: time,
+        frame: None,
+        limit: None,
+    };
     decode_one(
         video,
-        &mut decode,
+        &request,
         cancel,
         "FFmpeg did not return a complete preview frame",
     )
@@ -72,10 +151,15 @@ pub fn preview(video: &Video, time: f64, cancel: &Arc<AtomicBool>) -> Result<Rgb
 
 /// The frame numbered `frame`, counting from 0 in decoding order.
 pub fn preview_frame(video: &Video, frame: u64, cancel: &Arc<AtomicBool>) -> Result<RgbaImage> {
-    let mut decode = decode_command(video, None, 0., Some(frame));
+    let request = Request {
+        rate: None,
+        start: 0.,
+        frame: Some(frame),
+        limit: None,
+    };
     decode_one(
         video,
-        &mut decode,
+        &request,
         cancel,
         "FFmpeg did not return the requested frame",
     )
@@ -85,15 +169,14 @@ pub fn preview_frame(video: &Video, frame: u64, cancel: &Arc<AtomicBool>) -> Res
 /// ends before a whole frame.
 fn decode_one(
     video: &Video,
-    decode: &mut Command,
+    request: &Request,
     cancel: &Arc<AtomicBool>,
     missing: &str,
 ) -> Result<RgbaImage> {
-    let mut child = Process::spawn(decode, cancel)?;
-    drop(child.stdin());
+    let mut decoder = Decoder::open(video, request, cancel)?;
     let mut bytes = vec![0; video.size.0 as usize * video.size.1 as usize * 4];
-    let read = child.stdout().read_exact(&mut bytes);
-    child.wait()?;
+    let read = decoder.frames().read_exact(&mut bytes);
+    decoder.wait()?;
     read.context(missing.to_owned())?;
     RgbaImage::from_raw(video.size.0, video.size.1, bytes).context("Invalid preview pixels")
 }
@@ -111,12 +194,14 @@ pub fn playback(
 ) -> Result<()> {
     let rate = Rate::of(video, options);
     let preroll = (start - 0.2).max(0.);
-    let mut decoder = Process::spawn(
-        &mut decode_command(video, Some(&rate.text), preroll, None),
-        cancel,
-    )?;
-    drop(decoder.stdin());
-    let mut output = decoder.stdout();
+    let request = Request {
+        rate: Some(&rate),
+        start: preroll,
+        frame: None,
+        limit: None,
+    };
+    let mut decoder = Decoder::open(video, &request, cancel)?;
+    let mut output = decoder.frames();
     let mut input = RgbaImage::new(video.size.0, video.size.1);
     let c = render_config(config, options, rate.fps);
     let mut sequence = Sequence::default();
