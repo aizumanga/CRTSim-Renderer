@@ -1038,9 +1038,7 @@ pub fn export(
         config,
         options,
         cancel,
-        |frame, config| {
-            renderer.render_video_frame_with_cancel(frame, config, &mut sequence, cancel)
-        },
+        |frame, config| renderer.render_frame(frame, config, &mut sequence, Some(cancel), |_| {}),
         progress,
     )
 }
@@ -1082,8 +1080,7 @@ pub fn playback(
         output
             .read_exact(&mut bytes[1..])
             .context("Truncated playback frame")?;
-        let rendered =
-            renderer.render_video_frame_with_cancel(&input, &c, &mut sequence, cancel)?;
+        let rendered = renderer.render_frame(&input, &c, &mut sequence, Some(cancel), |_| {})?;
         let time = preroll + index as f64 / fps;
         index += 1;
         if time + 0.00001 >= start {

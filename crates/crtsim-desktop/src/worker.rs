@@ -1,5 +1,5 @@
 use crate::files;
-use crtsim_core::{config::Config, RenderProgress, Renderer};
+use crtsim_core::{config::Config, RenderProgress, Renderer, Sequence};
 use eframe::egui;
 use image::RgbaImage;
 use std::{
@@ -619,16 +619,13 @@ fn render(
             });
             *renderer = Some(gpu.renderer()?);
         }
-        let renderer = renderer.as_ref().unwrap();
-        let image = match cancel {
-            Some(cancel) => {
-                renderer
-                    .render_with_progress_and_cancel(input, c, cancel, &mut progress)?
-                    .crt
-            }
-            None => renderer.render_with_progress(input, c, &mut progress)?.crt,
-        };
-        Ok(image)
+        renderer.as_ref().unwrap().render_frame(
+            input,
+            c,
+            &mut Sequence::default(),
+            cancel,
+            &mut progress,
+        )
     }));
     match result {
         Ok(v) => v.map_err(|e| format!("{e:#}")),

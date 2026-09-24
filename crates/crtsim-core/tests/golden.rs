@@ -216,12 +216,12 @@ fn cases(renderer: &Renderer) -> Vec<(&'static str, RgbaImage)> {
     let white = RgbaImage::from_pixel(64, 64, image::Rgba([255; 4]));
     let black = RgbaImage::from_pixel(64, 64, image::Rgba([0, 0, 0, 255]));
     renderer
-        .render_video_frame(&white, &trailing, &mut sequence)
+        .render_frame(&white, &trailing, &mut sequence, None, |_| {})
         .expect("first sequence frame");
     cases.push((
         "persistence-trail",
         renderer
-            .render_video_frame(&black, &trailing, &mut sequence)
+            .render_frame(&black, &trailing, &mut sequence, None, |_| {})
             .expect("second sequence frame"),
     ));
 
