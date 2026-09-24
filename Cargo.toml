@@ -3,14 +3,14 @@ members = ["crates/crtsim-core", "crates/crtsim-cli", "crates/crtsim-desktop", "
 resolver = "2"
 
 [workspace.package]
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 license = "CC0-1.0"
 
 [workspace.dependencies]
 anyhow = "1"
 bytemuck = { version = "1", features = ["derive"] }
-image = { version = "0.24.9", default-features = false, features = ["png", "jpeg", "bmp", "webp"] }
+image = { version = "0.24.9", default-features = false, features = ["png", "jpeg", "bmp", "webp", "gif"] }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 wgpu = "0.19.4"

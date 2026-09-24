@@ -1,12 +1,19 @@
 //! What an export tells FFmpeg, worked out before any process starts, so it can be checked
 //! without FFmpeg installed.
 use crate::{
-    command, render_config, Audio, Container, Encoder, EncodingSpeed, Options, Preset, Quality,
-    Rate, TrackKind, Video, PRESET_PREFIX,
+    command,
+    export::{require_encoder, Encoding, Frames, Step, Work},
+    process::Process,
+    render_config, Audio, Container, Encoder, EncodingSpeed, Options, Preset, Quality, Rate,
+    Source, TrackKind, Video, PRESET_PREFIX,
 };
 use anyhow::{ensure, Context, Result};
 use crtsim_core::config::Config;
-use std::{path::Path, process::Command};
+use std::{
+    path::Path,
+    process::Command,
+    sync::{atomic::AtomicBool, Arc},
+};
 
 /// Largest metadata an export writes, in bytes.
 const METADATA_LIMIT: usize = 16 * 1024 * 1024;
@@ -47,7 +54,7 @@ impl<'a> ExportPlan<'a> {
             video,
             options,
             config,
-            render: render_config(config, options, rate.fps),
+            render: render_config(config, options.timing, rate.fps),
             container,
             codec,
             size,
@@ -221,10 +228,14 @@ impl<'a> ExportPlan<'a> {
         copy_audio: bool,
     ) -> Command {
         let (video, options, container) = (self.video, self.options, self.container);
+        // An animation decoded here has no other tracks, and FFmpeg may not read it at all.
+        let source = matches!(video.source, Source::Ffmpeg);
         let mut cmd = command("ffmpeg");
         cmd.args(["-y", "-copyts", "-i"]).arg(silent);
-        cmd.args(["-itsoffset", &(-video.start).to_string(), "-i"])
-            .arg(&video.path);
+        if source {
+            cmd.args(["-itsoffset", &(-video.start).to_string(), "-i"])
+                .arg(&video.path);
+        }
         cmd.args(["-f", "ffmetadata", "-i"]).arg(metadata);
         cmd.args(["-map", "0:v:0", "-c:v", "copy"]);
         if video.audio && options.audio != Audio::Mute {
@@ -248,7 +259,7 @@ impl<'a> ExportPlan<'a> {
                 }
             }
         }
-        if options.preserve_streams {
+        if options.preserve_streams && source {
             let subtitles = video
                 .tracks_of(TrackKind::Subtitle)
                 .filter_map(|track| Some((track, container.subtitle_codec(&track.codec)?)));
@@ -271,13 +282,86 @@ impl<'a> ExportPlan<'a> {
             "-t",
             &self.duration(frames).to_string(),
             "-map_metadata",
-            "2",
+            if source { "2" } else { "1" },
         ]);
         if container == Container::Mp4 {
             cmd.args(["-movflags", "+faststart+use_metadata_tags"]);
         }
         cmd.args(["-f", container.format()]).arg(destination);
         cmd
+    }
+}
+
+impl Encoding for ExportPlan<'_> {
+    fn frames(&self) -> Frames<'_> {
+        Frames {
+            video: self.video,
+            render: &self.render,
+            size: self.size,
+            rate: &self.rate,
+            start: 0.,
+            limit: None,
+        }
+    }
+
+    fn check(&self, cancel: &Arc<AtomicBool>) -> Result<()> {
+        require_encoder(self.codec, cancel)?;
+        if self.options.encoder != Encoder::Software {
+            let mut check = command("ffmpeg");
+            check.args([
+                "-f",
+                "lavfi",
+                "-i",
+                "color=size=128x128:rate=30",
+                "-frames:v",
+                "2",
+                "-c:v",
+                self.codec,
+                "-f",
+                "null",
+                "-",
+            ]);
+            Process::run(&mut check, cancel).context(
+                "Selected hardware encoder is unavailable on this machine; choose Software",
+            )?;
+        }
+        Ok(())
+    }
+
+    fn intermediate(&self) -> Option<&'static str> {
+        Some(self.container.extension())
+    }
+
+    fn encoder(&self, encoded: &Path) -> Command {
+        self.encode(encoded)
+    }
+
+    fn metadata_file(&self) -> Result<Option<String>> {
+        self.metadata().map(Some)
+    }
+
+    /// Muxes the source's audio and other tracks back in, copying the audio as it is when it
+    /// can and re-encoding it when copying fails.
+    fn finishing(&self, work: &Work, frames: u64) -> Vec<Step> {
+        let mux = |copy_audio| {
+            self.mux(
+                work.encoded,
+                work.metadata,
+                work.destination,
+                frames,
+                copy_audio,
+            )
+        };
+        let commands = if self.copies_audio() {
+            vec![mux(true), mux(false)]
+        } else {
+            vec![mux(false)]
+        };
+        vec![Step {
+            stage: "Preserving audio and finalizing container",
+            commands,
+            failed: "Audio remux and re-encoding both failed",
+        }]
     }
 }
 
@@ -322,6 +406,7 @@ mod tests {
             hdr: false,
             stream: 0,
             frames: None,
+            source: Source::Ffmpeg,
         }
     }
 
@@ -406,6 +491,23 @@ mod tests {
                 "Data track 6 is not copied.",
             ]
         );
+    }
+
+    #[test]
+    fn an_animation_is_muxed_without_reading_its_file_again() {
+        let mut source = video(&[]);
+        source.source = Source::Animated {
+            format: crate::AnimationFormat::Gif,
+            delays: [100, 100].into(),
+        };
+        let config = config();
+        let options = Options::default();
+        let plan = ExportPlan::new(&source, Path::new("out.mkv"), &config, &options).unwrap();
+        let args = mux(&plan, true);
+        assert_eq!(values(&args, "-i"), ["video.tmp", "preset.ffmeta"]);
+        assert_eq!(values(&args, "-map"), ["0:v:0"]);
+        assert_eq!(values(&args, "-map_metadata"), ["1"]);
+        assert_eq!(values(&args, "-map_chapters"), ["-1"]);
     }
 
     #[test]

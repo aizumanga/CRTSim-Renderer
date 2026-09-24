@@ -1,6 +1,6 @@
 use crate::{files, model, texture, worker, App, Dialog, Job, Work};
 use anyhow::{ensure, Result};
-use crtsim_core::{config::Config, settings};
+use crtsim_core::config::Config;
 use crtsim_media::Options;
 use eframe::egui;
 use serde::{Deserialize, Serialize};
@@ -107,7 +107,7 @@ pub struct State {
     pub playback: Option<Playback>,
     pub play_time: f64,
     pub export_dialog: Option<crate::export_ui::ExportDialog>,
-    pub export_container: crtsim_media::Container,
+    pub export_format: crate::export_ui::ExportFormat,
     pub project_path: Option<PathBuf>,
     recovery: Option<Project>,
     recent: Vec<PathBuf>,
@@ -129,7 +129,7 @@ impl Default for State {
             playback: None,
             play_time: 0.,
             export_dialog: None,
-            export_container: Default::default(),
+            export_format: Default::default(),
             project_path: None,
             recovery: None,
             recent: vec![],
@@ -256,7 +256,7 @@ impl App {
                 return;
             }
             self.workflow.pending_project = Some(p.clone());
-            if crtsim_media::is_video(source) {
+            if crtsim_media::MediaKind::of(source).is_moving() {
                 self.load_video(source.clone(), p.frame, false);
             } else {
                 self.load(source.clone());
@@ -494,7 +494,7 @@ impl App {
                                 break;
                             }
                             let stem = source.file_stem().unwrap_or_default().to_string_lossy();
-                            let ext = if crtsim_media::is_video(&source) {
+                            let ext = if crtsim_media::MediaKind::of(&source).batch_as_video() {
                                 "mkv"
                             } else {
                                 "png"
@@ -698,168 +698,6 @@ impl App {
             }
         });
     }
-    pub fn workflow_settings(&mut self, ui: &mut egui::Ui) {
-        crate::chrome::Section::new("Source & framing")
-            .default_open(true)
-            .show(ui, |ui| {
-                ui.checkbox(&mut self.config.screen_only, "Screen only · no bezel");
-                egui::CollapsingHeader::new("Crop edges · percent").show(ui, |ui| {
-                    for (i, name) in ["Left", "Top", "Right", "Bottom"].iter().enumerate() {
-                        let opposite = (i + 2) % 4;
-                        let max = (0.98 - self.config.source.crop[opposite]).max(0.);
-                        let mut percent = self.config.source.crop[i] * 100.;
-                        if ui
-                            .add(egui::Slider::new(&mut percent, 0.0..=max * 100.).text(*name))
-                            .changed()
-                        {
-                            self.config.source.crop[i] = percent / 100.;
-                        }
-                    }
-                });
-                ui.add(
-                    egui::Slider::new(&mut self.config.source.rotation, -180.0..=180.)
-                        .text("Rotation °"),
-                );
-                ui.add(
-                    egui::Slider::new(&mut self.config.source.zoom, 0.05..=4.)
-                        .logarithmic(true)
-                        .text("Source zoom"),
-                );
-                ui.add(
-                    egui::Slider::new(&mut self.config.source.position[0], -1.0..=1.).text("Pan X"),
-                );
-                ui.add(
-                    egui::Slider::new(&mut self.config.source.position[1], -1.0..=1.).text("Pan Y"),
-                );
-                ui.label("Transparency background (included in exports)");
-                ui.horizontal(|ui| {
-                    if ui
-                        .selectable_label(
-                            !self.config.source.checkerboard
-                                && self.config.source.background == [0; 3],
-                            "Black",
-                        )
-                        .clicked()
-                    {
-                        self.config.source.checkerboard = false;
-                        self.config.source.background = [0; 3];
-                    }
-                    if ui
-                        .selectable_label(
-                            !self.config.source.checkerboard
-                                && self.config.source.background == [255; 3],
-                            "White",
-                        )
-                        .clicked()
-                    {
-                        self.config.source.checkerboard = false;
-                        self.config.source.background = [255; 3];
-                    }
-                    ui.checkbox(&mut self.config.source.checkerboard, "Checker");
-                });
-                if ui
-                    .color_edit_button_srgb(&mut self.config.source.background)
-                    .changed()
-                {
-                    self.config.source.checkerboard = false;
-                }
-                if ui.button("Reset source framing").clicked() {
-                    self.config.source = Default::default();
-                }
-            });
-        crate::chrome::Section::new("Color & LUT").show(ui, |ui| {
-            ui.label(match (&self.config.palette, &self.config.lut) {
-                (Some(_), _) => "NES palette from the composite signal",
-                (None, Some(lut)) => lut.name.as_str(),
-                (None, None) => "No LUT",
-            });
-            if ui.button("LUT gallery…").clicked() {
-                self.stop_playback();
-                self.show_lut_gallery = true;
-            }
-            if ui.button("Import 3D .cube…").clicked() {
-                self.dialog(Dialog::Lut, &ui.ctx().clone());
-            }
-            if self.config.lut.is_some() && ui.button("Remove LUT").clicked() {
-                self.config.lut = None;
-            }
-            let mut generated = self.config.palette.is_some();
-            let toggled = ui
-                .checkbox(&mut generated, "NES palette from the composite signal")
-                .on_hover_text(
-                    "Super Win the Game's NTSC palette: the NES's colours decoded from its \
-                     signal, turned by Tint and scaled along I and Q. It recolours images drawn \
-                     in MAME's NES palette, and replaces any LUT.",
-                )
-                .changed();
-            if toggled {
-                self.config.palette = generated.then(Default::default);
-                if generated {
-                    self.config.lut = None;
-                }
-            }
-            if self.config.lut.is_some() || self.config.palette.is_some() {
-                let defaults = Config {
-                    palette: Some(Default::default()),
-                    ..Config::general()
-                };
-                crate::numbers(ui, &mut self.config, &defaults, settings::Section::Color);
-            }
-            ui.small(
-                "Applied before CRT simulation. The table is embedded in presets and projects.",
-            );
-        });
-    }
-}
-
-pub fn compare(
-    ui: &mut egui::Ui,
-    original: egui::load::SizedTexture,
-    rendered: egui::load::SizedTexture,
-    area: egui::Vec2,
-    fit: bool,
-    zoom: f32,
-    split: &mut f32,
-) {
-    let native = rendered.size;
-    let size = if fit {
-        native * (area.x / native.x).min(area.y / native.y)
-    } else {
-        native * zoom
-    };
-    let (area_rect, response) =
-        ui.allocate_exact_size(if fit { area } else { size }, egui::Sense::click_and_drag());
-    let rect = egui::Rect::from_center_size(area_rect.center(), size);
-    if let Some(pos) = response.interact_pointer_pos() {
-        *split = ((pos.x - rect.left()) / rect.width()).clamp(0., 1.);
-    }
-    let x = rect.left() + rect.width() * *split;
-    let uv = egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.));
-    ui.painter()
-        .image(rendered.id, rect, uv, egui::Color32::WHITE);
-    let left = egui::Rect::from_min_max(rect.min, egui::pos2(x, rect.bottom()));
-    let painter = ui.painter().with_clip_rect(left.intersect(ui.clip_rect()));
-    painter.rect_filled(rect, 0., egui::Color32::BLACK);
-    let os = original.size;
-    let os = os * (size.x / os.x).min(size.y / os.y);
-    painter.image(
-        original.id,
-        egui::Rect::from_center_size(rect.center(), os),
-        uv,
-        egui::Color32::WHITE,
-    );
-    ui.painter().line_segment(
-        [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
-        egui::Stroke::new(2.0_f32, egui::Color32::WHITE),
-    );
-    ui.painter().circle_filled(
-        egui::pos2(x, rect.center().y),
-        7.0_f32,
-        egui::Color32::WHITE,
-    );
-    response
-        .on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
-        .on_hover_text("Drag to compare · original on the left, CRT on the right");
 }
 
 #[cfg(test)]

@@ -1,3 +1,4 @@
+use crate::gallery_ui::EntryResponse;
 use crate::*;
 use crtsim_core::nes_luts;
 

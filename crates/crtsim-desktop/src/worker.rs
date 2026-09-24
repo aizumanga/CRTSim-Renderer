@@ -171,6 +171,13 @@ pub enum Job {
         path: PathBuf,
         cancel: Arc<AtomicBool>,
     },
+    ExportAnimation {
+        video: Video,
+        options: crtsim_media::AnimationOptions,
+        config: Config,
+        path: PathBuf,
+        cancel: Arc<AtomicBool>,
+    },
     Batch {
         source: PathBuf,
         config: Config,
@@ -482,6 +489,26 @@ fn work(ctx: egui::Context, gpu: Gpu, jobs: mpsc::Receiver<Job>, events: mpsc::S
                     .map(|()| path)
                     .map_err(|e| Failure::of(e, &cancel)),
             ),
+            Job::ExportAnimation {
+                video,
+                options,
+                config,
+                path,
+                cancel,
+            } => Event::Exported(
+                graphics
+                    .guard(
+                        "Animation graphics driver failed. Try a smaller size.",
+                        |g| {
+                            let renderer = g.renderer(|| {})?;
+                            crtsim_media::export_animation(
+                                &video, &path, &config, &options, renderer, &cancel, &progress,
+                            )
+                        },
+                    )
+                    .map(|()| path)
+                    .map_err(|e| Failure::of(e, &cancel)),
+            ),
             Job::Batch {
                 source,
                 config,
@@ -493,7 +520,8 @@ fn work(ctx: egui::Context, gpu: Gpu, jobs: mpsc::Receiver<Job>, events: mpsc::S
                     .guard(
                         "Batch graphics driver failed. Try a smaller resolution.",
                         |g| {
-                            if crtsim_media::is_video(&source) {
+                            // The queue chose PNG or video when it named the output.
+                            if crtsim_media::Container::of(&path).is_some() {
                                 let video = crtsim_media::probe(&source, &cancel)?;
                                 export_video(
                                     g, &video, &config, &options, &path, &cancel, &progress,

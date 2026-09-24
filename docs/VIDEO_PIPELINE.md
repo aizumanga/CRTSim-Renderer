@@ -1,6 +1,8 @@
 # Video pipeline
 
 The `crtsim-media` crate invokes local FFmpeg/ffprobe executables without a shell. The desktop worker owns each job and captures its settings.
+Animated GIF and WebP are the exception on input: `animated.rs` decodes them in Rust (image's GIF decoder and `image-webp`),
+so they open without FFmpeg. `MediaKind::of` tells an animation from a still image of the same format by its header.
 Environment overrides `CRTSIM_FFMPEG` and `CRTSIM_FFPROBE` support executable paths containing spaces.
 
 ## Processing
@@ -22,6 +24,18 @@ most two frames queued on either side of the render loop, so decoding, rendering
 run at the same time instead of in turn. Frames stay in order. On a GPU whose frames render in
 tens of milliseconds, that was measured to shorten a 1080p export by about a third. On the
 software Vulkan driver in CI the render itself dominates, and the gain is far smaller.
+
+## Decoding and exporting, by module
+
+- `probe.rs` reads what a file holds. A `Video` records its `Source`: FFmpeg, or an animation decoded here with its frame delays.
+- `decode.rs` is the one way frames are decoded. `Decoder` wraps the FFmpeg process or the animation's decode thread;
+  both produce packed RGBA at the video's size. An animation is sampled at a constant rate the way FFmpeg's
+  `fps=round=near` does, and frames asking for 10 ms or less show for 100 ms, as in browsers.
+- `export.rs` runs any `Encoding` plan: it decodes, renders and encodes at once, runs the plan's finishing steps and only
+  then replaces the output. `plan.rs` is the video plan, whose one step muxes the source's tracks, re-encoding audio if
+  copying fails. `animation.rs` is the GIF/WebP plan: a GIF is encoded to a lossless FFV1 file, its 256-color palette is
+  chosen from all frames, and the frames are mapped to it; a WebP is encoded directly, with no steps.
+  An animation's CRT is rendered at its longest side (`Config::with_max_output_side`), not scaled down afterwards.
 
 ## Resource ownership and cancellation
 
