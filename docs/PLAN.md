@@ -13,7 +13,8 @@ The video demonstrates adjustable effects; it is not an interface specification.
 - WGSL composite -> curved screen/frame -> bloom downsample/upsample -> present.
 - Gamma-space RGBA8 intermediate targets match the public reference's broad numerical behavior.
 - Source-sized horizontal samples replace the hardcoded 1/256 step.
-- The original NTSC texture tiles in signal pixels; mask density is separately configurable.
+- The original NTSC texture tiles in signal pixels. The mask follows the signal as the original's did, one column per two signal
+  columns and one row per signal row, or takes fixed columns and rows.
 - Black-border bilinear sampling is implemented explicitly, avoiding an optional GPU border-sampler feature.
 - Feedback textures start cleared; one immutable uniform buffer per tick keeps phase ordering deterministic.
 - Stable phase default; A/B and alternating available. Warm-up is user-controlled, not proof of convergence.

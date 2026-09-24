@@ -17,6 +17,7 @@ pub enum Section {
     Grade,
     Signal,
     Glass,
+    Mask,
     Bloom,
     Lighting,
     Persistence,
@@ -76,6 +77,21 @@ impl<const N: usize> Values for [f32; N] {
     }
     fn values_mut(&mut self) -> &mut [f32] {
         self
+    }
+}
+/// A mask that follows the signal has no numbers of its own.
+impl Values for crate::config::MaskRepeats {
+    fn values(&self) -> &[f32] {
+        match self {
+            Self::Signal => &[],
+            Self::Fixed(repeats) => repeats,
+        }
+    }
+    fn values_mut(&mut self) -> &mut [f32] {
+        match self {
+            Self::Signal => &mut [],
+            Self::Fixed(repeats) => repeats,
+        }
     }
 }
 
@@ -219,24 +235,6 @@ pub static SETTINGS: &[Setting] = &[
         Numbers::slider(Glass, access!(overscan), 0.1..=3.),
     ),
     Setting::numbers(
-        "mask_opacity",
-        "Mask opacity",
-        Numbers::slider(Glass, access!(mask_opacity), 0.0..=1.),
-    ),
-    Setting::numbers(
-        "mask_brightness",
-        "Mask brightness",
-        Numbers::slider(Glass, access!(mask_brightness), 0.0..=2.),
-    ),
-    Setting::numbers(
-        "mask_repeats",
-        "Mask columns, rows",
-        Numbers::slider(Glass, access!(mask_repeats), 1.0..=16384.)
-            .logarithmic()
-            .named(&["Mask columns", "Mask rows"])
-            .accepting((Excluded(0.), Included(16384.))),
-    ),
-    Setting::numbers(
         "dimming",
         "Edge dimming",
         Numbers::slider(Glass, access!(dimming), 0.0..=1.),
@@ -245,6 +243,24 @@ pub static SETTINGS: &[Setting] = &[
         "fov",
         "Camera field of view",
         Numbers::slider(Glass, access!(fov), 5.0..=90.),
+    ),
+    Setting::numbers(
+        "mask_opacity",
+        "Mask opacity",
+        Numbers::slider(Mask, access!(mask_opacity), 0.0..=1.),
+    ),
+    Setting::numbers(
+        "mask_brightness",
+        "Mask brightness",
+        Numbers::slider(Mask, access!(mask_brightness), 0.0..=2.),
+    ),
+    Setting::numbers(
+        "mask_repeats",
+        "Mask columns, rows",
+        Numbers::slider(Mask, access!(mask_repeats), 1.0..=16384.)
+            .logarithmic()
+            .named(&["Mask columns", "Mask rows"])
+            .accepting((Excluded(0.), Included(16384.))),
     ),
     Setting::numbers(
         "bloom",
@@ -343,6 +359,7 @@ fn describe((low, high): &(Bound<f32>, Bound<f32>)) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::MaskRepeats;
 
     fn keys(prefix: &str, value: &serde_json::Value, out: &mut Vec<String>) {
         match value {
@@ -395,11 +412,16 @@ mod tests {
         );
         // The slider stops short of what a preset may hold.
         c.persistence[1] = 0.9995;
-        c.mask_repeats[0] = 0.5;
+        c.mask_repeats = MaskRepeats::Fixed([0.5, 224.]);
         assert!(validate(&c).is_ok());
-        c.mask_repeats[0] = 0.;
-        assert!(validate(&c).is_err());
-        c.mask_repeats[0] = 128.;
+        c.mask_repeats = MaskRepeats::Fixed([0., 224.]);
+        assert_eq!(
+            validate(&c).unwrap_err().to_string(),
+            "Mask columns must be above 0 and at most 16384, not 0"
+        );
+        // Following the signal, there are no numbers to check.
+        c.mask_repeats = MaskRepeats::Signal;
+        assert!(validate(&c).is_ok());
         c.frame_color[2] = f32::NAN;
         assert!(validate(&c).is_err());
     }

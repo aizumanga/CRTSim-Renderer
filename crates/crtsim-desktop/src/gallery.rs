@@ -1,5 +1,5 @@
 use anyhow::{ensure, Context, Result};
-use crtsim_core::config::{ColorMode, Config, Filter, Phase};
+use crtsim_core::config::{ColorMode, Config, Filter, MaskRepeats, Phase};
 use std::path::{Path, PathBuf};
 
 use crate::theme::Theme;
@@ -70,6 +70,7 @@ pub fn builtins() -> Vec<Entry> {
                 signal: "240p".into(),
                 filter: Filter::Nearest,
                 mask_opacity: 0.7,
+                mask_repeats: MaskRepeats::Signal,
                 ..general.clone()
             },
         ),
@@ -82,6 +83,7 @@ pub fn builtins() -> Vec<Entry> {
                 filter: Filter::Nearest,
                 phase: Phase::Alternating,
                 mask_opacity: 0.7,
+                mask_repeats: MaskRepeats::Signal,
                 ..general.clone()
             },
         ),
@@ -93,6 +95,7 @@ pub fn builtins() -> Vec<Entry> {
                 signal: "480p".into(),
                 interlace: true,
                 phase: Phase::Alternating,
+                mask_repeats: MaskRepeats::Signal,
                 ..general.clone()
             },
         ),
@@ -106,6 +109,7 @@ pub fn builtins() -> Vec<Entry> {
                 phase: Phase::Stable,
                 artifacts: 0.25,
                 mask_opacity: 0.7,
+                mask_repeats: MaskRepeats::Signal,
                 ..general.clone()
             },
         ),
@@ -118,6 +122,7 @@ pub fn builtins() -> Vec<Entry> {
                 interlace: true,
                 phase: Phase::Stable,
                 artifacts: 0.25,
+                mask_repeats: MaskRepeats::Signal,
                 ..general.clone()
             },
         ),
@@ -409,6 +414,27 @@ mod tests {
                 "{name}"
             );
             assert_eq!(preset.config.interlace, interlaced, "{name}");
+        }
+    }
+
+    #[test]
+    fn presets_for_a_line_count_have_the_mask_follow_it() {
+        for entry in builtins() {
+            let follows = matches!(
+                entry.name.as_str(),
+                "Original CRTSim"
+                    | "Pixel art 240p"
+                    | "NTSC 240p"
+                    | "NTSC 480i"
+                    | "PAL 288p"
+                    | "PAL 576i"
+            );
+            let expected = if follows {
+                MaskRepeats::Signal
+            } else {
+                MaskRepeats::Fixed([128., 224.])
+            };
+            assert_eq!(entry.config.mask_repeats, expected, "{}", entry.name);
         }
     }
 }

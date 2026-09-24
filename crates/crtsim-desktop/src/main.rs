@@ -10,7 +10,7 @@ mod thumbnails;
 mod worker;
 mod workflow;
 
-use crtsim_core::config::{self, ColorMode, Config, Filter, Fit, Phase};
+use crtsim_core::config::{self, ColorMode, Config, Filter, Fit, MaskRepeats, Phase};
 use crtsim_core::{settings, RenderProgress};
 use eframe::egui::{self, TextureHandle};
 use image::RgbaImage;
@@ -1102,7 +1102,10 @@ impl App {
                 numbers(ui, &mut self.config, &defaults, settings::Section::Signal)
             });
         chrome::Section::new("Glass & mask").show(ui, |ui| {
-            numbers(ui, &mut self.config, &defaults, settings::Section::Glass)
+            numbers(ui, &mut self.config, &defaults, settings::Section::Glass);
+            ui.separator();
+            self.mask_density(ui);
+            numbers(ui, &mut self.config, &defaults, settings::Section::Mask);
         });
         chrome::Section::new("Bloom & reflections").show(ui, |ui| {
             numbers(ui, &mut self.config, &defaults, settings::Section::Bloom)
@@ -1197,10 +1200,10 @@ impl App {
         if let Ok(c) =
             model::preview_config(&self.config, self.input.dimensions(), self.preview_limit)
         {
-            if let Ok((w, h)) = c.output_size(self.input.dimensions()) {
-                if w as f32 / self.config.mask_repeats[0] < 6.
-                    || h as f32 / self.config.mask_repeats[1] < 3.
-                {
+            let input = self.input.dimensions();
+            if let (Ok((w, h)), Ok(signal)) = (c.output_size(input), c.signal_size(input)) {
+                let [columns, rows] = c.mask_repeats.resolve(signal);
+                if w as f32 / columns < 6. || h as f32 / rows < 3. {
                     ui.colored_label(
                         ui.visuals().warn_fg_color,
                         "Dense mask at this preview size: aliasing / moiré is \
@@ -1544,6 +1547,31 @@ impl App {
             self.replace_config(config);
         }
     }
+    /// Whether the mask follows the signal, as the original's did, or has columns and rows of
+    /// its own, which start from the density in use so the picture does not jump.
+    fn mask_density(&mut self, ui: &mut egui::Ui) {
+        let mut follows = self.config.mask_repeats == MaskRepeats::Signal;
+        let toggled = ui
+            .checkbox(&mut follows, "Mask follows the signal")
+            .on_hover_text(
+                "A mask column for every two signal columns and a row for every signal row, as \
+                 the original drew it, so a finer signal gets a finer mask. Off sets the mask's \
+                 columns and rows yourself, whatever the signal.",
+            )
+            .changed();
+        if toggled {
+            self.config.mask_repeats = if follows {
+                MaskRepeats::Signal
+            } else {
+                let signal = self.config.signal_size(self.input.dimensions());
+                MaskRepeats::Fixed(
+                    self.config
+                        .mask_repeats
+                        .resolve(signal.unwrap_or((256, 224))),
+                )
+            };
+        }
+    }
     fn save_to_gallery(&mut self) {
         let Some(store) = &self.store else {
             return;
@@ -1695,11 +1723,14 @@ fn numbers(ui: &mut egui::Ui, config: &mut Config, defaults: &Config, section: s
             settings::Control::Slider { span, logarithmic } => {
                 let defaults = (numbers.access.get)(defaults);
                 for (index, value) in values.iter_mut().enumerate() {
+                    // A default with no number here, such as a mask that follows the signal,
+                    // leaves nothing to reset to.
+                    let default = defaults.get(index).copied().unwrap_or(*value);
                     slider(
                         ui,
                         setting.value_name(index),
                         value,
-                        defaults[index],
+                        default,
                         span.clone(),
                         *logarithmic,
                     );

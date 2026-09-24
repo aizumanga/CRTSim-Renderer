@@ -53,6 +53,7 @@ impl Params {
         let projection =
             glam::Mat4::perspective_rh(fov, output.0 as f32 / output.1 as f32, 0.1, 100.);
         let uv = c.uv_scale(signal);
+        let mask = c.mask_repeats.resolve(signal);
         let flag = |on: bool| if on { 1. } else { 0. };
         Self {
             mvp: (projection * view).to_cols_array_2d(),
@@ -65,12 +66,7 @@ impl Params {
             signal: [c.sharpness, c.bleed, c.artifacts, 0.5],
             persistence: [c.persistence[0], c.persistence[1], c.persistence[2], 0.],
             geometry: [uv[0], uv[1], c.overscan, c.barrel],
-            mask: [
-                c.mask_repeats[0],
-                c.mask_repeats[1],
-                c.mask_brightness,
-                c.mask_opacity,
-            ],
+            mask: [mask[0], mask[1], c.mask_brightness, c.mask_opacity],
             lighting: [c.diffuse, c.specular, c.specular_power, c.rim],
             surface: [
                 c.dimming,

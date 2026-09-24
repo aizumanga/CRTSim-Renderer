@@ -25,6 +25,59 @@ pub enum Filter {
     Lanczos,
 }
 
+/// How many times the shadow mask repeats across the screen.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MaskRepeats {
+    /// As the original: a mask column for every two signal columns and a row for every signal
+    /// row, so a finer signal gets a finer mask. Saved as `"signal"`.
+    Signal,
+    /// These columns and rows across the screen, whatever the signal. Saved as
+    /// `[columns, rows]`, which is how every preset held it before it could follow the signal.
+    Fixed([f32; 2]),
+}
+
+impl MaskRepeats {
+    /// The columns and rows across the screen for a signal of `size`.
+    pub fn resolve(self, (width, height): (u32, u32)) -> [f32; 2] {
+        match self {
+            Self::Signal => [width as f32 / 2., height as f32],
+            Self::Fixed(repeats) => repeats,
+        }
+    }
+}
+
+impl Serialize for MaskRepeats {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        match self {
+            Self::Signal => serializer.serialize_str("signal"),
+            Self::Fixed(repeats) => repeats.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for MaskRepeats {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged, expecting = "\"signal\" or [columns, rows]")]
+        enum Saved {
+            Fixed([f32; 2]),
+            Named(String),
+        }
+        match Saved::deserialize(deserializer)? {
+            Saved::Fixed(repeats) => Ok(Self::Fixed(repeats)),
+            Saved::Named(name) if name == "signal" => Ok(Self::Signal),
+            Saved::Named(name) => Err(serde::de::Error::custom(format!(
+                "unknown mask repeats {name:?}, expected \"signal\" or [columns, rows]"
+            ))),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum ColorMode {
@@ -57,8 +110,7 @@ pub struct Config {
     pub saturation: f32,
     pub mask_brightness: f32,
     pub mask_opacity: f32,
-    /// Physical mask repeats across the screen (not tied to signal dimensions).
-    pub mask_repeats: [f32; 2],
+    pub mask_repeats: MaskRepeats,
     pub dimming: f32,
     pub reflection: f32,
     pub diffuse: f32,
@@ -108,7 +160,7 @@ impl Default for Config {
             saturation: 1.35,
             mask_brightness: 0.45,
             mask_opacity: 1.,
-            mask_repeats: [128., 224.],
+            mask_repeats: MaskRepeats::Signal,
             dimming: 0.5,
             reflection: 0.3,
             diffuse: 0.5,
@@ -147,8 +199,9 @@ pub fn validate_size((w, h): (u32, u32)) -> Result<()> {
 }
 impl Config {
     /// The starting point for ordinary images rather than 256x224 game frames: square pixels,
-    /// smooth resizing, contain fitting and neutral saturation. `default` stays the public
-    /// reference's settings.
+    /// smooth resizing, contain fitting, neutral saturation, and the reference's mask density
+    /// whatever the signal, since an image's rows are not a picture tube's. `default` stays the
+    /// public reference's settings.
     pub fn general() -> Self {
         Self {
             signal: "auto".into(),
@@ -157,6 +210,7 @@ impl Config {
             filter: Filter::Lanczos,
             pixel_aspect: 1.,
             saturation: 1.,
+            mask_repeats: MaskRepeats::Fixed([128., 224.]),
             ..Self::default()
         }
     }
@@ -352,6 +406,38 @@ mod tests {
         .unwrap();
         assert!(gray.pixels().all(|p| p[0] == p[1] && p[1] == p[2]));
         assert_ne!(prepare(&src, &Config { hue: 30., ..c }).unwrap(), src);
+    }
+
+    #[test]
+    fn mask_repeats_follow_the_signal_or_stay_as_saved() {
+        // The original's density: 128 columns and 224 rows for its 256×224 signal.
+        assert_eq!(MaskRepeats::Signal.resolve((256, 224)), [128., 224.]);
+        assert_eq!(MaskRepeats::Signal.resolve((427, 240)), [213.5, 240.]);
+        assert_eq!(
+            MaskRepeats::Fixed([90., 60.]).resolve((427, 240)),
+            [90., 60.]
+        );
+        let load = |json: &str| Config::from_json_slice(json.as_bytes()).map(|c| c.mask_repeats);
+        // Every preset saved before the mask could follow the signal holds columns and rows.
+        assert_eq!(
+            load(r#"{"mask_repeats":[128,224]}"#).unwrap(),
+            MaskRepeats::Fixed([128., 224.])
+        );
+        assert_eq!(
+            load(r#"{"mask_repeats":"signal"}"#).unwrap(),
+            MaskRepeats::Signal
+        );
+        assert_eq!(load("{}").unwrap(), MaskRepeats::Signal);
+        let wrong = load(r#"{"mask_repeats":"dense"}"#).unwrap_err().to_string();
+        assert!(
+            wrong.contains(r#"expected "signal" or [columns, rows]"#),
+            "{wrong}"
+        );
+        assert!(load(r#"{"mask_repeats":[0,224]}"#).is_err());
+        for c in [Config::default(), Config::general()] {
+            let saved = serde_json::to_vec(&c).unwrap();
+            assert_eq!(Config::from_json_slice(&saved).unwrap(), c);
+        }
     }
 
     #[test]

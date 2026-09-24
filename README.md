@@ -56,6 +56,9 @@ Files without this metadata are rejected with an explanatory message; third-part
 **Filter mask when shrinking** samples the shadow mask from box-filtered mipmaps with trilinear filtering, as the original
 game did, so the mask stays smooth where it is drawn smaller than it is. It is on by default; presets saved with it off keep
 their unfiltered sampling. Display resizing can still introduce moiré.
+**Mask follows the signal** gives the mask a column for every two signal columns and a row for every signal row, as the
+original did, so a finer signal gets a finer mask. Original CRTSim and the line-count presets (Pixel art 240p, NTSC and PAL)
+use it; the general-image presets keep a fixed 128 × 224 mask. Presets saved with fixed columns and rows keep them.
 **Optional color grade** rotates hue and changes chroma in YIQ before the composite simulation. Neutral values leave the prepared signal unchanged.
 It is an artistic grade, not the private NES palette LUT or a full NTSC decoder.
 **Linear light (experimental)** decodes the SDR signal for glass sampling, performs lighting and bloom with RGBA16Float intermediates,
