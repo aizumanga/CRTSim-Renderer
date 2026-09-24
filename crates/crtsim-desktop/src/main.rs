@@ -36,6 +36,60 @@ enum Dialog {
     SavePreset,
     Export,
 }
+
+/// What a file dialog offers: the files it filters for and, when it saves, the name it suggests.
+struct Chooser {
+    filter: &'static str,
+    extensions: Vec<&'static str>,
+    /// For a save dialog, the suggested file name before its extension, the filter's only one.
+    save_as: Option<&'static str>,
+}
+
+impl Dialog {
+    fn chooser(self, video_extension: &'static str) -> Chooser {
+        let (filter, extensions, save_as) = match self {
+            Self::OpenProject => ("CRT project", vec![workflow::PROJECT_EXTENSION], None),
+            Self::SaveProject => (
+                "CRT project",
+                vec![workflow::PROJECT_EXTENSION],
+                Some("project"),
+            ),
+            Self::Lut => ("3D color LUT", vec!["cube"], None),
+            Self::File => ("Images and videos", files::media_extensions(), None),
+            Self::ExportVideo => ("Video", vec![video_extension], Some("rendered")),
+            Self::ImportPreset => (
+                "Rendered image/video",
+                [&["png"], crtsim_media::VIDEO_EXTENSIONS].concat(),
+                None,
+            ),
+            Self::LoadPreset => ("CRT preset", vec!["json"], None),
+            Self::SavePreset => ("CRT preset", vec!["json"], Some("my-crt")),
+            Self::Export => ("PNG image", vec!["png"], Some("rendered")),
+        };
+        Chooser {
+            filter,
+            extensions,
+            save_as,
+        }
+    }
+}
+
+/// Native dialogs confirm the path they return. Where it lacks the extension and one is appended,
+/// the actual destination is confirmed too, rather than silently replacing another file.
+fn with_extension_confirmed(mut path: PathBuf, extension: &str) -> Option<PathBuf> {
+    if path.extension().is_some() {
+        return Some(path);
+    }
+    path.set_extension(extension);
+    let replace = !path.exists()
+        || rfd::MessageDialog::new()
+            .set_title("Replace file?")
+            .set_description(format!("Replace {}?", path.display()))
+            .set_buttons(rfd::MessageButtons::YesNo)
+            .show()
+            == rfd::MessageDialogResult::Yes;
+    replace.then_some(path)
+}
 #[derive(Clone, Copy, PartialEq)]
 enum View {
     Crt,
@@ -159,7 +213,7 @@ impl App {
     ) -> Self {
         let input = Arc::new(config::test_card());
         let original = texture(ctx, "original", &input, 2048);
-        let config = model::general();
+        let config = Config::general();
         let render_state = gpu.render_state().cloned();
         let (jobs, events, worker_thread) = worker::start(ctx.clone(), gpu);
         let (dialog_send, dialog_receive) = mpsc::channel();
@@ -334,75 +388,18 @@ impl App {
         let ctx = ctx.clone();
         let video_extension = self.workflow.export_format.extension();
         std::thread::spawn(move || {
-            let path = match kind {
-                Dialog::OpenProject => rfd::FileDialog::new()
-                    .add_filter("CRT project", &["crtsim"])
-                    .pick_file(),
-                Dialog::SaveProject => rfd::FileDialog::new()
-                    .add_filter("CRT project", &["crtsim"])
-                    .set_file_name("project.crtsim")
-                    .save_file(),
-                Dialog::Lut => rfd::FileDialog::new()
-                    .add_filter("3D color LUT", &["cube"])
-                    .pick_file(),
-                Dialog::File => rfd::FileDialog::new()
-                    .add_filter(
-                        "Images and videos",
-                        &[
-                            "png", "jpg", "jpeg", "webp", "bmp", "mp4", "mkv", "mov", "webm",
-                            "avi", "m4v",
-                        ],
-                    )
-                    .pick_file(),
-                Dialog::ExportVideo => rfd::FileDialog::new()
-                    .add_filter("Video", &[video_extension])
-                    .set_file_name(format!("rendered.{video_extension}"))
-                    .save_file(),
-                Dialog::ImportPreset => rfd::FileDialog::new()
-                    .add_filter(
-                        "Rendered image/video",
-                        &["png", "mp4", "mkv", "webm", "mov", "m4v", "avi"],
-                    )
-                    .pick_file(),
-                Dialog::LoadPreset => rfd::FileDialog::new()
-                    .add_filter("CRT preset", &["json"])
-                    .pick_file(),
-                Dialog::SavePreset => rfd::FileDialog::new()
-                    .add_filter("CRT preset", &["json"])
-                    .set_file_name("my-crt.json")
-                    .save_file(),
-                Dialog::Export => rfd::FileDialog::new()
-                    .add_filter("PNG image", &["png"])
-                    .set_file_name("rendered.png")
-                    .save_file(),
-            };
-            // Native dialogs confirm their selected path. If we append a missing suffix,
-            // confirm the actual destination too, rather than silently replacing another file.
-            let path = path.and_then(|mut path| {
-                let extension = match kind {
-                    Dialog::SaveProject => Some("crtsim"),
-                    Dialog::Export => Some("png"),
-                    Dialog::SavePreset => Some("json"),
-                    Dialog::ExportVideo => Some(video_extension),
-                    _ => None,
-                };
-                if let Some(extension) = extension {
-                    if path.extension().is_none() {
-                        path.set_extension(extension);
-                        if path.exists()
-                            && rfd::MessageDialog::new()
-                                .set_title("Replace file?")
-                                .set_description(format!("Replace {}?", path.display()))
-                                .set_buttons(rfd::MessageButtons::YesNo)
-                                .show()
-                                != rfd::MessageDialogResult::Yes
-                        {
-                            return None;
-                        }
-                    }
+            let chooser = kind.chooser(video_extension);
+            let dialog = rfd::FileDialog::new().add_filter(chooser.filter, &chooser.extensions);
+            let path = match chooser.save_as {
+                None => dialog.pick_file(),
+                Some(name) => {
+                    let extension = chooser.extensions[0];
+                    dialog
+                        .set_file_name(format!("{name}.{extension}"))
+                        .save_file()
+                        .and_then(|path| with_extension_confirmed(path, extension))
                 }
-                Some(path)
-            });
+            };
             let _ = send.send((kind, path));
             ctx.request_repaint();
         });
@@ -411,14 +408,12 @@ impl App {
         self.stop_playback();
         if path
             .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("crtsim"))
+            .is_some_and(|e| e.eq_ignore_ascii_case(workflow::PROJECT_EXTENSION))
         {
             self.open_project(path);
             return;
         }
-        if path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
-            ["mp4", "mkv", "mov", "webm", "avi", "m4v"].contains(&e.to_ascii_lowercase().as_str())
-        }) {
+        if crtsim_media::is_video(&path) {
             self.load_video(path, 0, false);
             return;
         }
@@ -481,7 +476,7 @@ impl App {
     fn receive(&mut self, ctx: &egui::Context) {
         while let Ok((kind, path)) = self.dialog_receive.try_recv() {
             self.dialog_open = false;
-            if let Some(mut path) = path {
+            if let Some(path) = path {
                 match kind {
                     Dialog::OpenProject => self.open_project(path),
                     Dialog::SaveProject => self.save_project_file(path),
@@ -567,9 +562,6 @@ impl App {
                         }
                     }
                     Dialog::SavePreset => {
-                        if path.extension().is_none() {
-                            path.set_extension("json");
-                        }
                         match model::preview_config(&self.config, self.input.dimensions(), None)
                             .and_then(|_| files::save_preset(&path, &self.config))
                         {
@@ -580,12 +572,7 @@ impl App {
                             Err(e) => self.error = Some(format!("Cannot save preset: {e:#}")),
                         }
                     }
-                    Dialog::Export => {
-                        if path.extension().is_none() {
-                            path.set_extension("png");
-                        }
-                        self.export(path);
-                    }
+                    Dialog::Export => self.export(path),
                 }
             }
         }
@@ -903,12 +890,12 @@ impl App {
                 .on_hover_text("Reset to the general image preset; Undo restores your settings")
                 .clicked()
             {
-                self.replace_config(model::general());
+                self.replace_config(Config::general());
             }
         });
         ui.horizontal(|ui| {
             if ui.button("General image").clicked() {
-                self.replace_config(model::general());
+                self.replace_config(Config::general());
             }
             if ui.button("Original CRTSim").clicked() {
                 self.replace_config(Config::default());
@@ -916,7 +903,7 @@ impl App {
         });
         let before = self.config.clone();
         // What each slider's reset returns to: the same baseline as Reset above.
-        let defaults = model::general();
+        let defaults = Config::general();
         chrome::Section::new("Image & output").show(ui,|ui| {
         resolution(
             ui,

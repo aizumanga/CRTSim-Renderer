@@ -16,6 +16,7 @@ use std::{
 };
 
 const MAX_PROJECT: u64 = 64 * 1024 * 1024;
+pub const PROJECT_EXTENSION: &str = "crtsim";
 type BatchSelection = Option<(Vec<PathBuf>, PathBuf)>;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -46,11 +47,6 @@ enum QueueStatus {
     Failed(String),
 }
 
-pub fn is_video(path: &Path) -> bool {
-    path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
-        ["mp4", "mkv", "mov", "webm", "avi", "m4v"].contains(&e.to_ascii_lowercase().as_str())
-    })
-}
 fn read_project(path: &Path) -> Result<Project> {
     ensure!(
         std::fs::metadata(path)?.len() <= MAX_PROJECT,
@@ -256,7 +252,7 @@ impl App {
                 return;
             }
             self.workflow.pending_project = Some(p.clone());
-            if is_video(source) {
+            if crtsim_media::is_video(source) {
                 self.load_video(source.clone(), p.frame, false);
             } else {
                 self.load(source.clone());
@@ -441,7 +437,7 @@ impl App {
         let q = q.clone();
         self.workflow.active = Some(index);
         self.exporting = true;
-        self.video_job = is_video(&q.source);
+        self.video_job = crtsim_media::is_video(&q.source);
         self.cancel = Arc::new(AtomicBool::new(false));
         self.status = format!("Batch export {}", q.source.display());
         self.save_session();
@@ -462,13 +458,7 @@ impl App {
         let ctx = ctx.clone();
         std::thread::spawn(move || {
             let result = rfd::FileDialog::new()
-                .add_filter(
-                    "Images and videos",
-                    &[
-                        "png", "jpg", "jpeg", "webp", "bmp", "mp4", "mkv", "mov", "webm", "avi",
-                        "m4v",
-                    ],
-                )
+                .add_filter("Images and videos", &files::media_extensions())
                 .pick_files()
                 .and_then(|files| {
                     rfd::FileDialog::new()
@@ -496,7 +486,11 @@ impl App {
                                 break;
                             }
                             let stem = source.file_stem().unwrap_or_default().to_string_lossy();
-                            let ext = if is_video(&source) { "mkv" } else { "png" };
+                            let ext = if crtsim_media::is_video(&source) {
+                                "mkv"
+                            } else {
+                                "png"
+                            };
                             let mut n = 0;
                             let output = loop {
                                 let suffix = if n == 0 {

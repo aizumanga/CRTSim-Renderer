@@ -143,6 +143,22 @@ pub fn validate_size((w, h): (u32, u32)) -> Result<()> {
     Ok(())
 }
 impl Config {
+    /// The starting point for ordinary images rather than 256x224 game frames: square pixels,
+    /// smooth resizing, contain fitting, neutral saturation and a filtered mask. `default` stays
+    /// the public reference's settings.
+    pub fn general() -> Self {
+        Self {
+            signal: "auto".into(),
+            output: "1080p".into(),
+            fit: Fit::Contain,
+            filter: Filter::Lanczos,
+            pixel_aspect: 1.,
+            saturation: 1.,
+            mask_antialias: true,
+            ..Self::default()
+        }
+    }
+
     /// One version-aware entry point for presets. Future migrations belong here instead of
     /// being duplicated across the CLI, desktop JSON loader and embedded metadata readers.
     pub fn from_json_slice(bytes: &[u8]) -> Result<Self> {
@@ -289,16 +305,7 @@ pub fn prepare(input: &RgbaImage, config: &Config) -> Result<RgbaImage> {
             .prepare(input, (w, h), config.filter == Filter::Nearest)
     } else {
         let mut opaque = input.clone();
-        for p in opaque.pixels_mut() {
-            let a = u16::from(p[3]);
-            for i in 0..3 {
-                p[i] = ((u16::from(p[i]) * a
-                    + u16::from(config.source.background[i]) * (255 - a)
-                    + 127)
-                    / 255) as u8;
-            }
-            p[3] = 255;
-        }
+        flatten_alpha(&mut opaque, config.source.background);
         let filter = match config.filter {
             Filter::Nearest => imageops::FilterType::Nearest,
             Filter::Lanczos => imageops::FilterType::Lanczos3,
@@ -330,6 +337,18 @@ pub fn prepare(input: &RgbaImage, config: &Config) -> Result<RgbaImage> {
         }
     }
     Ok(resized)
+}
+
+/// Composites every pixel over an opaque `background` and makes it opaque, rounding to the
+/// nearest 8-bit step.
+pub fn flatten_alpha(image: &mut RgbaImage, background: [u8; 3]) {
+    for p in image.pixels_mut() {
+        let a = u16::from(p[3]);
+        for i in 0..3 {
+            p[i] = ((u16::from(p[i]) * a + u16::from(background[i]) * (255 - a) + 127) / 255) as u8;
+        }
+        p[3] = 255;
+    }
 }
 
 /// Original test card, not a screenshot from a commercial game.

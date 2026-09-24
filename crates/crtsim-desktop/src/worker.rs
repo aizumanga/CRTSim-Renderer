@@ -386,7 +386,7 @@ fn work(ctx: egui::Context, gpu: Gpu, jobs: mpsc::Receiver<Job>, events: mpsc::S
             } => {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
                     || -> Result<PathBuf, String> {
-                        if crate::workflow::is_video(&source) {
+                        if crtsim_media::is_video(&source) {
                             let video = crtsim_media::probe(&source, &cancel)
                                 .map_err(|e| format!("{e:#}"))?;
                             if renderer.is_none() {
@@ -411,7 +411,8 @@ fn work(ctx: egui::Context, gpu: Gpu, jobs: mpsc::Receiver<Job>, events: mpsc::S
                             )
                             .map_err(|e| format!("{e:#}"))?;
                         } else {
-                            let input = files::load_image(&source).map_err(|e| format!("{e:#}"))?;
+                            let input = crtsim_core::input::load_image(&source)
+                                .map_err(|e| format!("{e:#}"))?;
                             let im =
                                 render(&mut renderer, &gpu, &input, &config, Some(&cancel), |p| {
                                     let _ = events.send(Event::Progress { progress: p });
@@ -518,16 +519,11 @@ fn work(ctx: egui::Context, gpu: Gpu, jobs: mpsc::Receiver<Job>, events: mpsc::S
                 })
             }
             Job::Load(path) => Event::Loaded(
-                files::load_image(&path)
+                crtsim_core::input::load_image(&path)
                     .map(|im| {
                         // Keep thumbnail processing off the UI thread, including alpha before resizing.
                         let mut opaque = im.clone();
-                        for p in opaque.pixels_mut() {
-                            for i in 0..3 {
-                                p[i] = ((u16::from(p[i]) * u16::from(p[3]) + 127) / 255) as u8;
-                            }
-                            p[3] = 255;
-                        }
+                        crtsim_core::config::flatten_alpha(&mut opaque, [0; 3]);
                         let thumb = image::DynamicImage::ImageRgba8(opaque)
                             .thumbnail(2048, 2048)
                             .to_rgba8();

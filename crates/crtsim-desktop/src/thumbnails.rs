@@ -225,7 +225,7 @@ mod tests {
         let mut app = App::new(&ctx, worker::Gpu::Own(wgpu::Backends::PRIMARY), None, None);
         let (send, jobs) = mpsc::channel();
         app.jobs = worker::Jobs::capture(send);
-        let preset = model::general();
+        let preset = Config::general();
         assert!(app.lut_thumbnail(4).is_none());
         assert!(app.preset_thumbnail("General image", &preset).is_none());
         let first = asked(&jobs);

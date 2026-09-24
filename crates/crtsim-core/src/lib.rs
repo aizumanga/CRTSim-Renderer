@@ -1,5 +1,6 @@
 pub mod config;
 mod gpu_prepare;
+pub mod input;
 pub mod mesh;
 pub mod nes_luts;
 pub mod workflow;

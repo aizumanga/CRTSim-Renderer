@@ -21,6 +21,16 @@ use std::{
     time::Instant,
 };
 
+/// Files opened as video, by extension; FFmpeg decodes them.
+pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mkv", "mov", "webm", "avi", "m4v"];
+
+/// Whether a file is opened as video rather than as an image.
+pub fn is_video(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| VIDEO_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
+}
+
 #[derive(Clone, Debug)]
 pub struct Video {
     pub metadata: std::collections::BTreeMap<String, String>,

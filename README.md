@@ -202,7 +202,7 @@ cargo run --release -p crtsim-cli -- render --input image.png --config general.j
 ```
 
 `--signal` changes dimensions only: it does not silently change pixel aspect, filtering or fit settings.
-Use `config --general` for normal images; plain `config` generates the original-style configuration (8:7 pixel aspect, nearest filtering).
+Use `config --general` for normal images: it writes the desktop's General image preset. Plain `config` generates the original-style configuration (8:7 pixel aspect, nearest filtering).
 `fit` controls placement on a fixed 4:3 tube: `reference`, `contain`, `cover`, or `stretch`.
 Contain mode prevents rectangular aspect cropping, but the rounded glass and barrel distortion can still hide extreme corners.
 A widescreen output canvas does not turn the tube itself into a widescreen tube.

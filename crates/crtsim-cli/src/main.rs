@@ -1,7 +1,7 @@
 use anyhow::{ensure, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use crtsim_core::{
-    config::{self, Config, Filter, Fit, Phase},
+    config::{self, Config, Phase},
     mesh, PrepareOn, Renderer,
 };
 use image::{DynamicImage, ImageOutputFormat};
@@ -58,6 +58,7 @@ enum Command {
     Config {
         #[arg(short, long)]
         output: PathBuf,
+        /// The desktop's General image preset instead of the public-reference defaults.
         #[arg(long)]
         general: bool,
     },
@@ -111,14 +112,11 @@ fn main() -> Result<()> {
             println!("Signal: original (256x224), auto (up to 480 rows, preserves aspect), native, 240p, 288p, 360p, 480p, 576p, WIDTHxHEIGHT\nOutput: reference (1600x900), 720p, 1080p, 1440p, 4k, match-input, WIDTHxHEIGHT\nUse config --general for square-pixel images and contain fitting. Default is CRTSim Reference.");
         }
         Command::Config { output, general } => {
-            let mut c = Config::default();
-            if general {
-                c.signal = "auto".into();
-                c.output = "1080p".into();
-                c.pixel_aspect = 1.;
-                c.fit = Fit::Contain;
-                c.filter = Filter::Lanczos;
-            }
+            let c = if general {
+                Config::general()
+            } else {
+                Config::default()
+            };
             let mut file = new_file(&output)?;
             file.write_all(serde_json::to_string_pretty(&c)?.as_bytes())?;
         }
@@ -187,14 +185,7 @@ fn main() -> Result<()> {
             }
             c.validate()?;
             let src = if let Some(path) = input {
-                let dims =
-                    image::image_dimensions(&path).context("cannot inspect input dimensions")?;
-                config::validate_size(dims)?;
-                let mut reader = image::io::Reader::open(path)?.with_guessed_format()?;
-                let mut limits = image::io::Limits::default();
-                limits.max_alloc = Some(512 * 1024 * 1024);
-                reader.limits(limits);
-                reader.decode()?.to_rgba8()
+                crtsim_core::input::load_image(&path)?
             } else {
                 config::test_card()
             };

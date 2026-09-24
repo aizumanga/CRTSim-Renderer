@@ -1,18 +1,5 @@
 use anyhow::Result;
-use crtsim_core::config::{Config, Filter, Fit};
-
-pub fn general() -> Config {
-    Config {
-        signal: "auto".into(),
-        output: "1080p".into(),
-        fit: Fit::Contain,
-        filter: Filter::Lanczos,
-        pixel_aspect: 1.,
-        saturation: 1.,
-        mask_antialias: true,
-        ..Config::default()
-    }
-}
+use crtsim_core::config::Config;
 
 /// Limit only the canvas, preserving its aspect and the logical signal.
 pub fn preview_config(c: &Config, input: (u32, u32), max_side: Option<u32>) -> Result<Config> {
@@ -217,8 +204,8 @@ mod tests {
 
     #[test]
     fn differences_name_each_changed_setting_with_both_values() {
-        assert!(differences(&general(), &general()).is_empty());
-        let found = differences(&general(), &Config::default());
+        assert!(differences(&Config::general(), &Config::general()).is_empty());
+        let found = differences(&Config::general(), &Config::default());
         let find = |setting: &str| found.iter().find(|d| d.setting == setting);
         assert_eq!(
             find("Signal"),
@@ -254,11 +241,11 @@ mod tests {
             assert!(label(key).0 < LABELS.len(), "no label for {key}");
         }
         // Nested and array settings, and a LUT by name rather than by table.
-        let mut edited = general();
+        let mut edited = Config::general();
         edited.source.position = [0.25, 0.];
         edited.persistence[2] = 0.5;
         edited.lut = Some(std::sync::Arc::new(crtsim_core::nes_luts::load(0).unwrap()));
-        let found = differences(&general(), &edited);
+        let found = differences(&Config::general(), &edited);
         let settings: Vec<_> = found.iter().map(|d| d.setting.as_str()).collect();
         assert!(settings.contains(&"Pan (X, Y)"));
         assert!(settings.contains(&"Persistence (R, G, B)"));
@@ -270,7 +257,7 @@ mod tests {
     }
     #[test]
     fn preview_preserves_signal_and_canvas_aspect() {
-        let mut c = general();
+        let mut c = Config::general();
         c.output = "4k".into();
         let p = preview_config(&c, (1216, 832), Some(1280)).unwrap();
         assert_eq!(p.output_size((1216, 832)).unwrap(), (1280, 720));
@@ -289,7 +276,7 @@ mod tests {
     }
     #[test]
     fn undo_redo_and_new_edit_branch() {
-        let a = general();
+        let a = Config::general();
         let mut b = a.clone();
         b.bloom = 1.;
         let mut h = History::new(a.clone());

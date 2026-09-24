@@ -27,7 +27,7 @@ fn entry(name: &str, description: &str, config: Config) -> Entry {
     }
 }
 pub fn builtins() -> Vec<Entry> {
-    let general = crate::model::general();
+    let general = Config::general();
     vec![
         entry(
             "General image",
@@ -360,7 +360,7 @@ mod tests {
         assert!(s.tool_windows().is_err());
         s.set_tool_windows(&Layout::new()).unwrap();
         assert!(s.tool_windows().unwrap().is_empty());
-        let c = crate::model::general();
+        let c = Config::general();
         s.save("My CRT", &c, (1216, 832)).unwrap();
         assert!(s.save("my crt", &c, (1, 1)).is_err());
         for name in ["../oops", "CON", "", "nested/file", "trailing "] {
