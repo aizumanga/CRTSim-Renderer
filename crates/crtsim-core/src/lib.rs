@@ -437,8 +437,12 @@ impl Renderer {
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
+                // The original culled clockwise faces. Its meshes' visible faces wind
+                // counter-clockwise here, so those stay and the ones facing away are skipped.
+                // The depth test already hid those at every angle the settings allow.
                 primitive: wgpu::PrimitiveState {
-                    cull_mode: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: mesh.then_some(wgpu::Face::Back),
                     ..Default::default()
                 },
                 depth_stencil: mesh.then(|| wgpu::DepthStencilState {

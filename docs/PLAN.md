@@ -16,6 +16,7 @@ The video demonstrates adjustable effects; it is not an interface specification.
 - The original NTSC texture tiles in signal pixels. The mask follows the signal as the original's did, one column per two signal
   columns and one row per signal row, or takes fixed columns and rows.
 - Black-border bilinear sampling is implemented explicitly, avoiding an optional GPU border-sampler feature.
+- The screen and bezel meshes cull the faces that point away from the camera, as the original's clockwise culling did.
 - Feedback textures start cleared; one immutable uniform buffer per tick keeps phase ordering deterministic.
 - Stable phase default; A/B and alternating available. Warm-up is user-controlled, not proof of convergence.
 - Original-style and general-image config defaults, named signal/output resolutions, fit/filter/aspect options.
