@@ -25,6 +25,59 @@ pub enum Filter {
     Lanczos,
 }
 
+/// How many times the shadow mask repeats across the screen.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MaskRepeats {
+    /// As the original: a mask column for every two signal columns and a row for every signal
+    /// row, so a finer signal gets a finer mask. Saved as `"signal"`.
+    Signal,
+    /// These columns and rows across the screen, whatever the signal. Saved as
+    /// `[columns, rows]`, which is how every preset held it before it could follow the signal.
+    Fixed([f32; 2]),
+}
+
+impl MaskRepeats {
+    /// The columns and rows across the screen for a signal of `size`.
+    pub fn resolve(self, (width, height): (u32, u32)) -> [f32; 2] {
+        match self {
+            Self::Signal => [width as f32 / 2., height as f32],
+            Self::Fixed(repeats) => repeats,
+        }
+    }
+}
+
+impl Serialize for MaskRepeats {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        match self {
+            Self::Signal => serializer.serialize_str("signal"),
+            Self::Fixed(repeats) => repeats.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for MaskRepeats {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged, expecting = "\"signal\" or [columns, rows]")]
+        enum Saved {
+            Fixed([f32; 2]),
+            Named(String),
+        }
+        match Saved::deserialize(deserializer)? {
+            Saved::Fixed(repeats) => Ok(Self::Fixed(repeats)),
+            Saved::Named(name) if name == "signal" => Ok(Self::Signal),
+            Saved::Named(name) => Err(serde::de::Error::custom(format!(
+                "unknown mask repeats {name:?}, expected \"signal\" or [columns, rows]"
+            ))),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum ColorMode {
@@ -39,6 +92,12 @@ pub struct Config {
     pub source: crate::workflow::SourceEdit,
     pub screen_only: bool,
     pub lut: Option<std::sync::Arc<crate::workflow::Lut>>,
+    /// How much of the LUT's colour applies, as Super Win the Game's NTSC Palette does: 1 the
+    /// LUT alone, 0 none of it.
+    pub lut_strength: f32,
+    /// The NES palette made from its composite signal, with the game's Tint controls, in place
+    /// of a LUT. See `palette`.
+    pub palette: Option<crate::palette::NesPalette>,
     pub version: u32,
     pub signal: String,
     pub output: String,
@@ -51,14 +110,18 @@ pub struct Config {
     pub sharpness: f32,
     pub bleed: f32,
     pub artifacts: f32,
+    /// How far the two composite artifact patterns blend into each other, as Super Win the
+    /// Game's NTSC Blending does. With alternating phase, ticks show them mixed this far and
+    /// then the other way round; 0 switches cleanly between them, as the public source does,
+    /// and 0.5 shows their average on every tick. Stable phase always shows the average.
+    pub ntsc_blending: f32,
     pub persistence: [f32; 3],
     pub overscan: f32,
     pub barrel: f32,
     pub saturation: f32,
     pub mask_brightness: f32,
     pub mask_opacity: f32,
-    /// Physical mask repeats across the screen (not tied to signal dimensions).
-    pub mask_repeats: [f32; 2],
+    pub mask_repeats: MaskRepeats,
     pub dimming: f32,
     pub reflection: f32,
     pub diffuse: f32,
@@ -72,6 +135,9 @@ pub struct Config {
     pub bloom_power: f32,
     pub bloom_spread: f32,
     pub color_mode: ColorMode,
+    /// Samples the mask from mipmaps, each the average of the level above, and between them,
+    /// as the original did: the mask stays smooth where it is drawn smaller than it is. Off
+    /// samples only the full-size mask, which shimmers into moiré when shrunk.
     pub mask_antialias: bool,
     /// Interlaced scanning: each tick refreshes only every other signal row, alternating
     /// between the two fields, and the rows it skips only decay by `persistence`. Meant for
@@ -88,6 +154,8 @@ impl Default for Config {
             source: Default::default(),
             screen_only: false,
             lut: None,
+            lut_strength: 1.,
+            palette: None,
             version: 1,
             signal: "original".into(),
             output: "reference".into(),
@@ -99,13 +167,14 @@ impl Default for Config {
             sharpness: 0.8,
             bleed: 0.5,
             artifacts: 0.5,
+            ntsc_blending: 0.,
             persistence: [0.7, 0.525, 0.42],
             overscan: 1.,
             barrel: -0.115,
             saturation: 1.35,
             mask_brightness: 0.45,
             mask_opacity: 1.,
-            mask_repeats: [128., 224.],
+            mask_repeats: MaskRepeats::Signal,
             dimming: 0.5,
             reflection: 0.3,
             diffuse: 0.5,
@@ -119,7 +188,7 @@ impl Default for Config {
             bloom_power: 2.,
             bloom_spread: 0.025,
             color_mode: ColorMode::Reference,
-            mask_antialias: false,
+            mask_antialias: true,
             interlace: false,
             hue: 0.,
             chroma: 1.,
@@ -143,6 +212,31 @@ pub fn validate_size((w, h): (u32, u32)) -> Result<()> {
     Ok(())
 }
 impl Config {
+    /// The starting point for ordinary images rather than 256x224 game frames: square pixels,
+    /// smooth resizing, contain fitting, neutral saturation, and the reference's mask density
+    /// whatever the signal, since an image's rows are not a picture tube's. `default` stays the
+    /// public reference's settings.
+    pub fn general() -> Self {
+        Self {
+            signal: "auto".into(),
+            output: "1080p".into(),
+            fit: Fit::Contain,
+            filter: Filter::Lanczos,
+            pixel_aspect: 1.,
+            saturation: 1.,
+            mask_repeats: MaskRepeats::Fixed([128., 224.]),
+            ..Self::default()
+        }
+    }
+
+    /// The colour table prepare applies: the NES palette's when one is set, else the LUT.
+    pub fn lut_in_use(&self) -> Option<std::sync::Arc<crate::workflow::Lut>> {
+        match &self.palette {
+            Some(palette) => Some(palette.lut()),
+            None => self.lut.clone(),
+        }
+    }
+
     /// One version-aware entry point for presets. Future migrations belong here instead of
     /// being duplicated across the CLI, desktop JSON loader and embedded metadata readers.
     pub fn from_json_slice(bytes: &[u8]) -> Result<Self> {
@@ -161,59 +255,13 @@ impl Config {
         if let Some(lut) = &self.lut {
             lut.validate()?;
         }
+        ensure!(
+            self.lut.is_none() || self.palette.is_none(),
+            "Use either a LUT or the NES palette, not both"
+        );
         ensure!(self.version == 1, "unsupported config version");
         ensure!(self.warmup <= 240, "warmup must be <=240 ticks");
-        let ranges = [
-            (self.pixel_aspect, 0.1, 10.),
-            (self.sharpness, 0., 3.),
-            (self.bleed, 0., 2.),
-            (self.artifacts, 0., 2.),
-            (self.overscan, 0.1, 3.),
-            (self.barrel, -2., 2.),
-            (self.saturation, 0., 3.),
-            (self.mask_brightness, 0., 2.),
-            (self.mask_opacity, 0., 1.),
-            (self.dimming, 0., 1.),
-            (self.reflection, 0., 2.),
-            (self.diffuse, 0., 2.),
-            (self.specular, 0., 2.),
-            (self.rim, 0., 2.),
-            (self.specular_power, 1., 200.),
-            (self.fov, 5., 90.),
-            (self.bloom, 0., 2.),
-            (self.bloom_power, 0.1, 8.),
-            (self.bloom_spread, 0., 0.2),
-            (self.hue, -180., 180.),
-            (self.chroma, 0., 2.),
-        ];
-        for (v, min, max) in ranges {
-            ensure!(
-                v.is_finite() && v >= min && v <= max,
-                "parameter {v} outside {min}..{max}"
-            );
-        }
-        for v in self.persistence {
-            ensure!(
-                v.is_finite() && (0.0..1.0).contains(&v),
-                "persistence must be >=0 and <1"
-            );
-        }
-        for v in self.frame_color {
-            ensure!(
-                v.is_finite() && (0.0..=1.0).contains(&v),
-                "invalid frame color"
-            );
-        }
-        for v in self.light_position {
-            ensure!(v.is_finite() && v.abs() <= 1000., "invalid light position");
-        }
-        for v in self.mask_repeats {
-            ensure!(
-                v.is_finite() && v > 0. && v <= 16384.,
-                "invalid mask density"
-            );
-        }
-        Ok(())
+        crate::settings::validate(self)
     }
     pub fn signal_size(&self, input: (u32, u32)) -> Result<(u32, u32)> {
         validate_size(input)?;
@@ -289,24 +337,15 @@ pub fn prepare(input: &RgbaImage, config: &Config) -> Result<RgbaImage> {
             .prepare(input, (w, h), config.filter == Filter::Nearest)
     } else {
         let mut opaque = input.clone();
-        for p in opaque.pixels_mut() {
-            let a = u16::from(p[3]);
-            for i in 0..3 {
-                p[i] = ((u16::from(p[i]) * a
-                    + u16::from(config.source.background[i]) * (255 - a)
-                    + 127)
-                    / 255) as u8;
-            }
-            p[3] = 255;
-        }
+        flatten_alpha(&mut opaque, config.source.background);
         let filter = match config.filter {
             Filter::Nearest => imageops::FilterType::Nearest,
             Filter::Lanczos => imageops::FilterType::Lanczos3,
         };
         imageops::resize(&opaque, w, h, filter)
     };
-    if let Some(lut) = &config.lut {
-        lut.apply(&mut resized);
+    if let Some(lut) = config.lut_in_use() {
+        lut.apply_with_strength(&mut resized, config.lut_strength);
     }
     if config.grades() {
         let (sin, cos) = config.hue.to_radians().sin_cos();
@@ -330,6 +369,18 @@ pub fn prepare(input: &RgbaImage, config: &Config) -> Result<RgbaImage> {
         }
     }
     Ok(resized)
+}
+
+/// Composites every pixel over an opaque `background` and makes it opaque, rounding to the
+/// nearest 8-bit step.
+pub fn flatten_alpha(image: &mut RgbaImage, background: [u8; 3]) {
+    for p in image.pixels_mut() {
+        let a = u16::from(p[3]);
+        for i in 0..3 {
+            p[i] = ((u16::from(p[i]) * a + u16::from(background[i]) * (255 - a) + 127) / 255) as u8;
+        }
+        p[3] = 255;
+    }
 }
 
 /// Original test card, not a screenshot from a commercial game.
@@ -365,7 +416,10 @@ mod tests {
     fn old_presets_keep_reference_behavior_and_neutral_grade_is_exact() {
         let c = Config::from_json_slice(b"{\"version\":1,\"signal\":\"native\"}").unwrap();
         assert_eq!(c.color_mode, ColorMode::Reference);
-        assert!(!c.mask_antialias);
+        // A setting a preset leaves out takes the original's value; one it holds is kept.
+        assert!(c.mask_antialias);
+        let unfiltered = br#"{"version":1,"mask_antialias":false}"#;
+        assert!(!Config::from_json_slice(unfiltered).unwrap().mask_antialias);
         let src = test_card();
         assert_eq!(prepare(&src, &c).unwrap(), src);
         let gray = prepare(
@@ -378,6 +432,59 @@ mod tests {
         .unwrap();
         assert!(gray.pixels().all(|p| p[0] == p[1] && p[1] == p[2]));
         assert_ne!(prepare(&src, &Config { hue: 30., ..c }).unwrap(), src);
+    }
+
+    #[test]
+    fn a_preset_holds_the_nes_palette_as_its_three_controls() {
+        let json = br#"{"palette":{"tint":5.0,"tint_i":2.0,"tint_q":0.5}}"#;
+        let c = Config::from_json_slice(json).unwrap();
+        let palette = c.palette.unwrap();
+        assert_eq!(
+            (palette.tint, palette.tint_i, palette.tint_q),
+            (5., 2., 0.5)
+        );
+        assert!(c.lut_in_use().unwrap().name.starts_with("NES palette"));
+        // Controls it leaves out take the game's defaults.
+        let c = Config::from_json_slice(br#"{"palette":{}}"#).unwrap();
+        assert_eq!(c.palette, Some(crate::palette::NesPalette::default()));
+        let both = Config {
+            lut: Some(std::sync::Arc::new(crate::nes_luts::load(0).unwrap())),
+            ..c
+        };
+        assert!(both.validate().is_err());
+        assert!(Config::from_json_slice(br#"{"palette":{"tint_i":11}}"#).is_err());
+    }
+
+    #[test]
+    fn mask_repeats_follow_the_signal_or_stay_as_saved() {
+        // The original's density: 128 columns and 224 rows for its 256×224 signal.
+        assert_eq!(MaskRepeats::Signal.resolve((256, 224)), [128., 224.]);
+        assert_eq!(MaskRepeats::Signal.resolve((427, 240)), [213.5, 240.]);
+        assert_eq!(
+            MaskRepeats::Fixed([90., 60.]).resolve((427, 240)),
+            [90., 60.]
+        );
+        let load = |json: &str| Config::from_json_slice(json.as_bytes()).map(|c| c.mask_repeats);
+        // Every preset saved before the mask could follow the signal holds columns and rows.
+        assert_eq!(
+            load(r#"{"mask_repeats":[128,224]}"#).unwrap(),
+            MaskRepeats::Fixed([128., 224.])
+        );
+        assert_eq!(
+            load(r#"{"mask_repeats":"signal"}"#).unwrap(),
+            MaskRepeats::Signal
+        );
+        assert_eq!(load("{}").unwrap(), MaskRepeats::Signal);
+        let wrong = load(r#"{"mask_repeats":"dense"}"#).unwrap_err().to_string();
+        assert!(
+            wrong.contains(r#"expected "signal" or [columns, rows]"#),
+            "{wrong}"
+        );
+        assert!(load(r#"{"mask_repeats":[0,224]}"#).is_err());
+        for c in [Config::default(), Config::general()] {
+            let saved = serde_json::to_vec(&c).unwrap();
+            assert_eq!(Config::from_json_slice(&saved).unwrap(), c);
+        }
     }
 
     #[test]

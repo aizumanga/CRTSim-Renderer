@@ -1,5 +1,5 @@
 use anyhow::{ensure, Context, Result};
-use crtsim_core::config::{self, Config};
+use crtsim_core::config::Config;
 use image::{DynamicImage, ImageOutputFormat, RgbaImage};
 use std::{
     io::{Cursor, Read, Write},
@@ -8,17 +8,15 @@ use std::{
 
 const PRESET_KEYWORD: &[u8] = b"CRTSim-Renderer-Preset";
 
-pub fn load_image(path: &Path) -> Result<RgbaImage> {
-    config::validate_size(image::image_dimensions(path).context("Cannot read image dimensions")?)?;
-    let mut reader = image::io::Reader::open(path)?.with_guessed_format()?;
-    let mut limits = image::io::Limits::default();
-    limits.max_alloc = Some(512 * 1024 * 1024);
-    reader.limits(limits);
-    Ok(reader
-        .decode()
-        .context("Cannot decode image (PNG, JPEG, WebP or BMP expected)")?
-        .to_rgba8())
+/// Everything Open File accepts as a source: images, then videos.
+pub fn media_extensions() -> Vec<&'static str> {
+    [
+        crtsim_core::input::IMAGE_EXTENSIONS,
+        crtsim_media::VIDEO_EXTENSIONS,
+    ]
+    .concat()
 }
+
 pub fn load_preset(path: &Path, input: (u32, u32)) -> Result<Config> {
     ensure!(
         path.metadata()?.len() <= 32 * 1024 * 1024,
@@ -178,7 +176,7 @@ mod tests {
     #[test]
     fn included_lut_survives_preset_and_png_metadata_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
-        let mut c = crate::model::general();
+        let mut c = Config::general();
         c.lut = Some(std::sync::Arc::new(crtsim_core::nes_luts::load(0).unwrap()));
         assert_eq!(c.lut.as_ref().unwrap().size, 64);
         let path = dir.path().join("nes-preset.json");
@@ -187,7 +185,7 @@ mod tests {
         let png = dir.path().join("nes-image.png");
         let source = RgbaImage::from_pixel(1, 1, image::Rgba([32, 64, 128, 255]));
         save_png(&png, source.clone(), Some(&c)).unwrap();
-        assert_eq!(load_image(&png).unwrap(), source);
+        assert_eq!(crtsim_core::input::load_image(&png).unwrap(), source);
         assert_eq!(load_preset_from_image(&png, (1, 1)).unwrap(), c);
     }
 
@@ -195,15 +193,15 @@ mod tests {
     fn preset_and_png_saves_atomically_replace_existing_files() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("preset.json");
-        let c = crate::model::general();
+        let c = Config::general();
         save_preset(&path, &c).unwrap();
         assert_eq!(load_preset(&path, (1216, 832)).unwrap(), c);
         save_preset(&path, &Config::default()).unwrap();
         assert_eq!(load_preset(&path, (1216, 832)).unwrap(), Config::default());
         let png = dir.path().join("image.png");
-        let src = config::test_card();
+        let src = crtsim_core::config::test_card();
         save_png(&png, src.clone(), Some(&c)).unwrap();
-        assert_eq!(load_image(&png).unwrap(), src);
+        assert_eq!(crtsim_core::input::load_image(&png).unwrap(), src);
         assert_eq!(load_preset_from_image(&png, (1216, 832)).unwrap(), c);
         let mut damaged = std::fs::read(&png).unwrap();
         let index = damaged

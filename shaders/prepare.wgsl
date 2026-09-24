@@ -13,6 +13,7 @@ struct Prepare {
     lut_min: vec4<f32>, // domain min, enabled
     lut_max: vec4<f32>, // domain max, size
     grade: vec4<f32>, // hue sin, cos, chroma, enabled
+    lut_strength: vec4<f32>, // share of the LUT's colour, unused
 };
 @group(0) @binding(0) var<uniform> p: Prepare;
 @group(0) @binding(1) var input: texture_2d<f32>;
@@ -66,7 +67,8 @@ fn apply_lut(k: vec3<f32>) -> vec3<f32> {
             }
         }
     }
-    return quantize(out*255.,255.);
+    let s=p.lut_strength.x;
+    return quantize((out*s+(k/255.)*(1.-s))*255.,255.);
 }
 
 // Optional YIQ hue rotation and chroma scale.

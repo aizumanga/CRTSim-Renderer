@@ -1,5 +1,5 @@
 use anyhow::{ensure, Context, Result};
-use crtsim_core::config::{ColorMode, Config, Filter, Phase};
+use crtsim_core::config::{ColorMode, Config, Filter, MaskRepeats, Phase};
 use std::path::{Path, PathBuf};
 
 use crate::theme::Theme;
@@ -27,7 +27,7 @@ fn entry(name: &str, description: &str, config: Config) -> Entry {
     }
 }
 pub fn builtins() -> Vec<Entry> {
-    let general = crate::model::general();
+    let general = Config::general();
     vec![
         entry(
             "General image",
@@ -38,6 +38,20 @@ pub fn builtins() -> Vec<Entry> {
             "Original CRTSim",
             "Public-reference defaults, 256×224 signal, original mask sampling.",
             Config::default(),
+        ),
+        entry(
+            "Super Win the Game",
+            "The game's own CRT options: the public reference with a 30° field of view, NTSC \
+             blending at 0.35 and its NTSC palette (Tint 5.18, I 1.75, Q 1.00). The palette's \
+             decoder stands in for the game's unpublished one; it recolours art in MAME's NES \
+             palette.",
+            Config {
+                fov: 30.,
+                phase: Phase::Alternating,
+                ntsc_blending: 0.35,
+                palette: Some(Default::default()),
+                ..Config::default()
+            },
         ),
         entry(
             "Soft television",
@@ -70,6 +84,7 @@ pub fn builtins() -> Vec<Entry> {
                 signal: "240p".into(),
                 filter: Filter::Nearest,
                 mask_opacity: 0.7,
+                mask_repeats: MaskRepeats::Signal,
                 ..general.clone()
             },
         ),
@@ -82,6 +97,7 @@ pub fn builtins() -> Vec<Entry> {
                 filter: Filter::Nearest,
                 phase: Phase::Alternating,
                 mask_opacity: 0.7,
+                mask_repeats: MaskRepeats::Signal,
                 ..general.clone()
             },
         ),
@@ -93,6 +109,7 @@ pub fn builtins() -> Vec<Entry> {
                 signal: "480p".into(),
                 interlace: true,
                 phase: Phase::Alternating,
+                mask_repeats: MaskRepeats::Signal,
                 ..general.clone()
             },
         ),
@@ -106,6 +123,7 @@ pub fn builtins() -> Vec<Entry> {
                 phase: Phase::Stable,
                 artifacts: 0.25,
                 mask_opacity: 0.7,
+                mask_repeats: MaskRepeats::Signal,
                 ..general.clone()
             },
         ),
@@ -118,6 +136,7 @@ pub fn builtins() -> Vec<Entry> {
                 interlace: true,
                 phase: Phase::Stable,
                 artifacts: 0.25,
+                mask_repeats: MaskRepeats::Signal,
                 ..general.clone()
             },
         ),
@@ -360,7 +379,7 @@ mod tests {
         assert!(s.tool_windows().is_err());
         s.set_tool_windows(&Layout::new()).unwrap();
         assert!(s.tool_windows().unwrap().is_empty());
-        let c = crate::model::general();
+        let c = Config::general();
         s.save("My CRT", &c, (1216, 832)).unwrap();
         assert!(s.save("my crt", &c, (1, 1)).is_err());
         for name in ["../oops", "CON", "", "nested/file", "trailing "] {
@@ -409,6 +428,70 @@ mod tests {
                 "{name}"
             );
             assert_eq!(preset.config.interlace, interlaced, "{name}");
+        }
+    }
+
+    #[test]
+    fn the_game_preset_matches_its_options_screen() {
+        let game = builtins()
+            .into_iter()
+            .find(|e| e.name == "Super Win the Game")
+            .unwrap()
+            .config;
+        // As the game's CRT options show them.
+        assert_eq!(game.fov, 30.);
+        assert_eq!(game.ntsc_blending, 0.35);
+        assert_eq!(game.lut_strength, 1.);
+        let palette = game.palette.unwrap();
+        assert_eq!(
+            (palette.tint, palette.tint_i, palette.tint_q),
+            (5.18, 1.75, 1.)
+        );
+        let reference = Config::default();
+        assert_eq!(
+            (
+                game.overscan,
+                game.barrel,
+                game.pixel_aspect,
+                game.saturation
+            ),
+            (
+                reference.overscan,
+                reference.barrel,
+                reference.pixel_aspect,
+                1.35
+            )
+        );
+        assert_eq!((game.mask_opacity, game.mask_brightness), (1., 0.45));
+        assert_eq!(
+            (game.sharpness, game.persistence[0], game.bleed),
+            (0.8, 0.7, 0.5)
+        );
+        assert_eq!(
+            (game.bloom, game.bloom_power, game.frame_color),
+            (0.25, 2., [0.06; 3])
+        );
+    }
+
+    #[test]
+    fn presets_for_a_line_count_have_the_mask_follow_it() {
+        for entry in builtins() {
+            let follows = matches!(
+                entry.name.as_str(),
+                "Original CRTSim"
+                    | "Super Win the Game"
+                    | "Pixel art 240p"
+                    | "NTSC 240p"
+                    | "NTSC 480i"
+                    | "PAL 288p"
+                    | "PAL 576i"
+            );
+            let expected = if follows {
+                MaskRepeats::Signal
+            } else {
+                MaskRepeats::Fixed([128., 224.])
+            };
+            assert_eq!(entry.config.mask_repeats, expected, "{}", entry.name);
         }
     }
 }

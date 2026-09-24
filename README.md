@@ -29,7 +29,7 @@ The welcome and credits also link to Pittman's
 [CRT Simulation in Super Win the Game](https://www.gamedeveloper.com/programming/crt-simulation-in-super-win-the-game),
 an interesting technical account of how the effect developed.
 
-**Preset gallery** includes General image, Original CRTSim, Soft television, Clean RGB, Pixel art 240p, NTSC 240p, NTSC 480i, PAL 288p, PAL 576i, Warm analog and Linear light.
+**Preset gallery** includes General image, Original CRTSim, Super Win the Game, Soft television, Clean RGB, Pixel art 240p, NTSC 240p, NTSC 480i, PAL 288p, PAL 576i, Warm analog and Linear light.
 The NTSC and PAL presets set the line count, interlacing and composite phase. The artifact model is the original NTSC-derived one, so the PAL presets approximate PAL's line-alternating color with gentler, stable artifacts rather than simulating it. Video frame rate is chosen separately in Export → Video.
 Each preset shows a thumbnail rendered from your current image. Point at a preset to preview it on the full image without applying it (nothing is changed or added to Undo), and click to apply it.
 Enter a name and choose **Save current** to add your exact settings to **My presets**; they reappear after restarting. Use **Edit description** on any personal preset to add, change or clear its description.
@@ -53,8 +53,21 @@ Exported PNGs embed the exact JSON preset in a private PNG text chunk without ch
 to recover settings from a rendered PNG, MP4, MKV or WebM. Video metadata also restores timing/audio choices.
 Files without this metadata are rejected with an explanatory message; third-party transcoding or uploads may strip it.
 
-**Filter mask when shrinking** uses a mipmapped mask to reduce minification aliasing. New general-image presets enable it;
-Original CRTSim and old JSON files preserve the original sampling. Display resizing can still introduce moiré.
+**Filter mask when shrinking** samples the shadow mask from box-filtered mipmaps with trilinear filtering, as the original
+game did, so the mask stays smooth where it is drawn smaller than it is. It is on by default; presets saved with it off keep
+their unfiltered sampling. Display resizing can still introduce moiré.
+**Mask follows the signal** gives the mask a column for every two signal columns and a row for every signal row, as the
+original did, so a finer signal gets a finer mask. Original CRTSim and the line-count presets (Pixel art 240p, NTSC and PAL)
+use it; the general-image presets keep a fixed 128 × 224 mask. Presets saved with fixed columns and rows keep them.
+
+**Super Win the Game** uses the game's own CRT options on top of the public reference: a 30° field of view, **NTSC blending**
+at 0.35 and its **NTSC palette**. NTSC blending moves the two composite artifact patterns towards each other, so alternating
+ticks mix them 35/65 and 65/35 instead of switching cleanly; 0, the default, is the public source's switch. **NES palette
+from the composite signal** (Color & LUT) builds the NES palette from its signal with the game's **Tint**, **Tint I** and
+**Tint Q**, and recolours art drawn in MAME's NES palette, as the included NES LUTs expect. The game's decoder is unpublished:
+this one decodes the NES's measured signal levels, fitted to FirebrandX's Composite Direct capture, and treats the game's
+defaults as the standard decode, so it is close to the game rather than exact. **LUT strength**, the game's NTSC Palette
+slider, mixes any LUT or the palette with the original colours.
 **Optional color grade** rotates hue and changes chroma in YIQ before the composite simulation. Neutral values leave the prepared signal unchanged.
 It is an artistic grade, not the private NES palette LUT or a full NTSC decoder.
 **Linear light (experimental)** decodes the SDR signal for glass sampling, performs lighting and bloom with RGBA16Float intermediates,
@@ -202,7 +215,7 @@ cargo run --release -p crtsim-cli -- render --input image.png --config general.j
 ```
 
 `--signal` changes dimensions only: it does not silently change pixel aspect, filtering or fit settings.
-Use `config --general` for normal images; plain `config` generates the original-style configuration (8:7 pixel aspect, nearest filtering).
+Use `config --general` for normal images: it writes the desktop's General image preset. Plain `config` generates the original-style configuration (8:7 pixel aspect, nearest filtering).
 `fit` controls placement on a fixed 4:3 tube: `reference`, `contain`, `cover`, or `stretch`.
 Contain mode prevents rectangular aspect cropping, but the rounded glass and barrel distortion can still hide extreme corners.
 A widescreen output canvas does not turn the tube itself into a widescreen tube.

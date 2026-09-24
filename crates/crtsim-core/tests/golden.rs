@@ -151,6 +151,17 @@ fn cases(renderer: &Renderer) -> Vec<(&'static str, RgbaImage)> {
     for (name, phase) in [("phase-a", Phase::A), ("phase-b", Phase::B)] {
         cases.push((name, render(&Config { phase, ..base() }).crt));
     }
+    // The blend between the two patterns, at Super Win the Game's setting, seen in the signal
+    // where the composite pass writes it.
+    cases.push((
+        "ntsc-blending",
+        render(&Config {
+            phase: Phase::A,
+            ntsc_blending: 0.35,
+            ..base()
+        })
+        .signal,
+    ));
 
     // The only non-default color path. `ColorMode::Reference` needs no case of its own: it is
     // what `reference` above already renders.
@@ -163,12 +174,12 @@ fn cases(renderer: &Renderer) -> Vec<(&'static str, RgbaImage)> {
         .crt,
     ));
 
-    // Mask sampling and the bezel are each a branch of their own in the shader and the pass
-    // list, and neither shows up in a frame rendered with the defaults.
+    // Unfiltered mask sampling and the bezel are each a branch of their own in the shader and
+    // the pass list, and neither shows up in a frame rendered with the defaults.
     cases.push((
-        "antialiased-mask",
+        "unfiltered-mask",
         render(&Config {
-            mask_antialias: true,
+            mask_antialias: false,
             ..base()
         })
         .crt,
@@ -216,12 +227,12 @@ fn cases(renderer: &Renderer) -> Vec<(&'static str, RgbaImage)> {
     let white = RgbaImage::from_pixel(64, 64, image::Rgba([255; 4]));
     let black = RgbaImage::from_pixel(64, 64, image::Rgba([0, 0, 0, 255]));
     renderer
-        .render_video_frame(&white, &trailing, &mut sequence)
+        .render_frame(&white, &trailing, &mut sequence, None, |_| {})
         .expect("first sequence frame");
     cases.push((
         "persistence-trail",
         renderer
-            .render_video_frame(&black, &trailing, &mut sequence)
+            .render_frame(&black, &trailing, &mut sequence, None, |_| {})
             .expect("second sequence frame"),
     ));
 
@@ -271,6 +282,12 @@ fn translucent_source() -> RgbaImage {
 fn prepare_cases(renderer: &Renderer) -> Vec<(&'static str, RgbaImage)> {
     let detailed = detailed_source();
     let translucent = translucent_source();
+    // MAME's 64 NES colours as 4×4 blocks, the input the NES palette is made for.
+    let mame = crtsim_core::palette::mame_colors();
+    let mame_chart = RgbaImage::from_fn(64, 32, |x, y| {
+        let [r, g, b] = mame[(y / 8 * 16 + x / 4) as usize].map(|c| (c * 255.).round() as u8);
+        image::Rgba([r, g, b, 255])
+    });
     let card = config::test_card();
     let edit = crtsim_core::workflow::SourceEdit {
         crop: [0.05, 0.1, 0.15, 0.02],
@@ -333,6 +350,23 @@ fn prepare_cases(renderer: &Renderer) -> Vec<(&'static str, RgbaImage)> {
             Config {
                 hue: 33.,
                 chroma: 1.6,
+                ..lanczos("200x150")
+            },
+        ),
+        (
+            "prepare-nes-palette",
+            &mame_chart,
+            Config {
+                palette: Some(Default::default()),
+                ..nearest("64x32")
+            },
+        ),
+        (
+            "prepare-lut-half",
+            &detailed,
+            Config {
+                lut: Some(lut.clone()),
+                lut_strength: 0.5,
                 ..lanczos("200x150")
             },
         ),

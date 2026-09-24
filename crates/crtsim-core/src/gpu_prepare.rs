@@ -12,8 +12,8 @@
 //! one small texture, which is also what a debug render reads back as the clean image.
 
 use crate::config::{Config, Filter};
+use crate::gpu::{self, Target, FORMAT};
 use crate::workflow::Lut;
-use crate::Target;
 use bytemuck::{Pod, Zeroable};
 use image::RgbaImage;
 use std::sync::Arc;
@@ -42,6 +42,7 @@ struct Params {
     lut_min: [f32; 4],
     lut_max: [f32; 4],
     grade: [f32; 4],
+    lut_strength: [f32; 4],
 }
 
 impl Params {
@@ -52,7 +53,7 @@ impl Params {
         let (hue_sin, hue_cos) = c.hue.to_radians().sin_cos();
         let flag = |on: bool| if on { 1. } else { 0. };
         let [r, g, b] = edit.background.map(f32::from);
-        let (lut_min, lut_max) = match &c.lut {
+        let (lut_min, lut_max) = match &c.lut_in_use() {
             Some(lut) => (
                 [lut.domain_min[0], lut.domain_min[1], lut.domain_min[2], 1.],
                 [
@@ -83,6 +84,7 @@ impl Params {
             lut_min,
             lut_max,
             grade: [hue_sin, hue_cos, c.chroma, flag(c.grades())],
+            lut_strength: [c.lut_strength, 0., 0., 0.],
         }
     }
 }
@@ -338,8 +340,8 @@ impl Pipelines {
         };
         Self {
             rows: pipeline("resample_rows", BETWEEN),
-            columns: pipeline("resample_columns", crate::FORMAT),
-            edit: pipeline("edit", crate::FORMAT),
+            columns: pipeline("resample_columns", FORMAT),
+            edit: pipeline("edit", FORMAT),
             layout,
             no_kernel: Kernel::identity(1).upload(device, queue),
             no_lut: lut_texture(
@@ -378,7 +380,7 @@ impl Pipelines {
         source.upload(queue, input);
         let source = cache.input.insert(source);
 
-        let lut = match &c.lut {
+        let lut = match &c.lut_in_use() {
             Some(lut) => {
                 // The same table arrives every frame of a video, usually as the same allocation.
                 if !matches!(&cache.lut, Some((cached, _)) if Arc::ptr_eq(cached, lut) || cached == lut)
@@ -424,7 +426,7 @@ impl Pipelines {
         };
 
         if c.edits_source() {
-            pass(encoder, signal, &self.edit, &bind(source, &self.no_kernel));
+            gpu::fullscreen(encoder, signal, &self.edit, &bind(source, &self.no_kernel));
             return;
         }
         let key = (size, signal_size, c.filter);
@@ -454,13 +456,13 @@ impl Pipelines {
             }
         };
         let resample = cache.resample.insert(resample);
-        pass(
+        gpu::fullscreen(
             encoder,
             &resample.between,
             &self.rows,
             &bind(source, &resample.rows),
         );
-        pass(
+        gpu::fullscreen(
             encoder,
             signal,
             &self.columns,
@@ -471,31 +473,6 @@ impl Pipelines {
 
 /// The resize's intermediate: unclamped and unrounded, as `image` keeps it between its passes.
 const BETWEEN: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
-
-fn pass(
-    encoder: &mut wgpu::CommandEncoder,
-    dst: &Target,
-    pipeline: &wgpu::RenderPipeline,
-    bindings: &wgpu::BindGroup,
-) {
-    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some("prepare pass"),
-        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-            view: &dst.view,
-            resolve_target: None,
-            ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                store: wgpu::StoreOp::Store,
-            },
-        })],
-        depth_stencil_attachment: None,
-        timestamp_writes: None,
-        occlusion_query_set: None,
-    });
-    pass.set_pipeline(pipeline);
-    pass.set_bind_group(0, bindings, &[]);
-    pass.draw(0..3, 0..1);
-}
 
 #[cfg(test)]
 mod tests {

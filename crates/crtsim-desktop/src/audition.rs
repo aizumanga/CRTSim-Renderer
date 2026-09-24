@@ -60,18 +60,18 @@ impl App {
 mod tests {
     use super::*;
 
-    fn app() -> (App, mpsc::Receiver<Job>) {
+    fn app() -> (App, mpsc::Receiver<Job>, mpsc::Receiver<PreviewJob>) {
         let ctx = egui::Context::default();
         let mut app = App::new(&ctx, worker::Gpu::Own(wgpu::Backends::PRIMARY), None, None);
-        let (send, receive) = mpsc::channel();
-        app.jobs = worker::Jobs::capture(send);
+        let (jobs, work, previews) = worker::Jobs::capture();
+        app.jobs = jobs;
         app.show_welcome = false;
-        (app, receive)
+        (app, work, previews)
     }
 
     #[test]
     fn an_audition_is_previewed_without_touching_the_settings() {
-        let (mut app, jobs) = app();
+        let (mut app, work, previews) = app();
         let settings = app.config.clone();
         let candidate = Config {
             bloom: 1.5,
@@ -82,8 +82,8 @@ mod tests {
         app.settle_audition();
         assert!(app.revision > revision && app.dirty && app.audition_pending);
         app.request_preview();
-        match jobs.try_recv() {
-            Ok(Job::Preview { config, .. }) => assert_eq!(config.bloom, 1.5),
+        match previews.try_recv() {
+            Ok(PreviewJob::Preview { config, .. }) => assert_eq!(config.bloom, 1.5),
             _ => panic!("expected a preview of the auditioned look"),
         }
         assert_eq!(app.config, settings);
@@ -92,7 +92,7 @@ mod tests {
         app.rendering = false;
         let dir = tempfile::tempdir().unwrap();
         app.export(dir.path().join("out.png"));
-        match jobs.try_recv() {
+        match work.try_recv() {
             Ok(Job::Export { config, .. }) => assert_eq!(config, settings),
             _ => panic!("expected an export"),
         }
@@ -100,7 +100,7 @@ mod tests {
 
     #[test]
     fn moving_away_returns_to_the_settings_and_the_current_look_is_not_an_audition() {
-        let (mut app, jobs) = app();
+        let (mut app, _work, previews) = app();
         app.offer_audition("current", app.config.clone());
         app.settle_audition();
         assert!(app.audition.is_none());
@@ -120,8 +120,8 @@ mod tests {
         assert!(app.audition.is_none() && app.revision > revision && app.audition_pending);
         app.live = false;
         app.request_preview();
-        match jobs.try_recv() {
-            Ok(Job::Preview { config, .. }) => assert_eq!(config.chroma, app.config.chroma),
+        match previews.try_recv() {
+            Ok(PreviewJob::Preview { config, .. }) => assert_eq!(config.chroma, app.config.chroma),
             _ => panic!("ending an audition redraws the settings in use"),
         }
     }

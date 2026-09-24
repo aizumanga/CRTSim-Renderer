@@ -1,5 +1,5 @@
 //! Own and reap every subprocess. A separate monitor can interrupt blocked pipe I/O.
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use std::{
     io::Read,
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
@@ -34,13 +34,12 @@ impl Process {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x08000000); // CREATE_NO_WINDOW
         }
-        let mut child = command
-            .spawn()
-            .with_context(|| {
-                format!(
-                    "Cannot start {program}. Install FFmpeg and ffprobe, add them to PATH, or set CRTSIM_FFMPEG and CRTSIM_FFPROBE"
-                )
-            })?;
+        let mut child = command.spawn().with_context(|| {
+            format!(
+                "Cannot start {program}. Install FFmpeg and ffprobe, add them to PATH, or \
+                     set CRTSIM_FFMPEG and CRTSIM_FFPROBE"
+            )
+        })?;
         let mut stderr = child.stderr.take().unwrap();
         let log = Arc::new(Mutex::new(Vec::new()));
         let log_copy = log.clone();
@@ -77,6 +76,28 @@ impl Process {
             logger: Some(logger),
             log,
         })
+    }
+    /// Runs `command` to the end with nothing on its input.
+    pub fn run(command: &mut Command, cancel: &Arc<AtomicBool>) -> Result<()> {
+        let mut process = Self::spawn(command, cancel)?;
+        drop(process.stdin());
+        process.wait()
+    }
+    /// Runs `command` to the end with nothing on its input and returns what it printed, which
+    /// must be at most `limit` bytes: `too_large` is the error otherwise.
+    pub fn output(
+        command: &mut Command,
+        cancel: &Arc<AtomicBool>,
+        limit: u64,
+        too_large: &str,
+    ) -> Result<Vec<u8>> {
+        let mut process = Self::spawn(command, cancel)?;
+        drop(process.stdin());
+        let mut bytes = Vec::new();
+        process.stdout().take(limit + 1).read_to_end(&mut bytes)?;
+        ensure!(bytes.len() as u64 <= limit, "{too_large}");
+        process.wait()?;
+        Ok(bytes)
     }
     pub fn stdin(&mut self) -> ChildStdin {
         self.child.lock().unwrap().stdin.take().unwrap()
