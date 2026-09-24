@@ -4,7 +4,7 @@
 //! on the preview thread, behind any preview someone is waiting for.
 use crate::*;
 use std::collections::HashMap;
-use worker::{Look, ThumbnailKey};
+use worker::{Look, PreviewJob, ThumbnailKey};
 
 /// Longest side of a preset thumbnail's render, in pixels.
 const PRESET_SIDE: u32 = 192;
@@ -87,7 +87,7 @@ impl App {
             },
         );
         if let Ok(small) = small {
-            self.send(Job::Thumbnail {
+            self.send_preview(PreviewJob::Thumbnail {
                 generation: self.thumbnails.generation,
                 key,
                 input: self.input.clone(),
@@ -116,7 +116,7 @@ impl App {
                 state: State::Pending,
             },
         );
-        self.send(Job::Thumbnail {
+        self.send_preview(PreviewJob::Thumbnail {
             generation: self.thumbnails.generation,
             key,
             input: small,
@@ -171,12 +171,7 @@ fn opaque_thumbnail(input: &RgbaImage, side: u32) -> RgbaImage {
         ((input.height() as f32 * scale).round() as u32).max(1),
     );
     let mut small = image::imageops::thumbnail(input, size.0, size.1);
-    for p in small.pixels_mut() {
-        for i in 0..3 {
-            p[i] = ((u16::from(p[i]) * u16::from(p[3]) + 127) / 255) as u8;
-        }
-        p[3] = 255;
-    }
+    crtsim_core::config::flatten_alpha(&mut small, [0; 3]);
     small
 }
 
@@ -208,10 +203,10 @@ pub(crate) fn show(
 mod tests {
     use super::*;
 
-    fn asked(jobs: &mpsc::Receiver<Job>) -> Vec<(u64, ThumbnailKey)> {
+    fn asked(jobs: &mpsc::Receiver<PreviewJob>) -> Vec<(u64, ThumbnailKey)> {
         jobs.try_iter()
             .filter_map(|job| match job {
-                Job::Thumbnail {
+                PreviewJob::Thumbnail {
                     generation, key, ..
                 } => Some((generation, key)),
                 _ => None,
@@ -223,8 +218,8 @@ mod tests {
     fn thumbnails_are_asked_for_once_per_source_and_preset() {
         let ctx = egui::Context::default();
         let mut app = App::new(&ctx, worker::Gpu::Own(wgpu::Backends::PRIMARY), None, None);
-        let (send, jobs) = mpsc::channel();
-        app.jobs = worker::Jobs::capture(send);
+        let (captured, _work, jobs) = worker::Jobs::capture();
+        app.jobs = captured;
         let preset = Config::general();
         assert!(app.lut_thumbnail(4).is_none());
         assert!(app.preset_thumbnail("General image", &preset).is_none());
@@ -267,8 +262,8 @@ mod tests {
     fn a_failed_thumbnail_does_not_keep_the_smoke_screenshot_waiting() {
         let ctx = egui::Context::default();
         let mut app = App::new(&ctx, worker::Gpu::Own(wgpu::Backends::PRIMARY), None, None);
-        let (send, _jobs) = mpsc::channel();
-        app.jobs = worker::Jobs::capture(send);
+        let (captured, _work, _previews) = worker::Jobs::capture();
+        app.jobs = captured;
         app.show_lut_gallery = true;
         app.lut_thumbnail(0);
         assert!(app.thumbnails_pending());

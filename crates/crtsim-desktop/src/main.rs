@@ -15,14 +15,14 @@ use crtsim_core::{settings, RenderProgress};
 use eframe::egui::{self, TextureHandle};
 use image::RgbaImage;
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc, Arc,
     },
     time::{Duration, Instant},
 };
-use worker::{Event, Job};
+use worker::{Event, Failure, Job, PreviewJob};
 
 #[derive(Clone, Copy)]
 enum Dialog {
@@ -97,6 +97,63 @@ enum View {
     Compare,
 }
 
+/// What the work thread is doing for the interface: one load or export at a time.
+enum Work {
+    Idle,
+    /// Opening an image, a frame of a video or a preset's metadata. Only an image cannot be
+    /// cancelled.
+    Loading(Option<Arc<AtomicBool>>),
+    /// An export or a batch job, with the latest progress the worker has reported.
+    Exporting {
+        cancel: Arc<AtomicBool>,
+        progress: Option<RenderProgress>,
+    },
+}
+
+impl Work {
+    fn is_idle(&self) -> bool {
+        matches!(self, Self::Idle)
+    }
+    fn is_loading(&self) -> bool {
+        matches!(self, Self::Loading(_))
+    }
+    fn is_exporting(&self) -> bool {
+        matches!(self, Self::Exporting { .. })
+    }
+    /// The flag that stops the job, where it can be stopped.
+    fn cancel(&self) -> Option<&Arc<AtomicBool>> {
+        match self {
+            Self::Idle => None,
+            Self::Loading(cancel) => cancel.as_ref(),
+            Self::Exporting { cancel, .. } => Some(cancel),
+        }
+    }
+}
+
+/// A CI run: open the window, wait for a rendered preview, save a screenshot and quit. It
+/// never reads or writes the app data a person's own runs keep.
+struct Smoke {
+    screenshot: PathBuf,
+    /// Screenshot the welcome as it first appears, not waiting for a preview.
+    welcome: bool,
+    /// Open the video export dialog once a preview is ready, and screenshot that.
+    export: bool,
+    requested: bool,
+    started: Instant,
+}
+
+impl Smoke {
+    fn new(screenshot: PathBuf) -> Self {
+        Self {
+            screenshot,
+            welcome: false,
+            export: false,
+            requested: false,
+            started: Instant::now(),
+        }
+    }
+}
+
 struct App {
     workflow: workflow::State,
     ui_context: egui::Context,
@@ -105,8 +162,7 @@ struct App {
     selected_frame: u64,
     video_frames: u64,
     video_options: crtsim_media::Options,
-    cancel: Arc<AtomicBool>,
-    video_job: bool,
+    work: Work,
     worker_thread: Option<std::thread::JoinHandle<()>>,
     store: Option<gallery::Store>,
     theme: theme::Theme,
@@ -129,10 +185,6 @@ struct App {
     description_edit: Option<(String, String)>,
     tool_windows: gallery::Layout,
     tool_windows_saved: gallery::Layout,
-    export_progress: Option<RenderProgress>,
-    smoke_welcome: bool,
-    smoke_gallery: bool,
-    smoke_export: bool,
     config: Config,
     history: model::History,
     input: Arc<RgbaImage>,
@@ -151,8 +203,6 @@ struct App {
     dirty: bool,
     changed_at: Instant,
     rendering: bool,
-    loading: bool,
-    exporting: bool,
     dialog_open: bool,
     jobs: worker::Jobs,
     events: mpsc::Receiver<Event>,
@@ -161,9 +211,7 @@ struct App {
     status: String,
     error: Option<String>,
     preview_error: Option<String>,
-    smoke: Option<PathBuf>,
-    smoke_requested: bool,
-    started: Instant,
+    smoke: Option<Smoke>,
 }
 
 /// The preview currently on screen. A frame rendered on the interface's own device is handed
@@ -184,6 +232,21 @@ impl Displayed {
             Self::Frame { id, size, .. } => egui::load::SizedTexture::new(*id, *size),
         }
     }
+}
+
+/// A path's file name for showing a person, which need not be valid Unicode.
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn file_stem(path: &Path) -> String {
+    path.file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn texture(ctx: &egui::Context, name: &str, image: &RgbaImage, limit: u32) -> TextureHandle {
@@ -209,7 +272,7 @@ impl App {
         ctx: &egui::Context,
         gpu: worker::Gpu,
         input_path: Option<PathBuf>,
-        smoke: Option<PathBuf>,
+        smoke: Option<Smoke>,
     ) -> Self {
         let input = Arc::new(config::test_card());
         let original = texture(ctx, "original", &input, 2048);
@@ -217,7 +280,6 @@ impl App {
         let render_state = gpu.render_state().cloned();
         let (jobs, events, worker_thread) = worker::start(ctx.clone(), gpu);
         let (dialog_send, dialog_receive) = mpsc::channel();
-        let loading = false;
         let (store, mut storage_error) = match gallery::Store::discover() {
             Ok(s) => (Some(s), None),
             Err(e) => (None, Some(format!("App data unavailable: {e:#}"))),
@@ -258,8 +320,7 @@ impl App {
             selected_frame: 0,
             video_frames: 0,
             video_options: crtsim_media::Options::default(),
-            cancel: Arc::new(AtomicBool::new(false)),
-            video_job: false,
+            work: Work::Idle,
             worker_thread: Some(worker_thread),
             store,
             theme,
@@ -279,10 +340,6 @@ impl App {
             description_edit: None,
             tool_windows_saved: tool_windows.clone(),
             tool_windows,
-            export_progress: None,
-            smoke_welcome: false,
-            smoke_gallery: false,
-            smoke_export: false,
             history: model::History::new(config.clone()),
             config,
             input,
@@ -300,8 +357,6 @@ impl App {
             dirty: true,
             changed_at: Instant::now(),
             rendering: false,
-            loading,
-            exporting: false,
             dialog_open: false,
             jobs,
             events,
@@ -311,8 +366,6 @@ impl App {
             error: storage_error,
             preview_error: None,
             smoke,
-            smoke_requested: false,
-            started: Instant::now(),
         };
         app.init_workflow(input_path.is_some());
         if let Some(path) = input_path {
@@ -381,6 +434,55 @@ impl App {
         self.history.commit(&self.config);
         self.changed();
     }
+    fn undo(&mut self) {
+        if let Some(c) = self.history.undo(&self.config) {
+            self.config = c;
+            self.changed();
+        }
+    }
+    fn redo(&mut self) {
+        if let Some(c) = self.history.redo(&self.config) {
+            self.config = c;
+            self.changed();
+        }
+    }
+    /// A window that takes over the interface is open: a native file dialog, the video export
+    /// settings or the welcome.
+    fn modal_open(&self) -> bool {
+        self.dialog_open || self.workflow.export_dialog.is_some() || self.show_welcome
+    }
+    /// Whether a file can be opened or an export started: nothing modal is open and the work
+    /// thread is free.
+    fn can_start_work(&self) -> bool {
+        !self.modal_open() && self.work.is_idle()
+    }
+    /// Where settings, sessions and window placement are kept; none during a smoke run.
+    fn app_data(&self) -> Option<&gallery::Store> {
+        self.store.as_ref().filter(|_| self.smoke.is_none())
+    }
+    /// Makes `input` the image being edited: the file at `path`, a frame of `video`, or with
+    /// neither the built-in test card. The original view shows `thumbnail`.
+    fn set_source(
+        &mut self,
+        path: Option<PathBuf>,
+        name: String,
+        video: Option<crtsim_media::Video>,
+        input: RgbaImage,
+        thumbnail: &RgbaImage,
+    ) {
+        self.workflow.source = path;
+        self.source_name = name;
+        self.video = video;
+        self.original = texture(&self.ui_context, "original", thumbnail, 2048);
+        self.input = Arc::new(input);
+        self.show_preview(None);
+        self.rendered_revision = None;
+        self.changed();
+    }
+    fn show_test_card(&mut self) {
+        let card = config::test_card();
+        self.set_source(None, "Built-in test card".into(), None, card.clone(), &card);
+    }
     fn dialog(&mut self, kind: Dialog, ctx: &egui::Context) {
         self.stop_playback();
         self.dialog_open = true;
@@ -417,15 +519,14 @@ impl App {
             self.load_video(path, 0, false);
             return;
         }
-        self.loading = true;
+        self.work = Work::Loading(None);
         self.status = format!("Loading {}…", path.display());
         self.send(Job::Load(path));
     }
     fn load_video(&mut self, path: PathBuf, frame: u64, reuse: bool) {
         self.stop_playback();
-        self.video_job = true;
-        self.loading = true;
-        self.cancel = Arc::new(AtomicBool::new(false));
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.work = Work::Loading(Some(cancel.clone()));
         self.status = "Loading video frame…".into();
         self.send(Job::LoadVideo {
             path,
@@ -435,20 +536,25 @@ impl App {
             } else {
                 None
             },
-            cancel: self.cancel.clone(),
+            cancel,
         });
     }
     fn send(&mut self, job: Job) {
         if self.jobs.send(job).is_err() {
-            self.error =
-                Some("Render worker stopped. Save your preset and restart the application.".into());
-            self.rendering = false;
-            self.loading = false;
-            self.exporting = false;
-            self.video_job = false;
-            self.export_progress = None;
-            self.dirty = false;
+            self.worker_stopped();
         }
+    }
+    fn send_preview(&mut self, job: PreviewJob) {
+        if self.jobs.preview(job).is_err() {
+            self.worker_stopped();
+        }
+    }
+    fn worker_stopped(&mut self) {
+        self.error =
+            Some("Render worker stopped. Save your preset and restart the application.".into());
+        self.rendering = false;
+        self.work = Work::Idle;
+        self.dirty = false;
     }
     fn export(&mut self, path: PathBuf) {
         self.stop_playback();
@@ -456,12 +562,14 @@ impl App {
             self.error = Some(format!("{e:#}"));
             return;
         }
-        self.exporting = true;
-        self.cancel = Arc::new(AtomicBool::new(false));
-        self.export_progress = Some(RenderProgress {
-            fraction: 0.,
-            stage: "Queued for export".into(),
-        });
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.work = Work::Exporting {
+            cancel: cancel.clone(),
+            progress: Some(RenderProgress {
+                fraction: 0.,
+                stage: "Queued for export".into(),
+            }),
+        };
         self.status = format!(
             "Exporting {}… Settings are captured for this export.",
             path.display()
@@ -470,7 +578,7 @@ impl App {
             input: self.input.clone(),
             config: self.config.clone(),
             path,
-            cancel: self.cancel.clone(),
+            cancel,
         });
     }
     fn receive(&mut self, ctx: &egui::Context) {
@@ -486,14 +594,9 @@ impl App {
                                 path.metadata()?.len() <= 16 * 1024 * 1024,
                                 "LUT exceeds 16 MB"
                             );
-                            let name = path
-                                .file_name()
-                                .unwrap_or_default()
-                                .to_string_lossy()
-                                .into_owned();
                             crtsim_core::workflow::Lut::parse_cube(
-                                name,
-                                &std::fs::read_to_string(path)?,
+                                file_name(&path),
+                                &std::fs::read_to_string(&path)?,
                             )
                         })();
                         match result {
@@ -518,42 +621,38 @@ impl App {
                             continue;
                         }
                         if let Some(video) = self.video.clone() {
-                            self.exporting = true;
-                            self.video_job = true;
-                            self.cancel = Arc::new(AtomicBool::new(false));
-                            self.export_progress = Some(RenderProgress {
-                                fraction: 0.,
-                                stage: "Queued for video export".into(),
-                            });
+                            let cancel = Arc::new(AtomicBool::new(false));
+                            self.work = Work::Exporting {
+                                cancel: cancel.clone(),
+                                progress: Some(RenderProgress {
+                                    fraction: 0.,
+                                    stage: "Queued for video export".into(),
+                                }),
+                            };
                             self.status = "Exporting video…".into();
                             self.send(Job::ExportVideo {
                                 video,
                                 options: self.video_options.clone(),
                                 config: self.config.clone(),
                                 path,
-                                cancel: self.cancel.clone(),
+                                cancel,
                             });
                         }
                     }
                     Dialog::ImportPreset => {
-                        self.loading = true;
-                        self.video_job = true;
-                        self.cancel = Arc::new(AtomicBool::new(false));
+                        let cancel = Arc::new(AtomicBool::new(false));
+                        self.work = Work::Loading(Some(cancel.clone()));
                         self.status = "Reading preset metadata…".into();
                         self.send(Job::ImportPreset {
                             path,
                             input: self.input.dimensions(),
-                            cancel: self.cancel.clone(),
+                            cancel,
                         });
                     }
                     Dialog::LoadPreset => {
                         match files::load_preset(&path, self.input.dimensions()) {
                             Ok(c) => {
-                                self.gallery_name = path
-                                    .file_stem()
-                                    .unwrap_or_default()
-                                    .to_string_lossy()
-                                    .into_owned();
+                                self.gallery_name = file_stem(&path);
                                 self.replace_config(c);
                                 self.status = format!("Loaded preset {}", path.display());
                                 self.error = None;
@@ -578,90 +677,83 @@ impl App {
         }
         while let Ok(event) = self.events.try_recv() {
             match event {
-                Event::Progress { progress } if self.exporting => {
-                    self.export_progress = Some(progress)
+                Event::Progress(progress) => {
+                    if let Work::Exporting {
+                        progress: shown, ..
+                    } = &mut self.work
+                    {
+                        *shown = Some(progress);
+                    }
                 }
-                Event::Progress { .. } => {}
                 Event::PresetImported(result) => {
-                    self.loading = false;
-                    self.video_job = false;
+                    self.work = Work::Idle;
                     match result {
-                        Ok((path, config, options)) => {
-                            self.gallery_name = path
-                                .file_stem()
-                                .unwrap_or_default()
-                                .to_string_lossy()
-                                .into_owned();
-                            self.replace_config(config);
-                            if let Some(options) = options {
+                        Ok(imported) => {
+                            self.gallery_name = file_stem(&imported.path);
+                            self.replace_config(imported.config);
+                            if let Some(options) = imported.options {
                                 self.video_options = options;
                             }
-                            self.status = format!("Imported preset from {}", path.display());
+                            self.status =
+                                format!("Imported preset from {}", imported.path.display());
                             self.error = None;
                         }
-                        Err(_) if self.cancel.load(Ordering::Relaxed) => {
+                        Err(Failure::Cancelled) => {
                             self.status = "Preset import cancelled".into();
                         }
-                        Err(e) => self.error = Some(format!("Cannot import preset: {e}")),
+                        Err(Failure::Failed(e)) => {
+                            self.error = Some(format!("Cannot import preset: {e}"))
+                        }
                     }
                 }
                 Event::VideoLoaded(result) => {
-                    self.video_job = false;
-                    self.loading = false;
+                    self.work = Work::Idle;
                     match result {
-                        Ok((video, input, thumb, frame, count)) => {
-                            self.workflow.source = Some(video.path.clone());
-                            self.workflow.play_time = frame as f64 / video.fps;
-                            self.source_name = video
-                                .path
-                                .file_name()
-                                .unwrap_or_default()
-                                .to_string_lossy()
-                                .into_owned();
-                            self.video = Some(video);
-                            self.video_frame = frame;
-                            self.selected_frame = frame;
-                            self.video_frames = count;
-                            self.original = texture(ctx, "original", &thumb, 2048);
-                            self.input = Arc::new(input);
-                            self.show_preview(None);
-                            self.rendered_revision = None;
+                        Ok(loaded) => {
+                            self.workflow.play_time = loaded.frame as f64 / loaded.video.fps;
+                            self.video_frame = loaded.frame;
+                            self.selected_frame = loaded.frame;
+                            self.video_frames = loaded.frames;
+                            let path = loaded.video.path.clone();
+                            let name = file_name(&path);
+                            self.set_source(
+                                Some(path),
+                                name,
+                                Some(loaded.video),
+                                loaded.image,
+                                &loaded.thumbnail,
+                            );
                             self.error = None;
-                            self.changed();
                             self.status = "Video frame loaded".into();
                             if let Some(p) = self.workflow.pending_project.take() {
                                 self.apply_project(p);
                             }
                         }
-                        Err(_) if self.cancel.load(Ordering::Relaxed) => {
+                        Err(Failure::Cancelled) => {
                             self.status = "Video loading cancelled".into();
                             self.workflow.pending_project = None;
                             self.error = None;
                         }
-                        Err(e) => {
+                        Err(Failure::Failed(e)) => {
                             self.workflow.pending_project = None;
                             self.error = Some(e);
                         }
                     }
                 }
                 Event::Loaded(result) => {
-                    self.loading = false;
+                    self.work = Work::Idle;
                     match result {
-                        Ok((path, input, thumb)) => {
-                            self.workflow.source =
-                                Some(path.canonicalize().unwrap_or_else(|_| path.clone()));
-                            self.video = None;
-                            self.source_name = path
-                                .file_name()
-                                .unwrap_or_default()
-                                .to_string_lossy()
-                                .into_owned();
-                            self.original = texture(ctx, "original", &thumb, 2048);
-                            self.input = Arc::new(input);
-                            self.show_preview(None);
-                            self.rendered_revision = None;
+                        Ok(loaded) => {
+                            let name = file_name(&loaded.path);
+                            let source = loaded.path.canonicalize().unwrap_or(loaded.path);
+                            self.set_source(
+                                Some(source),
+                                name,
+                                None,
+                                loaded.image,
+                                &loaded.thumbnail,
+                            );
                             self.error = None;
-                            self.changed();
                             self.status = "Image loaded".into();
                             if let Some(p) = self.workflow.pending_project.take() {
                                 self.apply_project(p);
@@ -679,13 +771,16 @@ impl App {
                         continue;
                     }
                     match result {
-                        Ok((preview, seconds)) => {
-                            let (width, height) = preview.dimensions();
-                            let shown = self.displayed(ctx, preview);
+                        Ok(previewed) => {
+                            let (width, height) = previewed.image.dimensions();
+                            let shown = self.displayed(ctx, previewed.image);
                             self.show_preview(shown);
                             self.rendered_revision = Some(revision);
-                            if !self.exporting {
-                                self.status = format!("Preview {width} × {height} · {seconds:.2}s");
+                            if !self.work.is_exporting() {
+                                self.status = format!(
+                                    "Preview {width} × {height} · {:.2}s",
+                                    previewed.seconds
+                                );
                             }
                             self.preview_error = None;
                         }
@@ -699,19 +794,17 @@ impl App {
                 } => self.thumbnail_ready(ctx, generation, key, result),
                 Event::Exported(result) => {
                     self.queue_finished(&result);
-                    self.video_job = false;
-                    self.export_progress = None;
-                    self.exporting = false;
+                    self.work = Work::Idle;
                     match result {
                         Ok(path) => {
                             self.status = format!("Saved {}", path.display());
                             self.error = None;
                         }
-                        Err(_) if self.cancel.load(Ordering::Relaxed) => {
+                        Err(Failure::Cancelled) => {
                             self.status = "Export cancelled; destination kept unchanged".into();
                             self.error = None;
                         }
-                        Err(e) => self.error = Some(e),
+                        Err(Failure::Failed(e)) => self.error = Some(e),
                     }
                 }
             }
@@ -720,7 +813,7 @@ impl App {
     /// Also while exporting: previews have their own worker, and the export works from the
     /// settings it captured, so the ones on screen are free to change.
     fn request_preview(&mut self) {
-        if self.rendering || self.loading || self.workflow.playback.is_some() {
+        if self.rendering || self.work.is_loading() || self.workflow.playback.is_some() {
             return;
         }
         self.history.commit(&self.config);
@@ -733,7 +826,7 @@ impl App {
         ) {
             Ok(config) => {
                 self.rendering = true;
-                self.send(Job::Preview {
+                self.send_preview(PreviewJob::Preview {
                     revision: self.revision,
                     input: self.input.clone(),
                     config,
@@ -747,24 +840,14 @@ impl App {
             chrome::monitor(ui);
             ui.label(egui::RichText::new("CRTSim Renderer").strong().size(17.));
             ui.separator();
-            let enabled = !self.dialog_open
-                && !self.loading
-                && !self.exporting
-                && self.workflow.export_dialog.is_none();
-            ui.add_enabled_ui(enabled, |ui| {
+            ui.add_enabled_ui(self.can_start_work(), |ui| {
                 ui.menu_button("File", |ui| {
                     if ui.button("Open media…").clicked() {
                         self.dialog(Dialog::File, ctx);
                         ui.close_menu();
                     }
                     if ui.button("Test card").clicked() {
-                        self.video = None;
-                        self.workflow.source = None;
-                        self.input = Arc::new(config::test_card());
-                        self.original = texture(ctx, "original", &self.input, 2048);
-                        self.source_name = "Built-in test card".into();
-                        self.show_preview(None);
-                        self.changed();
+                        self.show_test_card();
                         ui.close_menu();
                     }
                     ui.separator();
@@ -874,16 +957,10 @@ impl App {
         ));
         ui.horizontal(|ui| {
             if ui.button("Undo").on_hover_text("Ctrl+Z").clicked() {
-                if let Some(c) = self.history.undo(&self.config) {
-                    self.config = c;
-                    self.changed();
-                }
+                self.undo();
             }
             if ui.button("Redo").on_hover_text("Ctrl+Shift+Z").clicked() {
-                if let Some(c) = self.history.redo(&self.config) {
-                    self.config = c;
-                    self.changed();
-                }
+                self.redo();
             }
             if ui
                 .button("Reset")
@@ -1083,7 +1160,7 @@ impl App {
             ui.checkbox(&mut self.live, "Live preview");
             if ui
                 .add_enabled(
-                    !self.rendering && !self.loading,
+                    !self.rendering && !self.work.is_loading(),
                     egui::Button::new("Refresh"),
                 )
                 .clicked()
@@ -1112,7 +1189,11 @@ impl App {
                 ui.add(egui::Slider::new(&mut self.zoom, 0.25..=4.).text("Zoom"));
             }
         });
-        ui.small("Preview monitor").on_hover_text("Drag the divider in Compare. Preview quality never changes export resolution. Inspect mask detail at Export resolution and 1× zoom.");
+        ui.small("Preview monitor").on_hover_text(
+            "Drag the divider in Compare. Preview quality never changes \
+            export resolution. Inspect mask detail at Export resolution \
+            and 1× zoom.",
+        );
         if let Ok(c) =
             model::preview_config(&self.config, self.input.dimensions(), self.preview_limit)
         {
@@ -1120,19 +1201,22 @@ impl App {
                 if w as f32 / self.config.mask_repeats[0] < 6.
                     || h as f32 / self.config.mask_repeats[1] < 3.
                 {
-                    ui.colored_label(ui.visuals().warn_fg_color,"Dense mask at this preview size: aliasing / moiré is possible. Try a higher preview resolution or lower mask density.");
+                    ui.colored_label(
+                        ui.visuals().warn_fg_color,
+                        "Dense mask at this preview size: aliasing / moiré is \
+                        possible. Try a higher preview resolution or lower mask \
+                        density.",
+                    );
                 }
             }
         }
-        if self.rendering || self.loading || self.exporting {
+        if self.rendering || !self.work.is_idle() {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label(if self.exporting {
-                    "Exporting…"
-                } else if self.loading {
-                    "Loading file/frame…"
-                } else {
-                    "Rendering preview…"
+                ui.label(match self.work {
+                    Work::Exporting { .. } => "Exporting…",
+                    Work::Loading(_) => "Loading file/frame…",
+                    Work::Idle => "Rendering preview…",
                 });
             });
         }
@@ -1153,13 +1237,39 @@ impl App {
             ui.available_width(),
             (ui.available_height() - controls_height).max(1.),
         );
-        egui::ScrollArea::both().max_height(available.y).auto_shrink([false,false]).show(ui,|ui| {
-            if self.view == View::Compare {
-                if let Some(ref im)=self.rendered {workflow::compare(ui,egui::load::SizedTexture::from_handle(&self.original),im.sized(),available,self.fit_preview,self.zoom,&mut self.workflow.comparison);}
-            } else if self.view == View::Original { show_image(ui,egui::load::SizedTexture::from_handle(&self.original),available,self.fit_preview,self.zoom); }
-            else if let Some(ref im) = self.rendered { show_image(ui,im.sized(),available,self.fit_preview,self.zoom); }
-            else { ui.label("Open an image, video or test card. Your rendered preview will appear here."); }
-        });
+        egui::ScrollArea::both()
+            .max_height(available.y)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                if self.view == View::Compare {
+                    if let Some(ref im) = self.rendered {
+                        workflow::compare(
+                            ui,
+                            egui::load::SizedTexture::from_handle(&self.original),
+                            im.sized(),
+                            available,
+                            self.fit_preview,
+                            self.zoom,
+                            &mut self.workflow.comparison,
+                        );
+                    }
+                } else if self.view == View::Original {
+                    show_image(
+                        ui,
+                        egui::load::SizedTexture::from_handle(&self.original),
+                        available,
+                        self.fit_preview,
+                        self.zoom,
+                    );
+                } else if let Some(ref im) = self.rendered {
+                    show_image(ui, im.sized(), available, self.fit_preview, self.zoom);
+                } else {
+                    ui.label(
+                        "Open an image, video or test card. Your rendered preview \
+                will appear here.",
+                    );
+                }
+            });
         self.video_controls(ui);
     }
 
@@ -1172,7 +1282,7 @@ impl App {
         // the arrow keys below; only the embedded fallback shares this viewport's input.
         let galleries_overlap =
             ui.ctx().embed_viewports() && (self.show_gallery || self.show_lut_gallery);
-        let enabled = !self.loading && !self.exporting && !self.dialog_open && !galleries_overlap;
+        let enabled = self.can_start_work() && !galleries_overlap;
         let mut seek = false;
         ui.separator();
         ui.add_enabled_ui(enabled, |ui| {
@@ -1253,7 +1363,11 @@ impl App {
                 }
             }
         });
-        ui.small(format!("Showing frame {} · Left/Right arrow keys step frames · Export frame saves this settled CRT still as PNG.", self.video_frame + 1));
+        ui.small(format!(
+            "Showing frame {} · Left/Right arrow keys step frames · \
+            Export frame saves this settled CRT still as PNG.",
+            self.video_frame + 1
+        ));
         if seek && enabled && self.selected_frame != self.video_frame {
             self.load_video(video.path, self.selected_frame, true);
         }
@@ -1285,9 +1399,6 @@ impl App {
     /// Writes the window layout only when it actually changed, so the two-second tick that
     /// calls this does not rewrite the file while nothing moves.
     pub(crate) fn save_tool_windows(&mut self) {
-        if self.smoke.is_some() {
-            return;
-        }
         let layout: gallery::Layout = self
             .tool_windows
             .iter()
@@ -1296,11 +1407,12 @@ impl App {
         if layout == self.tool_windows_saved {
             return;
         }
-        if let Some(store) = &self.store {
-            match store.set_tool_windows(&layout) {
-                Ok(()) => self.tool_windows_saved = layout,
-                Err(e) => self.error = Some(format!("Window layout could not be saved: {e:#}")),
-            }
+        let Some(saved) = self.app_data().map(|store| store.set_tool_windows(&layout)) else {
+            return;
+        };
+        match saved {
+            Ok(()) => self.tool_windows_saved = layout,
+            Err(e) => self.error = Some(format!("Window layout could not be saved: {e:#}")),
         }
     }
     fn gallery_window(&mut self, ctx: &egui::Context) {
@@ -1325,82 +1437,97 @@ impl App {
         let mut window = self.window_state("Preset gallery");
         let open = chrome::tool_window(ctx, "Preset gallery", [600., 500.], &mut window, |ui| {
             ui.add_enabled_ui(!self.dialog_open, |ui| {
-                ui.label("Save your current settings here to find them again after restarting the app.");
+                ui.label(
+                    "Save your current settings here to find them again after restarting the \
+                     app.",
+                );
                 ui.horizontal(|ui| {
-                    ui.label("Name"); ui.text_edit_singleline(&mut self.gallery_name);
-                    if ui.add_enabled(self.store.is_some(), egui::Button::new("Save current")).clicked() {
-                        let result = self.store.as_ref().unwrap().save(&self.gallery_name, &self.config, self.input.dimensions());
-                        match result {
-                            Ok(()) => { self.status = format!("Saved '{}' to My presets",self.gallery_name); self.error = None; self.refresh_gallery(); }
-                            Err(e) => self.error = Some(format!("Cannot save gallery preset: {e:#}")),
-                        }
+                    ui.label("Name");
+                    ui.text_edit_singleline(&mut self.gallery_name);
+                    if ui
+                        .add_enabled(self.store.is_some(), egui::Button::new("Save current"))
+                        .clicked()
+                    {
+                        self.save_to_gallery();
                     }
                 });
                 ui.horizontal(|ui| {
-                    if ui.button("Load JSON…").clicked() { self.dialog(Dialog::LoadPreset,ctx); }
-                    if ui.button("Refresh gallery").clicked() { self.refresh_gallery(); }
+                    if ui.button("Load JSON…").clicked() {
+                        self.dialog(Dialog::LoadPreset, ctx);
+                    }
+                    if ui.button("Refresh gallery").clicked() {
+                        self.refresh_gallery();
+                    }
                 });
-                ui.small("Load an existing JSON, then choose Save current to add it to My presets. Existing names are never overwritten.");
-                if let Some(ref store) = self.store { ui.small(format!("Personal presets: {}",store.root.join("presets").display())); }
-                else { ui.colored_label(ui.visuals().warn_fg_color,"Personal storage is unavailable. JSON import/export and built-in presets still work."); }
-                if let Some(ref error) = self.error { ui.colored_label(ui.visuals().error_fg_color,error); }
-                if !self.gallery_warnings.is_empty() { egui::CollapsingHeader::new("Skipped preset files").show(ui,|ui| { for warning in &self.gallery_warnings { ui.label(warning); } }); }
+                ui.small(
+                    "Load an existing JSON, then choose Save current to add it to My presets. \
+                     Existing names are never overwritten.",
+                );
+                match &self.store {
+                    Some(store) => {
+                        ui.small(format!(
+                            "Personal presets: {}",
+                            store.root.join("presets").display()
+                        ));
+                    }
+                    None => {
+                        ui.colored_label(
+                            ui.visuals().warn_fg_color,
+                            "Personal storage is unavailable. JSON import/export and built-in \
+                             presets still work.",
+                        );
+                    }
+                }
+                if let Some(error) = &self.error {
+                    ui.colored_label(ui.visuals().error_fg_color, error);
+                }
+                if !self.gallery_warnings.is_empty() {
+                    egui::CollapsingHeader::new("Skipped preset files").show(ui, |ui| {
+                        for warning in &self.gallery_warnings {
+                            ui.label(warning);
+                        }
+                    });
+                }
                 ui.separator();
-                egui::ScrollArea::vertical().max_height(ui.available_height().max(200.)).show(ui, |ui| {
-                    for user in [false,true] {
-                        ui.heading(if user { "My presets" } else { "Included presets" });
-                        let mut count = 0;
-                        for entry in self.gallery_entries.iter().filter(|e| e.user == user) {
-                            count += 1;
-                            ui.group(|ui| {
-                                ui.set_min_width(ui.available_width());
-                                ui.horizontal(|ui| {
-                                    let picture = thumbnails::show(ui, pictures.get(&entry.name), 72., 16. / 9.)
-                                        .on_hover_text("Point to preview this preset on your image; click to apply it");
-                                    ui.vertical(|ui| {
-                                        ui.horizontal(|ui| {
-                                            let label = ui.selectable_label(self.config == entry.config, &entry.name);
-                                            if label.clicked() || picture.clicked() { selected = Some(entry.config.clone()); }
-                                            if (label.hovered() || picture.hovered()) && ui.is_enabled() { hovered = Some((format!("preset “{}”", entry.name), entry.config.clone())); }
-                                            if entry.user && ui.small_button("Edit description").clicked() {
-                                                edit = Some((entry.name.clone(), entry.description.clone()));
-                                            }
-                                        });
-                                        ui.add(egui::Label::new(if entry.description.is_empty() { "No description" } else { &entry.description }).wrap(true));
-                                        if entry.config == self.config {
-                                            ui.small("Matches your settings");
-                                        } else {
-                                            let changes = model::differences(&self.config, &entry.config);
-                                            egui::CollapsingHeader::new(format!(
-                                                "Differs from your settings in {} {}",
-                                                changes.len(),
-                                                if changes.len() == 1 { "setting" } else { "settings" }
-                                            ))
-                                            .id_source(("preset differences", &entry.name, entry.user))
-                                            .show(ui, |ui| {
-                                                egui::Grid::new(("preset difference grid", &entry.name, entry.user))
-                                                    .striped(true)
-                                                    .show(ui, |ui| {
-                                                        ui.strong("Setting");
-                                                        ui.strong("Yours");
-                                                        ui.strong("Preset");
-                                                        ui.end_row();
-                                                        for change in &changes {
-                                                            ui.label(&change.setting);
-                                                            ui.label(&change.from);
-                                                            ui.label(&change.to);
-                                                            ui.end_row();
-                                                        }
-                                                    });
-                                            });
-                                        }
-                                    });
-                                });
+                egui::ScrollArea::vertical()
+                    .max_height(ui.available_height().max(200.))
+                    .show(ui, |ui| {
+                        for user in [false, true] {
+                            ui.heading(if user {
+                                "My presets"
+                            } else {
+                                "Included presets"
                             });
+                            let mut count = 0;
+                            for entry in self.gallery_entries.iter().filter(|e| e.user == user) {
+                                count += 1;
+                                let response = preset_entry(
+                                    ui,
+                                    entry,
+                                    pictures.get(&entry.name),
+                                    &self.config,
+                                );
+                                if response.selected {
+                                    selected = Some(entry.config.clone());
+                                }
+                                if response.hovered {
+                                    hovered = Some((
+                                        format!("preset “{}”", entry.name),
+                                        entry.config.clone(),
+                                    ));
+                                }
+                                if response.edit {
+                                    edit = Some((entry.name.clone(), entry.description.clone()));
+                                }
+                            }
+                            if count == 0 {
+                                ui.label(
+                                    "No personal presets yet. Adjust an image and save your \
+                                     first look above.",
+                                );
+                            }
                         }
-                        if count == 0 { ui.label("No personal presets yet. Adjust an image and save your first look above."); }
-                    }
-                });
+                    });
             });
             if let Some(edit) = edit.take() {
                 self.description_edit = Some(edit);
@@ -1415,6 +1542,19 @@ impl App {
         }
         if let Some(config) = selected {
             self.replace_config(config);
+        }
+    }
+    fn save_to_gallery(&mut self) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        match store.save(&self.gallery_name, &self.config, self.input.dimensions()) {
+            Ok(()) => {
+                self.status = format!("Saved '{}' to My presets", self.gallery_name);
+                self.error = None;
+                self.refresh_gallery();
+            }
+            Err(e) => self.error = Some(format!("Cannot save gallery preset: {e:#}")),
         }
     }
     fn description_window(&mut self, ctx: &egui::Context) {
@@ -1460,7 +1600,11 @@ impl App {
         ui.label(gallery::DISCLAIMER);
         ui.separator();
         ui.strong("Original CRTSim: J. Kyle Pittman");
-        ui.label("The CRT simulation and original shaders, textures and screen/frame meshes are provided under CC0. Thank you for sharing them publicly.");
+        ui.label(
+            "The CRT simulation and original shaders, textures and \
+            screen/frame meshes are provided under CC0. Thank you for \
+            sharing them publicly.",
+        );
         ui.hyperlink_to(
             "Original CRTSim source",
             "https://github.com/MinorKeyGames/CRTSim",
@@ -1477,7 +1621,12 @@ impl App {
         );
         ui.separator();
         ui.strong("NES LUT collection: Wellington Uemura (wtuemura)");
-        ui.label("Shared through MAME Goodies under CC0 1.0. Includes palettes by FirebrandX (FBX) and other creators identified in the original palette names. Thanks to the MAME Goodies contributors.");
+        ui.label(
+            "Shared through MAME Goodies under CC0 1.0. Includes palettes \
+            by FirebrandX (FBX) and other creators identified in the \
+            original palette names. Thanks to the MAME Goodies \
+            contributors.",
+        );
         ui.horizontal_wrapped(|ui| {
             ui.hyperlink_to(
                 "NES LUTs & license",
@@ -1493,17 +1642,31 @@ impl App {
             );
         });
         ui.separator();
-        ui.small("Renderer port and interface: CRTSim-Renderer contributors, with AI assistance. Built with Rust, wgpu, egui/eframe, image and other open-source libraries; see THIRD_PARTY_NOTICES.md in the repository.");
+        ui.small(
+            "Renderer port and interface: CRTSim-Renderer contributors, \
+            with AI assistance. Built with Rust, wgpu, egui/eframe, \
+            image and other open-source libraries; see \
+            THIRD_PARTY_NOTICES.md in the repository.",
+        );
     }
     fn credits_window(&mut self, ctx: &egui::Context) {
         if self.show_welcome {
-            egui::Window::new("Welcome to CRTSim Renderer").anchor(egui::Align2::CENTER_CENTER,egui::Vec2::ZERO)
-                .collapsible(false).resizable(false).default_width(560.).show(ctx, |ui| {
+            egui::Window::new("Welcome to CRTSim Renderer")
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .collapsible(false)
+                .resizable(false)
+                .default_width(560.)
+                .show(ctx, |ui| {
                     Self::credit_text(ui);
                     ui.add_space(12.);
                     if ui.button("Got it — continue").clicked() {
                         if let Some(ref store) = self.store {
-                            if let Err(e) = store.acknowledge() { self.error = Some(format!("Could not remember the welcome message: {e:#}. It may appear next time.")); }
+                            if let Err(e) = store.acknowledge() {
+                                self.error = Some(format!(
+                                    "Could not remember the welcome message: {e:#}. It may appear \
+                                next time."
+                                ));
+                            }
                         }
                         self.show_welcome = false;
                     }
@@ -1551,6 +1714,83 @@ fn numbers(ui: &mut egui::Ui, config: &mut Config, defaults: &Config, section: s
             }
         }
     }
+}
+
+/// What happened to one preset in the gallery this frame.
+#[derive(Default)]
+struct EntryResponse {
+    selected: bool,
+    hovered: bool,
+    edit: bool,
+}
+
+/// One preset in the gallery: its thumbnail, name and description, and how it differs from the
+/// settings in use.
+fn preset_entry(
+    ui: &mut egui::Ui,
+    entry: &gallery::Entry,
+    picture: Option<&TextureHandle>,
+    current: &Config,
+) -> EntryResponse {
+    let mut response = EntryResponse::default();
+    ui.group(|ui| {
+        ui.set_min_width(ui.available_width());
+        ui.horizontal(|ui| {
+            let picture = thumbnails::show(ui, picture, 72., 16. / 9.)
+                .on_hover_text("Point to preview this preset on your image; click to apply it");
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    let label = ui.selectable_label(*current == entry.config, &entry.name);
+                    response.selected = label.clicked() || picture.clicked();
+                    response.hovered = (label.hovered() || picture.hovered()) && ui.is_enabled();
+                    response.edit = entry.user && ui.small_button("Edit description").clicked();
+                });
+                let description = if entry.description.is_empty() {
+                    "No description"
+                } else {
+                    &entry.description
+                };
+                ui.add(egui::Label::new(description).wrap(true));
+                preset_differences(ui, entry, current);
+            });
+        });
+    });
+    response
+}
+
+/// How a preset differs from the settings in use, as a table that opens on request.
+fn preset_differences(ui: &mut egui::Ui, entry: &gallery::Entry, current: &Config) {
+    if entry.config == *current {
+        ui.small("Matches your settings");
+        return;
+    }
+    let changes = model::differences(current, &entry.config);
+    let noun = if changes.len() == 1 {
+        "setting"
+    } else {
+        "settings"
+    };
+    egui::CollapsingHeader::new(format!(
+        "Differs from your settings in {} {noun}",
+        changes.len()
+    ))
+    .id_source(("preset differences", &entry.name, entry.user))
+    .show(ui, |ui| {
+        egui::Grid::new(("preset difference grid", &entry.name, entry.user))
+            .striped(true)
+            .show(ui, |ui| {
+                ui.strong("Setting");
+                ui.strong("Yours");
+                ui.strong("Preset");
+                ui.end_row();
+                for change in &changes {
+                    ui.label(&change.setting);
+                    ui.label(&change.from);
+                    ui.label(&change.to);
+                    ui.end_row();
+                }
+            });
+    });
 }
 
 /// A setting's slider, with a button that returns it alone to `default`. The button keeps its
@@ -1627,11 +1867,7 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.workflow_ui(ctx);
         self.receive(ctx);
-        if !self.dialog_open
-            && self.workflow.export_dialog.is_none()
-            && !self.show_welcome
-            && !ctx.wants_keyboard_input()
-        {
+        if !self.modal_open() && !ctx.wants_keyboard_input() {
             let mut ctrl_shift = egui::Modifiers::CTRL;
             ctrl_shift.shift = true;
             let mut command_shift = egui::Modifiers::COMMAND;
@@ -1651,23 +1887,12 @@ impl eframe::App for App {
                     ))
                 });
             if redo {
-                if let Some(c) = self.history.redo(&self.config) {
-                    self.config = c;
-                    self.changed();
-                }
+                self.redo();
             } else if undo {
-                if let Some(c) = self.history.undo(&self.config) {
-                    self.config = c;
-                    self.changed();
-                }
+                self.undo();
             }
         }
-        if !self.loading
-            && !self.dialog_open
-            && self.workflow.export_dialog.is_none()
-            && !self.show_welcome
-            && !self.exporting
-        {
+        if self.can_start_work() {
             let dropped = ctx.input(|i| i.raw.dropped_files.first().and_then(|f| f.path.clone()));
             if let Some(path) = dropped {
                 self.load(path);
@@ -1691,21 +1916,26 @@ impl eframe::App for App {
             ui.horizontal(|ui| {
                 chrome::status_light(
                     ui,
-                    self.rendering || self.loading || self.exporting,
+                    self.rendering || !self.work.is_idle(),
                     self.error.is_some() || self.preview_error.is_some(),
                 );
                 ui.label(&self.status);
             });
-            if let Some(p) = &self.export_progress {
+            if let Work::Exporting {
+                progress: Some(p), ..
+            } = &self.work
+            {
                 ui.add(
                     egui::ProgressBar::new(p.fraction)
                         .text(format!("Export: {} — {:.0}%", p.stage, p.fraction * 100.))
                         .animate(true),
                 );
             }
-            if (self.video_job || self.exporting) && ui.button("Cancel").clicked() {
-                self.cancel.store(true, Ordering::Relaxed);
-                self.status = "Cancelling…".into();
+            if let Some(cancel) = self.work.cancel().cloned() {
+                if ui.button("Cancel").clicked() {
+                    cancel.store(true, Ordering::Relaxed);
+                    self.status = "Cancelling…".into();
+                }
             }
             for error in [self.error.clone(), self.preview_error.clone()]
                 .into_iter()
@@ -1725,14 +1955,9 @@ impl eframe::App for App {
             .min_width(280.)
             .resizable(true)
             .show(ctx, |ui| {
-                ui.add_enabled_ui(
-                    !self.dialog_open
-                        && self.workflow.export_dialog.is_none()
-                        && !self.show_welcome,
-                    |ui| {
-                        egui::ScrollArea::vertical().show(ui, |ui| self.settings(ui));
-                    },
-                );
+                ui.add_enabled_ui(!self.modal_open(), |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| self.settings(ui));
+                });
             });
         egui::CentralPanel::default()
             .frame(
@@ -1746,12 +1971,7 @@ impl eframe::App for App {
             )
             .show(ctx, |ui| {
                 chrome::preview_style(ui);
-                ui.add_enabled_ui(
-                    !self.show_welcome
-                        && !self.dialog_open
-                        && self.workflow.export_dialog.is_none(),
-                    |ui| self.preview(ui),
-                );
+                ui.add_enabled_ui(!self.modal_open(), |ui| self.preview(ui));
             });
         self.gallery_window(ctx);
         self.lut_gallery_window(ctx);
@@ -1771,48 +1991,54 @@ impl eframe::App for App {
                 || self.audition_pending
                 || self.changed_at.elapsed() < Duration::from_millis(180)))
             || self.rendering
-            || self.loading
-            || self.exporting
+            || !self.work.is_idle()
         {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
-        if self.smoke_export && self.rendered_revision == Some(self.revision) {
-            self.smoke_export = false;
+        self.advance_smoke(ctx);
+    }
+}
+
+impl App {
+    /// Drives a smoke run: once the preview has rendered, opens the export dialog if asked to,
+    /// then takes the screenshot, saves it and closes the window. A run that never gets there
+    /// fails after two minutes rather than hanging CI.
+    fn advance_smoke(&mut self, ctx: &egui::Context) {
+        let ready = self.rendered_revision == Some(self.revision);
+        if ready && self.smoke.as_ref().is_some_and(|smoke| smoke.export) {
+            if let Some(smoke) = &mut self.smoke {
+                smoke.export = false;
+            }
             self.open_video_export(false);
             ctx.request_repaint();
             return;
         }
-        // Reproducible CI screenshot after an actual preview, without platform-specific mouse coordinates.
-        if let Some(ref path) = self.smoke {
-            if self.started.elapsed() > Duration::from_secs(120) {
-                eprintln!(
-                    "Desktop smoke test timed out: {:?}; {:?}",
-                    self.error, self.preview_error
-                );
-                std::process::exit(1);
-            }
-            if (self.smoke_welcome
-                || self.rendered_revision == Some(self.revision) && !self.thumbnails_pending())
-                && !self.smoke_requested
-            {
-                self.smoke_requested = true;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot);
-            }
-            for event in ctx.input(|i| i.events.clone()) {
-                if let egui::Event::Screenshot { image, .. } = event {
-                    let bytes: Vec<u8> = image.pixels.iter().flat_map(|p| p.to_array()).collect();
-                    let im =
-                        RgbaImage::from_raw(image.width() as u32, image.height() as u32, bytes)
-                            .unwrap();
-                    if let Err(e) = files::save_png(path, im, None) {
-                        eprintln!("{e:#}");
-                        std::process::exit(1);
-                    }
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-            }
-            ctx.request_repaint_after(Duration::from_millis(100));
+        let thumbnails_pending = self.thumbnails_pending();
+        let (error, preview_error) = (&self.error, &self.preview_error);
+        let Some(smoke) = &mut self.smoke else {
+            return;
+        };
+        if smoke.started.elapsed() > Duration::from_secs(120) {
+            eprintln!("Desktop smoke test timed out: {error:?}; {preview_error:?}");
+            std::process::exit(1);
         }
+        if (smoke.welcome || ready && !thumbnails_pending) && !smoke.requested {
+            smoke.requested = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot);
+        }
+        for event in ctx.input(|i| i.events.clone()) {
+            if let egui::Event::Screenshot { image, .. } = event {
+                let bytes: Vec<u8> = image.pixels.iter().flat_map(|p| p.to_array()).collect();
+                let im = RgbaImage::from_raw(image.width() as u32, image.height() as u32, bytes)
+                    .unwrap();
+                if let Err(e) = files::save_png(&smoke.screenshot, im, None) {
+                    eprintln!("{e:#}");
+                    std::process::exit(1);
+                }
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+        ctx.request_repaint_after(Duration::from_millis(100));
     }
 }
 
@@ -1822,8 +2048,10 @@ impl Drop for App {
         self.show_preview(None);
         self.save_session();
         self.save_tool_windows();
-        self.cancel.store(true, Ordering::Relaxed);
-        let _ = self.jobs.send(Job::Shutdown);
+        if let Some(cancel) = self.work.cancel() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        self.jobs.shutdown();
         if let Some(thread) = self.worker_thread.take() {
             let _ = thread.join();
         }
@@ -1868,7 +2096,12 @@ fn main() -> eframe::Result<()> {
                 ))
             }
             "--help" | "-h" => {
-                println!("crtsim-desktop [IMAGE_OR_VIDEO] [--backend auto|vulkan|dx12|metal]\nOpen media, adjust effects, load/save presets and export PNG or video from the window.\nVideo requires FFmpeg and ffprobe on PATH.");
+                println!(
+                    "crtsim-desktop [IMAGE_OR_VIDEO] [--backend auto|vulkan|dx12|metal]\n\
+                     Open media, adjust effects, load/save presets and export PNG or video from \
+                     the window.\n\
+                     Video requires FFmpeg and ffprobe on PATH."
+                );
                 return Ok(());
             }
             s if s.starts_with('-') => {
@@ -1931,11 +2164,13 @@ fn main() -> eframe::Result<()> {
                 }
                 _ => worker::Gpu::Own(backends),
             };
+            let smoke = smoke.map(|screenshot| Smoke {
+                welcome: smoke_welcome,
+                export: smoke_export,
+                ..Smoke::new(screenshot)
+            });
             let mut app = App::new(&cc.egui_ctx, gpu, input, smoke);
             if app.smoke.is_some() {
-                app.smoke_welcome = smoke_welcome;
-                app.smoke_gallery = smoke_gallery;
-                app.smoke_export = smoke_export;
                 app.show_welcome = smoke_welcome;
                 app.show_gallery = smoke_gallery;
                 app.show_lut_gallery = smoke_lut_gallery;
@@ -1962,7 +2197,10 @@ mod tests {
         app.changed();
         send.send(Event::Preview {
             revision: 0,
-            result: Ok((worker::Preview::Pixels(config::test_card()), 0.1)),
+            result: Ok(worker::Previewed {
+                image: worker::Preview::Pixels(config::test_card()),
+                seconds: 0.1,
+            }),
         })
         .unwrap();
         app.receive(&ctx);
@@ -1973,7 +2211,10 @@ mod tests {
             .unwrap();
         send.send(Event::Preview {
             revision: app.revision,
-            result: Ok((worker::Preview::Pixels(config::test_card()), 0.1)),
+            result: Ok(worker::Previewed {
+                image: worker::Preview::Pixels(config::test_card()),
+                seconds: 0.1,
+            }),
         })
         .unwrap();
         app.receive(&ctx);
@@ -1993,27 +2234,27 @@ mod tests {
     fn settings_changed_during_an_export_are_previewed() {
         let ctx = egui::Context::default();
         let mut app = App::new(&ctx, worker::Gpu::Own(wgpu::Backends::PRIMARY), None, None);
-        let (send, receive) = mpsc::channel();
-        app.jobs = worker::Jobs::capture(send);
+        let (jobs, work, previews) = worker::Jobs::capture();
+        app.jobs = jobs;
         let dir = tempfile::tempdir().unwrap();
         app.export(dir.path().join("rendered.png"));
-        assert!(matches!(receive.try_recv(), Ok(Job::Export { .. })));
+        assert!(matches!(work.try_recv(), Ok(Job::Export { .. })));
         app.config.bloom = 0.;
         app.changed();
         app.request_preview();
-        match receive.try_recv() {
-            Ok(Job::Preview { config, .. }) => assert_eq!(config.bloom, 0.),
+        match previews.try_recv() {
+            Ok(PreviewJob::Preview { config, .. }) => assert_eq!(config.bloom, 0.),
             _ => panic!("expected a preview while exporting"),
         }
-        assert!(app.exporting && app.rendering);
+        assert!(app.work.is_exporting() && app.rendering);
     }
 
     #[test]
     fn export_captures_full_resolution_and_original_source() {
         let ctx = egui::Context::default();
         let mut app = App::new(&ctx, worker::Gpu::Own(wgpu::Backends::PRIMARY), None, None);
-        let (send, receive) = mpsc::channel();
-        app.jobs = worker::Jobs::capture(send);
+        let (jobs, receive, _previews) = worker::Jobs::capture();
+        app.jobs = jobs;
         let dir = tempfile::tempdir().unwrap();
         app.config.output = "4k".into();
         app.preview_limit = Some(800);
@@ -2030,7 +2271,7 @@ mod tests {
                 ..
             } => {
                 assert!(Arc::ptr_eq(&input, &source));
-                assert!(Arc::ptr_eq(&cancel, &app.cancel));
+                assert!(Arc::ptr_eq(&cancel, app.work.cancel().unwrap()));
                 assert_eq!(config, expected);
                 assert_eq!(
                     config.output_size(input.dimensions()).unwrap(),

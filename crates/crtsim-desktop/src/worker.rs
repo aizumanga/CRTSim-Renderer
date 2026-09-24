@@ -1,11 +1,18 @@
 use crate::files;
-use crtsim_core::{config::Config, RenderProgress, Renderer, Sequence};
+use anyhow::{ensure, Result};
+use crtsim_core::{config::Config, nes_luts, RenderProgress, Renderer, Sequence};
+use crtsim_media::{Options, Video};
 use eframe::egui;
 use image::RgbaImage;
 use std::{
-    path::PathBuf,
-    sync::{atomic::AtomicBool, mpsc, Arc, Mutex},
-    time::Instant,
+    collections::VecDeque,
+    panic::AssertUnwindSafe,
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc, Mutex,
+    },
+    time::{Duration, Instant},
 };
 
 /// Where the worker's renderer gets its device.
@@ -24,7 +31,7 @@ pub enum Gpu {
 static BUILDING: Mutex<()> = Mutex::new(());
 
 impl Gpu {
-    fn renderer(&self) -> anyhow::Result<Renderer> {
+    fn renderer(&self) -> Result<Renderer> {
         let _building = BUILDING
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -47,75 +54,79 @@ impl Gpu {
     }
 }
 
+/// A thread's renderer: made when a job first needs one, and made again after a driver fails.
+struct Graphics {
+    gpu: Gpu,
+    renderer: Option<Renderer>,
+}
+
+impl Graphics {
+    fn new(gpu: Gpu) -> Self {
+        Self {
+            gpu,
+            renderer: None,
+        }
+    }
+
+    /// The renderer, made on first use. `starting` is told when it is being made, which takes
+    /// a moment.
+    fn renderer(&mut self, starting: impl FnOnce()) -> Result<&Renderer> {
+        if self.renderer.is_none() {
+            starting();
+            self.renderer = Some(self.gpu.renderer()?);
+        }
+        Ok(self.renderer.as_ref().expect("made above"))
+    }
+
+    /// Runs `work`, turning a panic -- a graphics driver failing under it -- into the error
+    /// `failure` and dropping the renderer it may have broken, so the next job makes a new one.
+    /// The job is lost; the settings stay usable.
+    fn guard<T>(&mut self, failure: &str, work: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        let this = &mut *self;
+        std::panic::catch_unwind(AssertUnwindSafe(|| work(this))).unwrap_or_else(|_| {
+            self.renderer = None;
+            Err(anyhow::anyhow!("{failure}"))
+        })
+    }
+}
+
+const STILL_FAILED: &str = "Graphics driver failed. Try a smaller resolution or restart with \
+                            another --backend. Settings are still available to save.";
+
 /// Where the interface sends work. Previews have a thread of their own, so they keep coming
 /// while an export holds the other one for minutes: a preview queued behind an export used to
 /// wait for all of it, and settings edited meanwhile could not be seen until it finished.
 #[derive(Clone)]
 pub struct Jobs {
     work: mpsc::Sender<Job>,
-    preview: mpsc::Sender<Job>,
+    preview: mpsc::Sender<PreviewJob>,
 }
 /// A job could not be sent because its worker has stopped.
 #[derive(Debug)]
 pub struct Stopped;
 impl Jobs {
     pub fn send(&self, job: Job) -> Result<(), Stopped> {
-        match job {
-            Job::Preview { .. } | Job::Thumbnail { .. } => self.preview.send(job),
-            Job::Shutdown => {
-                let _ = self.preview.send(Job::Shutdown);
-                self.work.send(job)
-            }
-            job => self.work.send(job),
-        }
-        .map_err(|_| Stopped)
+        self.work.send(job).map_err(|_| Stopped)
     }
-    /// Both threads' jobs on one channel, for a test to inspect what the interface sends.
+    pub fn preview(&self, job: PreviewJob) -> Result<(), Stopped> {
+        self.preview.send(job).map_err(|_| Stopped)
+    }
+    /// Asks both threads to stop once their current job is done.
+    pub fn shutdown(&self) {
+        let _ = self.preview.send(PreviewJob::Shutdown);
+        let _ = self.work.send(Job::Shutdown);
+    }
+    /// Channels in place of the threads, for a test to inspect what the interface sends.
     #[cfg(test)]
-    pub fn capture(send: mpsc::Sender<Job>) -> Self {
-        Self {
-            work: send.clone(),
-            preview: send,
-        }
+    pub fn capture() -> (Self, mpsc::Receiver<Job>, mpsc::Receiver<PreviewJob>) {
+        let (work, jobs) = mpsc::channel();
+        let (preview, previews) = mpsc::channel();
+        (Self { work, preview }, jobs, previews)
     }
 }
 
-pub enum Job {
-    Playback {
-        video: crtsim_media::Video,
-        start: f64,
-        config: Config,
-        options: crtsim_media::Options,
-        cancel: Arc<AtomicBool>,
-        frames: mpsc::SyncSender<Result<PlaybackFrame, String>>,
-    },
-    Batch {
-        source: PathBuf,
-        config: Config,
-        options: crtsim_media::Options,
-        path: PathBuf,
-        cancel: Arc<AtomicBool>,
-    },
-    Shutdown,
-    Load(PathBuf),
-    ImportPreset {
-        path: PathBuf,
-        input: (u32, u32),
-        cancel: Arc<AtomicBool>,
-    },
-    LoadVideo {
-        path: PathBuf,
-        frame: u64,
-        cached: Option<(crtsim_media::Video, u64)>,
-        cancel: Arc<AtomicBool>,
-    },
-    ExportVideo {
-        video: crtsim_media::Video,
-        options: crtsim_media::Options,
-        config: Config,
-        path: PathBuf,
-        cancel: Arc<AtomicBool>,
-    },
+/// Work for the preview thread.
+pub enum PreviewJob {
     Preview {
         revision: u64,
         input: Arc<RgbaImage>,
@@ -129,12 +140,53 @@ pub enum Job {
         input: Arc<RgbaImage>,
         look: Look,
     },
+    Shutdown,
+}
+
+/// Work for the other thread: loading, exports, batches and playback, one at a time.
+pub enum Job {
+    Load(PathBuf),
+    LoadVideo {
+        path: PathBuf,
+        frame: u64,
+        /// The video and its frame count, when a frame of the one already open is wanted.
+        cached: Option<(Video, u64)>,
+        cancel: Arc<AtomicBool>,
+    },
+    ImportPreset {
+        path: PathBuf,
+        input: (u32, u32),
+        cancel: Arc<AtomicBool>,
+    },
     Export {
         input: Arc<RgbaImage>,
         config: Config,
         path: PathBuf,
         cancel: Arc<AtomicBool>,
     },
+    ExportVideo {
+        video: Video,
+        options: Options,
+        config: Config,
+        path: PathBuf,
+        cancel: Arc<AtomicBool>,
+    },
+    Batch {
+        source: PathBuf,
+        config: Config,
+        options: Options,
+        path: PathBuf,
+        cancel: Arc<AtomicBool>,
+    },
+    Playback {
+        video: Video,
+        start: f64,
+        config: Config,
+        options: Options,
+        cancel: Arc<AtomicBool>,
+        frames: mpsc::SyncSender<Result<PlaybackFrame, String>>,
+    },
+    Shutdown,
 }
 /// Which gallery entry a thumbnail belongs to.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -170,22 +222,65 @@ impl Preview {
     }
 }
 
+/// How a cancellable job ended without its result.
+#[derive(Debug)]
+pub enum Failure {
+    /// Stopped on request; nothing went wrong.
+    Cancelled,
+    Failed(String),
+}
+impl Failure {
+    /// A job's error, which is a cancellation when the job had been asked to stop.
+    fn of(error: anyhow::Error, cancel: &AtomicBool) -> Self {
+        if cancel.load(Ordering::Relaxed) {
+            Self::Cancelled
+        } else {
+            Self::Failed(format!("{error:#}"))
+        }
+    }
+}
+pub type Outcome<T> = std::result::Result<T, Failure>;
+
+pub struct LoadedImage {
+    pub path: PathBuf,
+    pub image: RgbaImage,
+    /// The image made opaque and at most 2048 pixels on a side, for showing the original.
+    pub thumbnail: RgbaImage,
+}
+pub struct LoadedVideo {
+    pub video: Video,
+    /// The requested frame, and a thumbnail of it as for an image.
+    pub image: RgbaImage,
+    pub thumbnail: RgbaImage,
+    pub frame: u64,
+    /// How many frames the video decodes to.
+    pub frames: u64,
+}
+pub struct ImportedPreset {
+    pub path: PathBuf,
+    pub config: Config,
+    /// Present for a preset read from a video, which also records how it was encoded.
+    pub options: Option<Options>,
+}
+pub struct Previewed {
+    pub image: Preview,
+    pub seconds: f32,
+}
+
 pub enum Event {
-    Progress {
-        progress: RenderProgress,
-    },
-    Loaded(Result<(PathBuf, RgbaImage, RgbaImage), String>),
-    VideoLoaded(Result<(crtsim_media::Video, RgbaImage, RgbaImage, u64, u64), String>),
-    PresetImported(Result<(PathBuf, Config, Option<crtsim_media::Options>), String>),
+    Progress(RenderProgress),
+    Loaded(std::result::Result<LoadedImage, String>),
+    VideoLoaded(Outcome<LoadedVideo>),
+    PresetImported(Outcome<ImportedPreset>),
     Preview {
         revision: u64,
-        result: Result<(Preview, f32), String>,
+        result: std::result::Result<Previewed, String>,
     },
-    Exported(Result<PathBuf, String>),
+    Exported(Outcome<PathBuf>),
     Thumbnail {
         generation: u64,
         key: ThumbnailKey,
-        result: Result<RgbaImage, String>,
+        result: std::result::Result<RgbaImage, String>,
     },
 }
 /// Starts the two worker threads. The handle returned joins both.
@@ -220,11 +315,11 @@ pub fn start(
 fn preview_worker(
     ctx: egui::Context,
     gpu: Gpu,
-    jobs: mpsc::Receiver<Job>,
+    jobs: mpsc::Receiver<PreviewJob>,
     events: mpsc::Sender<Event>,
 ) {
-    let mut renderer: Option<Renderer> = None;
-    let mut backlog = std::collections::VecDeque::new();
+    let mut graphics = Graphics::new(gpu);
+    let mut backlog = VecDeque::new();
     loop {
         // Collect everything waiting, blocking only when there is nothing to do.
         if backlog.is_empty() {
@@ -235,42 +330,46 @@ fn preview_worker(
         }
         backlog.extend(jobs.try_iter());
         let Some(job) = next_job(&mut backlog) else {
-            return;
+            continue;
         };
         let event = match job {
-            Job::Preview {
+            PreviewJob::Shutdown => return,
+            PreviewJob::Preview {
                 revision,
                 input,
                 config,
             } => {
                 let started = Instant::now();
-                let result = preview(&mut renderer, &gpu, &input, &config)
-                    .map(|p| (p, started.elapsed().as_secs_f32()));
+                let result = preview(&mut graphics, &input, &config)
+                    .map(|image| Previewed {
+                        image,
+                        seconds: started.elapsed().as_secs_f32(),
+                    })
+                    .map_err(|e| format!("{e:#}"));
                 Event::Preview { revision, result }
             }
-            Job::Thumbnail {
+            PreviewJob::Thumbnail {
                 generation,
                 key,
                 input,
                 look,
             } => {
                 let result = match look {
-                    Look::Crt(config) => render(&mut renderer, &gpu, &input, &config, None, |_| {}),
-                    Look::Lut(index) => crtsim_core::nes_luts::load(index)
-                        .map(|lut| {
-                            let mut image = (*input).clone();
-                            lut.apply(&mut image);
-                            image
-                        })
-                        .map_err(|e| format!("{e:#}")),
+                    Look::Crt(config) => {
+                        graphics.guard(STILL_FAILED, |g| still(g, &input, &config, None, |_| {}))
+                    }
+                    Look::Lut(index) => nes_luts::load(index).map(|lut| {
+                        let mut image = (*input).clone();
+                        lut.apply(&mut image);
+                        image
+                    }),
                 };
                 Event::Thumbnail {
                     generation,
                     key,
-                    result,
+                    result: result.map_err(|e| format!("{e:#}")),
                 }
             }
-            _ => return,
         };
         if events.send(event).is_err() {
             return;
@@ -279,25 +378,30 @@ fn preview_worker(
     }
 }
 
-/// The preview thread's next job: shutdown first, then the preview someone is waiting to see,
-/// then thumbnails in the order asked for, skipping any whose source has since been replaced.
-fn next_job(backlog: &mut std::collections::VecDeque<Job>) -> Option<Job> {
-    if backlog.iter().any(|job| matches!(job, Job::Shutdown)) {
-        return None;
+/// The preview thread's next job: shutdown before anything, then the preview someone is
+/// waiting to see, then thumbnails in the order asked for, skipping any whose source has since
+/// been replaced.
+fn next_job(backlog: &mut VecDeque<PreviewJob>) -> Option<PreviewJob> {
+    if backlog
+        .iter()
+        .any(|job| matches!(job, PreviewJob::Shutdown))
+    {
+        backlog.clear();
+        return Some(PreviewJob::Shutdown);
     }
     let newest = backlog
         .iter()
         .filter_map(|job| match job {
-            Job::Thumbnail { generation, .. } => Some(*generation),
+            PreviewJob::Thumbnail { generation, .. } => Some(*generation),
             _ => None,
         })
         .max();
-    backlog.retain(
-        |job| !matches!(job, Job::Thumbnail { generation, .. } if Some(*generation) < newest),
-    );
+    backlog.retain(|job| {
+        !matches!(job, PreviewJob::Thumbnail { generation, .. } if Some(*generation) < newest)
+    });
     match backlog
         .iter()
-        .position(|job| matches!(job, Job::Preview { .. }))
+        .position(|job| matches!(job, PreviewJob::Preview { .. }))
     {
         Some(index) => backlog.remove(index),
         None => backlog.pop_front(),
@@ -306,7 +410,11 @@ fn next_job(backlog: &mut std::collections::VecDeque<Job>) -> Option<Job> {
 
 /// Everything but previews: loading, exports, batches and playback, one at a time.
 fn work(ctx: egui::Context, gpu: Gpu, jobs: mpsc::Receiver<Job>, events: mpsc::Sender<Event>) {
-    let mut renderer: Option<Renderer> = None;
+    let mut graphics = Graphics::new(gpu);
+    let progress = |progress: RenderProgress| {
+        let _ = events.send(Event::Progress(progress));
+        ctx.request_repaint();
+    };
     while let Ok(job) = jobs.recv() {
         let event = match job {
             Job::Shutdown => break,
@@ -318,165 +426,46 @@ fn work(ctx: egui::Context, gpu: Gpu, jobs: mpsc::Receiver<Job>, events: mpsc::S
                 cancel,
                 frames,
             } => {
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-                    || -> anyhow::Result<()> {
-                        if renderer.is_none() {
-                            renderer = Some(gpu.renderer()?);
-                        }
-                        crtsim_media::playback(
-                            &video,
-                            start,
-                            &config,
-                            &options,
-                            renderer.as_ref().unwrap(),
-                            &cancel,
-                            |time, source, crt| {
-                                let mut item = Ok(PlaybackFrame { time, source, crt });
-                                loop {
-                                    anyhow::ensure!(
-                                        !cancel.load(std::sync::atomic::Ordering::Relaxed),
-                                        "Playback cancelled"
-                                    );
-                                    match frames.try_send(item) {
-                                        Ok(()) => {
-                                            ctx.request_repaint();
-                                            return Ok(());
-                                        }
-                                        Err(mpsc::TrySendError::Full(back)) => {
-                                            item = back;
-                                            std::thread::sleep(std::time::Duration::from_millis(5));
-                                        }
-                                        Err(mpsc::TrySendError::Disconnected(_)) => {
-                                            anyhow::bail!("Playback stopped")
-                                        }
-                                    }
-                                }
-                            },
-                        )
-                    },
-                ));
-                let error = match result {
-                    Ok(Ok(())) => None,
-                    Ok(Err(e)) => Some(format!("{e:#}")),
-                    Err(_) => {
-                        renderer = None;
-                        Some("Playback graphics driver failed".into())
-                    }
-                };
-                if let Some(error) = error {
-                    // Keep the terminal error behind already buffered frames without blocking shutdown.
-                    while !cancel.load(std::sync::atomic::Ordering::Relaxed) {
-                        match frames.try_send(Err(error.clone())) {
-                            Err(mpsc::TrySendError::Full(_)) => {
-                                std::thread::sleep(std::time::Duration::from_millis(5))
-                            }
-                            _ => break,
-                        }
-                    }
-                }
-                ctx.request_repaint();
+                play(
+                    &mut graphics,
+                    &ctx,
+                    &video,
+                    start,
+                    &config,
+                    &options,
+                    &cancel,
+                    &frames,
+                );
                 continue;
             }
-            Job::Batch {
-                source,
-                config,
-                options,
-                path,
-                cancel,
-            } => {
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-                    || -> Result<PathBuf, String> {
-                        if crtsim_media::is_video(&source) {
-                            let video = crtsim_media::probe(&source, &cancel)
-                                .map_err(|e| format!("{e:#}"))?;
-                            if renderer.is_none() {
-                                renderer = Some(gpu.renderer().map_err(|e| format!("{e:#}"))?);
-                            }
-                            crtsim_media::export(
-                                &video,
-                                &path,
-                                &config,
-                                &options,
-                                renderer.as_ref().unwrap(),
-                                &cancel,
-                                |p| {
-                                    let _ = events.send(Event::Progress {
-                                        progress: RenderProgress {
-                                            fraction: p.fraction,
-                                            stage: p.stage,
-                                        },
-                                    });
-                                    ctx.request_repaint();
-                                },
-                            )
-                            .map_err(|e| format!("{e:#}"))?;
-                        } else {
-                            let input = crtsim_core::input::load_image(&source)
-                                .map_err(|e| format!("{e:#}"))?;
-                            let im =
-                                render(&mut renderer, &gpu, &input, &config, Some(&cancel), |p| {
-                                    let _ = events.send(Event::Progress { progress: p });
-                                    ctx.request_repaint();
-                                })?;
-                            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-                                return Err("Export cancelled".into());
-                            }
-                            files::save_png(&path, im, Some(&config))
-                                .map_err(|e| format!("{e:#}"))?;
-                        }
-                        Ok(path)
-                    },
-                ));
-                Event::Exported(match result {
-                    Ok(result) => result,
-                    Err(_) => {
-                        renderer = None;
-                        Err("Batch graphics driver failed. Try a smaller resolution.".into())
-                    }
-                })
-            }
-            Job::ImportPreset {
-                path,
-                input,
-                cancel,
-            } => Event::PresetImported(
-                (|| -> anyhow::Result<_> {
-                    if path
-                        .extension()
-                        .is_some_and(|e| e.eq_ignore_ascii_case("png"))
-                    {
-                        let config = files::load_preset_from_image(&path, input)?;
-                        Ok((path, config, None))
-                    } else {
-                        let preset = crtsim_media::import_preset(&path, input, &cancel)?;
-                        Ok((path, preset.config, Some(preset.video_options)))
-                    }
-                })()
-                .map_err(|e| format!("{e:#}")),
-            ),
+            Job::Load(path) => Event::Loaded(load_image(path).map_err(|e| format!("{e:#}"))),
             Job::LoadVideo {
                 path,
                 frame,
                 cached,
                 cancel,
             } => Event::VideoLoaded(
-                (|| -> anyhow::Result<_> {
-                    let (video, count) = match cached {
-                        Some(cached) => cached,
-                        None => {
-                            let video = crtsim_media::probe(&path, &cancel)?;
-                            let count = crtsim_media::frame_count(&video, &cancel)?;
-                            (video, count)
-                        }
-                    };
-                    anyhow::ensure!(frame < count, "Frame is outside the video");
-                    let image = crtsim_media::preview_frame(&video, frame, &cancel)?;
-                    let thumb = image::DynamicImage::ImageRgba8(image.clone())
-                        .thumbnail(2048, 2048)
-                        .to_rgba8();
-                    Ok((video, image, thumb, frame, count))
-                })()
-                .map_err(|e| format!("{e:#}")),
+                load_video(&path, frame, cached, &cancel).map_err(|e| Failure::of(e, &cancel)),
+            ),
+            Job::ImportPreset {
+                path,
+                input,
+                cancel,
+            } => Event::PresetImported(
+                import_preset(path, input, &cancel).map_err(|e| Failure::of(e, &cancel)),
+            ),
+            Job::Export {
+                input,
+                config,
+                path,
+                cancel,
+            } => Event::Exported(
+                graphics
+                    .guard(STILL_FAILED, |g| {
+                        export_image(g, &input, &config, &path, &cancel, &progress)
+                    })
+                    .map(|()| path)
+                    .map_err(|e| Failure::of(e, &cancel)),
             ),
             Job::ExportVideo {
                 video,
@@ -484,88 +473,39 @@ fn work(ctx: egui::Context, gpu: Gpu, jobs: mpsc::Receiver<Job>, events: mpsc::S
                 config,
                 path,
                 cancel,
-            } => {
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-                    || -> anyhow::Result<_> {
-                        if renderer.is_none() {
-                            renderer = Some(gpu.renderer()?);
-                        }
-                        crtsim_media::export(
-                            &video,
-                            &path,
-                            &config,
-                            &options,
-                            renderer.as_ref().unwrap(),
-                            &cancel,
-                            |p| {
-                                let _ = events.send(Event::Progress {
-                                    progress: RenderProgress {
-                                        fraction: p.fraction,
-                                        stage: p.stage,
-                                    },
-                                });
-                                ctx.request_repaint();
-                            },
-                        )?;
-                        Ok(path)
-                    },
-                ));
-                Event::Exported(match result {
-                    Ok(result) => result.map_err(|e| format!("{e:#}")),
-                    Err(_) => {
-                        renderer = None;
-                        Err("Video graphics driver failed. Try a smaller resolution.".into())
-                    }
-                })
-            }
-            Job::Load(path) => Event::Loaded(
-                crtsim_core::input::load_image(&path)
-                    .map(|im| {
-                        // Keep thumbnail processing off the UI thread, including alpha before resizing.
-                        let mut opaque = im.clone();
-                        crtsim_core::config::flatten_alpha(&mut opaque, [0; 3]);
-                        let thumb = image::DynamicImage::ImageRgba8(opaque)
-                            .thumbnail(2048, 2048)
-                            .to_rgba8();
-                        (path, im, thumb)
-                    })
-                    .map_err(|e| format!("{e:#}")),
+            } => Event::Exported(
+                graphics
+                    .guard(
+                        "Video graphics driver failed. Try a smaller resolution.",
+                        |g| export_video(g, &video, &config, &options, &path, &cancel, &progress),
+                    )
+                    .map(|()| path)
+                    .map_err(|e| Failure::of(e, &cancel)),
             ),
-            Job::Preview { .. } | Job::Thumbnail { .. } => {
-                unreachable!("previews and thumbnails are routed to their own thread")
-            }
-            Job::Export {
-                input,
+            Job::Batch {
+                source,
                 config,
+                options,
                 path,
                 cancel,
             } => Event::Exported(
-                render(
-                    &mut renderer,
-                    &gpu,
-                    &input,
-                    &config,
-                    Some(&cancel),
-                    |mut progress| {
-                        progress.fraction *= 0.9;
-                        let _ = events.send(Event::Progress { progress });
-                        ctx.request_repaint();
-                    },
-                )
-                .and_then(|im| {
-                    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-                        return Err("Render cancelled".into());
-                    }
-                    let _ = events.send(Event::Progress {
-                        progress: RenderProgress {
-                            fraction: 0.95,
-                            stage: "Encoding and saving PNG".into(),
+                graphics
+                    .guard(
+                        "Batch graphics driver failed. Try a smaller resolution.",
+                        |g| {
+                            if crtsim_media::is_video(&source) {
+                                let video = crtsim_media::probe(&source, &cancel)?;
+                                export_video(
+                                    g, &video, &config, &options, &path, &cancel, &progress,
+                                )
+                            } else {
+                                let input = crtsim_core::input::load_image(&source)?;
+                                export_image(g, &input, &config, &path, &cancel, &progress)
+                            }
                         },
-                    });
-                    ctx.request_repaint();
-                    files::save_png(&path, im, Some(&config)).map_err(|e| format!("{e:#}"))
-                })
-                .map(|_| path),
+                    )
+                    .map(|()| path)
+                    .map_err(|e| Failure::of(e, &cancel)),
             ),
         };
         if events.send(event).is_err() {
@@ -574,74 +514,207 @@ fn work(ctx: egui::Context, gpu: Gpu, jobs: mpsc::Receiver<Job>, events: mpsc::S
         ctx.request_repaint();
     }
 }
-/// A frame for the screen. On the interface's own device it is left there; otherwise it is
-/// read back, which is what the interface then has to upload again.
-fn preview(
-    renderer: &mut Option<Renderer>,
-    gpu: &Gpu,
-    input: &RgbaImage,
-    c: &Config,
-) -> Result<Preview, String> {
-    if gpu.render_state().is_none() {
-        return render(renderer, gpu, input, c, None, |_| {}).map(Preview::Pixels);
-    }
-    // Surface backend validation/device errors in the window, leaving settings usable.
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> anyhow::Result<_> {
-        if renderer.is_none() {
-            *renderer = Some(gpu.renderer()?);
+
+fn load_image(path: PathBuf) -> Result<LoadedImage> {
+    let image = crtsim_core::input::load_image(&path)?;
+    // Keep thumbnail processing off the UI thread, including alpha before resizing.
+    let mut opaque = image.clone();
+    crtsim_core::config::flatten_alpha(&mut opaque, [0; 3]);
+    let thumbnail = image::DynamicImage::ImageRgba8(opaque)
+        .thumbnail(2048, 2048)
+        .to_rgba8();
+    Ok(LoadedImage {
+        path,
+        image,
+        thumbnail,
+    })
+}
+
+fn load_video(
+    path: &Path,
+    frame: u64,
+    cached: Option<(Video, u64)>,
+    cancel: &Arc<AtomicBool>,
+) -> Result<LoadedVideo> {
+    let (video, frames) = match cached {
+        Some(cached) => cached,
+        None => {
+            let video = crtsim_media::probe(path, cancel)?;
+            let frames = crtsim_media::frame_count(&video, cancel)?;
+            (video, frames)
         }
-        renderer.as_ref().unwrap().render_preview(input, c)
-    }));
-    match result {
-        Ok(Ok(frame)) => Ok(Preview::Frame(frame)),
-        Ok(Err(e)) => Err(format!("{e:#}")),
-        Err(_) => {
-            *renderer = None;
-            Err("Graphics device failed while rendering the preview".into())
-        }
+    };
+    ensure!(frame < frames, "Frame is outside the video");
+    let image = crtsim_media::preview_frame(&video, frame, cancel)?;
+    let thumbnail = image::DynamicImage::ImageRgba8(image.clone())
+        .thumbnail(2048, 2048)
+        .to_rgba8();
+    Ok(LoadedVideo {
+        video,
+        image,
+        thumbnail,
+        frame,
+        frames,
+    })
+}
+
+fn import_preset(
+    path: PathBuf,
+    input: (u32, u32),
+    cancel: &Arc<AtomicBool>,
+) -> Result<ImportedPreset> {
+    if path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("png"))
+    {
+        let config = files::load_preset_from_image(&path, input)?;
+        Ok(ImportedPreset {
+            path,
+            config,
+            options: None,
+        })
+    } else {
+        let preset = crtsim_media::import_preset(&path, input, cancel)?;
+        Ok(ImportedPreset {
+            path,
+            config: preset.config,
+            options: Some(preset.video_options),
+        })
     }
 }
 
-fn render(
-    renderer: &mut Option<Renderer>,
-    gpu: &Gpu,
+/// A still from fresh history on this thread's renderer.
+fn still(
+    graphics: &mut Graphics,
     input: &RgbaImage,
     c: &Config,
     cancel: Option<&AtomicBool>,
     mut progress: impl FnMut(RenderProgress),
-) -> Result<RgbaImage, String> {
-    // Surface backend validation/device errors in the window, leaving settings usable.
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> anyhow::Result<_> {
-        if renderer.is_none() {
-            progress(RenderProgress {
-                fraction: 0.,
-                stage: "Initializing graphics device".into(),
-            });
-            *renderer = Some(gpu.renderer()?);
+) -> Result<RgbaImage> {
+    let renderer = graphics.renderer(|| {
+        progress(RenderProgress {
+            fraction: 0.,
+            stage: "Initializing graphics device".into(),
+        })
+    })?;
+    renderer.render_frame(input, c, &mut Sequence::default(), cancel, progress)
+}
+
+/// A frame for the screen. On the interface's own device it is left there; otherwise it is
+/// read back, which is what the interface then has to upload again.
+fn preview(graphics: &mut Graphics, input: &RgbaImage, c: &Config) -> Result<Preview> {
+    graphics.guard("Graphics device failed while rendering the preview", |g| {
+        if g.gpu.render_state().is_none() {
+            return still(g, input, c, None, |_| {}).map(Preview::Pixels);
         }
-        renderer.as_ref().unwrap().render_frame(
-            input,
-            c,
-            &mut Sequence::default(),
+        g.renderer(|| {})?
+            .render_preview(input, c)
+            .map(Preview::Frame)
+    })
+}
+
+/// A still at full resolution, saved as a PNG that carries its settings.
+fn export_image(
+    graphics: &mut Graphics,
+    input: &RgbaImage,
+    config: &Config,
+    path: &Path,
+    cancel: &AtomicBool,
+    progress: &dyn Fn(RenderProgress),
+) -> Result<()> {
+    let image = still(graphics, input, config, Some(cancel), |mut stage| {
+        stage.fraction *= 0.9;
+        progress(stage);
+    })?;
+    ensure!(!cancel.load(Ordering::Relaxed), "Render cancelled");
+    progress(RenderProgress {
+        fraction: 0.95,
+        stage: "Encoding and saving PNG".into(),
+    });
+    files::save_png(path, image, Some(config))
+}
+
+/// A whole video rendered and encoded, with its audio and other tracks.
+fn export_video(
+    graphics: &mut Graphics,
+    video: &Video,
+    config: &Config,
+    options: &Options,
+    path: &Path,
+    cancel: &Arc<AtomicBool>,
+    progress: &dyn Fn(RenderProgress),
+) -> Result<()> {
+    let renderer = graphics.renderer(|| {})?;
+    crtsim_media::export(video, path, config, options, renderer, cancel, |p| {
+        progress(RenderProgress {
+            fraction: p.fraction,
+            stage: p.stage,
+        })
+    })
+}
+
+/// Streams rendered frames of `video` into `frames`, which the interface plays from. An error
+/// is queued behind the frames already there, unless playback has been stopped meanwhile.
+#[allow(clippy::too_many_arguments)]
+fn play(
+    graphics: &mut Graphics,
+    ctx: &egui::Context,
+    video: &Video,
+    start: f64,
+    config: &Config,
+    options: &Options,
+    cancel: &Arc<AtomicBool>,
+    frames: &mpsc::SyncSender<std::result::Result<PlaybackFrame, String>>,
+) {
+    let played = graphics.guard("Playback graphics driver failed", |g| {
+        let renderer = g.renderer(|| {})?;
+        crtsim_media::playback(
+            video,
+            start,
+            config,
+            options,
+            renderer,
             cancel,
-            &mut progress,
+            |time, source, crt| {
+                let mut item = Ok(PlaybackFrame { time, source, crt });
+                loop {
+                    ensure!(!cancel.load(Ordering::Relaxed), "Playback cancelled");
+                    match frames.try_send(item) {
+                        Ok(()) => {
+                            ctx.request_repaint();
+                            return Ok(());
+                        }
+                        Err(mpsc::TrySendError::Full(back)) => {
+                            item = back;
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(mpsc::TrySendError::Disconnected(_)) => {
+                            anyhow::bail!("Playback stopped")
+                        }
+                    }
+                }
+            },
         )
-    }));
-    match result {
-        Ok(v) => v.map_err(|e| format!("{e:#}")),
-        Err(_) => {
-            *renderer = None;
-            Err("Graphics driver failed. Try a smaller resolution or restart with another --backend. Settings are still available to save.".into())
+    });
+    if let Err(error) = played {
+        let error = format!("{error:#}");
+        // Keep the terminal error behind already buffered frames without blocking shutdown.
+        while !cancel.load(Ordering::Relaxed) {
+            match frames.try_send(Err(error.clone())) {
+                Err(mpsc::TrySendError::Full(_)) => std::thread::sleep(Duration::from_millis(5)),
+                _ => break,
+            }
         }
     }
+    ctx.request_repaint();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn thumbnail(generation: u64, index: usize) -> Job {
-        Job::Thumbnail {
+    fn thumbnail(generation: u64, index: usize) -> PreviewJob {
+        PreviewJob::Thumbnail {
             generation,
             key: ThumbnailKey::Lut(index),
             input: Arc::new(RgbaImage::new(1, 1)),
@@ -651,10 +724,10 @@ mod tests {
 
     #[test]
     fn a_preview_goes_before_thumbnails_and_stale_thumbnails_are_dropped() {
-        let mut backlog: std::collections::VecDeque<Job> = [
+        let mut backlog: VecDeque<PreviewJob> = [
             thumbnail(1, 0),
             thumbnail(1, 1),
-            Job::Preview {
+            PreviewJob::Preview {
                 revision: 3,
                 input: Arc::new(RgbaImage::new(1, 1)),
                 config: Config::default(),
@@ -664,19 +737,20 @@ mod tests {
         .into();
         assert!(matches!(
             next_job(&mut backlog),
-            Some(Job::Preview { revision: 3, .. })
+            Some(PreviewJob::Preview { revision: 3, .. })
         ));
         // The source changed after the first two were asked for: only the newer one is left.
         assert!(matches!(
             next_job(&mut backlog),
-            Some(Job::Thumbnail { generation: 2, .. })
+            Some(PreviewJob::Thumbnail { generation: 2, .. })
         ));
         assert!(next_job(&mut backlog).is_none());
-        backlog.extend([thumbnail(3, 0), Job::Shutdown]);
+        backlog.extend([thumbnail(3, 0), PreviewJob::Shutdown]);
         assert!(
-            next_job(&mut backlog).is_none(),
+            matches!(next_job(&mut backlog), Some(PreviewJob::Shutdown)),
             "shutdown is never kept waiting"
         );
+        assert!(backlog.is_empty());
     }
 
     /// The point of the second thread: a preview finishes while an export is still running,
@@ -701,7 +775,7 @@ mod tests {
             cancel: cancel.clone(),
         })
         .unwrap();
-        jobs.send(Job::Preview {
+        jobs.preview(PreviewJob::Preview {
             revision: 7,
             input,
             config: Config {
@@ -711,30 +785,33 @@ mod tests {
             },
         })
         .unwrap();
-        let timeout = std::time::Duration::from_secs(120);
+        let timeout = Duration::from_secs(120);
         loop {
             match events.recv_timeout(timeout).expect("worker stalled") {
-                Event::Progress { .. } => continue,
+                Event::Progress(_) => continue,
                 Event::Preview { revision, result } => {
                     assert_eq!(revision, 7);
-                    result.expect("preview");
+                    assert!(result.is_ok(), "preview failed");
                     break;
                 }
                 Event::Exported(_) => panic!("the export finished before the preview"),
                 _ => panic!("unexpected event"),
             }
         }
-        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        cancel.store(true, Ordering::Relaxed);
         loop {
             match events.recv_timeout(timeout).expect("worker stalled") {
                 Event::Exported(result) => {
-                    assert!(result.is_err(), "export should have been cancelled");
+                    assert!(
+                        matches!(result, Err(Failure::Cancelled)),
+                        "export should have been cancelled"
+                    );
                     break;
                 }
                 _ => continue,
             }
         }
-        jobs.send(Job::Shutdown).unwrap();
+        jobs.shutdown();
         thread.join().unwrap();
     }
 }
