@@ -11,7 +11,7 @@ mod worker;
 mod workflow;
 
 use crtsim_core::config::{self, ColorMode, Config, Filter, Fit, Phase};
-use crtsim_core::RenderProgress;
+use crtsim_core::{settings, RenderProgress};
 use eframe::egui::{self, TextureHandle};
 use image::RgbaImage;
 use std::{
@@ -904,278 +904,171 @@ impl App {
         let before = self.config.clone();
         // What each slider's reset returns to: the same baseline as Reset above.
         let defaults = Config::general();
-        chrome::Section::new("Image & output").show(ui,|ui| {
-        resolution(
-            ui,
-            "Signal",
-            &mut self.config.signal,
-            &[
-                "auto", "native", "original", "240p", "288p", "360p", "480p", "576p",
-            ],
-        );
-        resolution(
-            ui,
-            "Export size",
-            &mut self.config.output,
-            &["720p", "1080p", "1440p", "4k", "reference", "match-input"],
-        );
-        egui::ComboBox::from_label("Fit on 4:3 tube")
-            .selected_text(format!("{:?}", self.config.fit))
-            .show_ui(ui, |ui| {
-                for (value, name) in [
-                    (Fit::Contain, "Contain"),
-                    (Fit::Cover, "Cover (crop)"),
-                    (Fit::Stretch, "Stretch"),
-                    (Fit::Reference, "Reference"),
-                ] {
-                    ui.selectable_value(&mut self.config.fit, value, name);
+        chrome::Section::new("Image & output").show(ui, |ui| {
+            resolution(
+                ui,
+                "Signal",
+                &mut self.config.signal,
+                &[
+                    "auto", "native", "original", "240p", "288p", "360p", "480p", "576p",
+                ],
+            );
+            resolution(
+                ui,
+                "Export size",
+                &mut self.config.output,
+                &["720p", "1080p", "1440p", "4k", "reference", "match-input"],
+            );
+            egui::ComboBox::from_label("Fit on 4:3 tube")
+                .selected_text(format!("{:?}", self.config.fit))
+                .show_ui(ui, |ui| {
+                    for (value, name) in [
+                        (Fit::Contain, "Contain"),
+                        (Fit::Cover, "Cover (crop)"),
+                        (Fit::Stretch, "Stretch"),
+                        (Fit::Reference, "Reference"),
+                    ] {
+                        ui.selectable_value(&mut self.config.fit, value, name);
+                    }
+                });
+            egui::ComboBox::from_label("Resize filter")
+                .selected_text(format!("{:?}", self.config.filter))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut self.config.filter,
+                        Filter::Lanczos,
+                        "Lanczos (smooth)",
+                    );
+                    ui.selectable_value(
+                        &mut self.config.filter,
+                        Filter::Nearest,
+                        "Nearest (pixel art)",
+                    );
+                });
+            numbers(ui, &mut self.config, &defaults, settings::Section::Image);
+            if let (Ok(signal), Ok(output)) = (
+                self.config.signal_size(self.input.dimensions()),
+                self.config.output_size(self.input.dimensions()),
+            ) {
+                ui.small(format!(
+                    "Signal: {} × {} → Output: {} × {}",
+                    signal.0, signal.1, output.0, output.1
+                ));
+                if output.0 as u64 * output.1 as u64 > 8_300_000 {
+                    ui.colored_label(
+                        ui.visuals().warn_fg_color,
+                        "Large output: more memory and rendering time.",
+                    );
                 }
-            });
-        egui::ComboBox::from_label("Resize filter")
-            .selected_text(format!("{:?}", self.config.filter))
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut self.config.filter, Filter::Lanczos, "Lanczos (smooth)");
-                ui.selectable_value(
-                    &mut self.config.filter,
-                    Filter::Nearest,
-                    "Nearest (pixel art)",
-                );
-            });
-        slider(ui, "Pixel aspect", &mut self.config.pixel_aspect, defaults.pixel_aspect, 0.1..=10.);
-        if let (Ok(signal), Ok(output)) = (
-            self.config.signal_size(self.input.dimensions()),
-            self.config.output_size(self.input.dimensions()),
-        ) {
-            ui.small(format!(
-                "Signal: {} × {} → Output: {} × {}",
-                signal.0, signal.1, output.0, output.1
-            ));
-            if output.0 as u64 * output.1 as u64 > 8_300_000 {
+            } else {
                 ui.colored_label(
                     ui.visuals().warn_fg_color,
-                    "Large output: more memory and rendering time.",
+                    "Choose a preset or enter a valid WIDTHxHEIGHT.",
                 );
             }
-        } else {
-            ui.colored_label(
-                ui.visuals().warn_fg_color,
-                "Choose a preset or enter a valid WIDTHxHEIGHT.",
+            if matches!(self.config.fit, Fit::Cover | Fit::Reference) || self.config.overscan > 1. {
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    "Current fit/overscan can crop content and subtitles.",
+                );
+            }
+            ui.small(
+                "Rounded glass may hide extreme corners even with Contain. Alpha uses the \
+                 selected background. SDR output; no ICC color management.",
             );
-        }
-        if matches!(self.config.fit, Fit::Cover | Fit::Reference) || self.config.overscan > 1. {
-            ui.colored_label(
-                ui.visuals().warn_fg_color,
-                "Current fit/overscan can crop content and subtitles.",
-            );
-        }
-        ui.small("Rounded glass may hide extreme corners even with Contain. Alpha uses the selected background. SDR output; no ICC color management.");
-
         });
         self.workflow_settings(ui);
-        chrome::Section::new("Color processing").show(ui,|ui| {
-        egui::ComboBox::from_label("Color processing")
-            .selected_text(match self.config.color_mode {
-                ColorMode::Reference => "Original gamma",
-                ColorMode::LinearLight => "Linear light (experimental)",
-            })
-            .show_ui(ui, |ui| {
-                ui.selectable_value(
-                    &mut self.config.color_mode,
-                    ColorMode::Reference,
-                    "Original gamma",
+        chrome::Section::new("Color processing").show(ui, |ui| {
+            egui::ComboBox::from_label("Color processing")
+                .selected_text(match self.config.color_mode {
+                    ColorMode::Reference => "Original gamma",
+                    ColorMode::LinearLight => "Linear light (experimental)",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut self.config.color_mode,
+                        ColorMode::Reference,
+                        "Original gamma",
+                    );
+                    ui.selectable_value(
+                        &mut self.config.color_mode,
+                        ColorMode::LinearLight,
+                        "Linear light (experimental)",
+                    );
+                });
+            if self.config.color_mode == ColorMode::LinearLight {
+                ui.small(
+                    "Linear-light glass, lighting and bloom; SDR output. The analog signal \
+                     still uses the original gamma-space model.",
                 );
-                ui.selectable_value(
-                    &mut self.config.color_mode,
-                    ColorMode::LinearLight,
-                    "Linear light (experimental)",
+            }
+            chrome::Section::new("Optional color grade").show(ui, |ui| {
+                numbers(ui, &mut self.config, &defaults, settings::Section::Grade);
+                ui.small(
+                    "YIQ hue/chroma adjustment. This is an optional grade, not the game's \
+                     unpublished NES palette LUT or a complete NTSC decoder.",
                 );
             });
-        if self.config.color_mode == ColorMode::LinearLight {
-            ui.small("Linear-light glass, lighting and bloom; SDR output. The analog signal still uses the original gamma-space model.");
-        }
-        chrome::Section::new("Optional color grade").show(ui, |ui| {
-            slider(ui, "Hue (degrees)", &mut self.config.hue, defaults.hue, -180.0..=180.);
-            slider(ui, "Chroma", &mut self.config.chroma, defaults.chroma, 0.0..=2.);
-            ui.small("YIQ hue/chroma adjustment. This is an optional grade, not the game's unpublished NES palette LUT or a complete NTSC decoder.");
-        });
-        ui.checkbox(&mut self.config.mask_antialias, "Filter mask when shrinking").on_hover_text("Mipmapped mask filtering reduces moiré during minification. Turn off for Phase 0/1 reference sampling.");
-
+            ui.checkbox(
+                &mut self.config.mask_antialias,
+                "Filter mask when shrinking",
+            )
+            .on_hover_text(
+                "Mipmapped mask filtering reduces moiré during minification. Turn off for \
+                 Phase 0/1 reference sampling.",
+            );
         });
         ui.separator();
         chrome::Section::new("CRT signal")
             .default_open(true)
             .show(ui, |ui| {
-                slider(
-                    ui,
-                    "Saturation",
-                    &mut self.config.saturation,
-                    defaults.saturation,
-                    0.0..=3.,
-                );
-                slider(
-                    ui,
-                    "Sharpness / ringing",
-                    &mut self.config.sharpness,
-                    defaults.sharpness,
-                    0.0..=3.,
-                );
-                slider(
-                    ui,
-                    "Color bleed",
-                    &mut self.config.bleed,
-                    defaults.bleed,
-                    0.0..=2.,
-                );
-                slider(
-                    ui,
-                    "Composite artifacts",
-                    &mut self.config.artifacts,
-                    defaults.artifacts,
-                    0.0..=2.,
-                );
+                numbers(ui, &mut self.config, &defaults, settings::Section::Signal)
             });
         chrome::Section::new("Glass & mask").show(ui, |ui| {
-            slider(
-                ui,
-                "Barrel distortion",
-                &mut self.config.barrel,
-                defaults.barrel,
-                -2.0..=2.,
-            );
-            slider(
-                ui,
-                "Overscan",
-                &mut self.config.overscan,
-                defaults.overscan,
-                0.1..=3.,
-            );
-            slider(
-                ui,
-                "Mask opacity",
-                &mut self.config.mask_opacity,
-                defaults.mask_opacity,
-                0.0..=1.,
-            );
-            slider(
-                ui,
-                "Mask brightness",
-                &mut self.config.mask_brightness,
-                defaults.mask_brightness,
-                0.0..=2.,
-            );
-            slider(
-                ui,
-                "Mask columns",
-                &mut self.config.mask_repeats[0],
-                defaults.mask_repeats[0],
-                1.0..=16384.,
-            );
-            slider(
-                ui,
-                "Mask rows",
-                &mut self.config.mask_repeats[1],
-                defaults.mask_repeats[1],
-                1.0..=16384.,
-            );
-            slider(
-                ui,
-                "Edge dimming",
-                &mut self.config.dimming,
-                defaults.dimming,
-                0.0..=1.,
-            );
-            slider(
-                ui,
-                "Camera field of view",
-                &mut self.config.fov,
-                defaults.fov,
-                5.0..=90.,
-            );
+            numbers(ui, &mut self.config, &defaults, settings::Section::Glass)
         });
         chrome::Section::new("Bloom & reflections").show(ui, |ui| {
-            slider(
-                ui,
-                "Bloom amount",
-                &mut self.config.bloom,
-                defaults.bloom,
-                0.0..=2.,
-            );
-            slider(
-                ui,
-                "Bloom power",
-                &mut self.config.bloom_power,
-                defaults.bloom_power,
-                0.1..=8.,
-            );
-            slider(
-                ui,
-                "Bloom spread",
-                &mut self.config.bloom_spread,
-                defaults.bloom_spread,
-                0.0..=0.2,
-            );
-            slider(
-                ui,
-                "Edge reflection",
-                &mut self.config.reflection,
-                defaults.reflection,
-                0.0..=2.,
-            );
+            numbers(ui, &mut self.config, &defaults, settings::Section::Bloom)
         });
         chrome::Section::new("Frame & lighting").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Frame color");
-                ui.color_edit_button_rgb(&mut self.config.frame_color);
-            });
-            slider(
-                ui,
-                "Diffuse light",
-                &mut self.config.diffuse,
-                defaults.diffuse,
-                0.0..=2.,
-            );
-            slider(
-                ui,
-                "Specular light",
-                &mut self.config.specular,
-                defaults.specular,
-                0.0..=2.,
-            );
-            slider(
-                ui,
-                "Specular power",
-                &mut self.config.specular_power,
-                defaults.specular_power,
-                1.0..=200.,
-            );
-            slider(
-                ui,
-                "Rim light",
-                &mut self.config.rim,
-                defaults.rim,
-                0.0..=2.,
-            );
-            for (i, name) in ["Light X", "Light Y", "Light Z"].iter().enumerate() {
-                slider(
-                    ui,
-                    name,
-                    &mut self.config.light_position[i],
-                    defaults.light_position[i],
-                    -1000.0..=1000.,
-                );
-            }
+            numbers(ui, &mut self.config, &defaults, settings::Section::Lighting)
         });
         chrome::Section::new("Persistence & artifact phase").show(ui, |ui| {
-            for (i,name) in ["Red persistence","Green persistence","Blue persistence"].iter().enumerate() { slider(ui, name, &mut self.config.persistence[i], defaults.persistence[i], 0.0..=0.999); }
+            numbers(
+                ui,
+                &mut self.config,
+                &defaults,
+                settings::Section::Persistence,
+            );
             ui.horizontal(|ui| {
-                if ui.add_enabled(self.config.warmup != defaults.warmup, egui::Button::new("↺").small()).on_hover_text(format!("Reset Warm-up ticks to {}", defaults.warmup)).clicked() { self.config.warmup = defaults.warmup; }
-                ui.add(egui::Slider::new(&mut self.config.warmup,0..=240).text("Warm-up ticks"));
+                if ui
+                    .add_enabled(
+                        self.config.warmup != defaults.warmup,
+                        egui::Button::new("↺").small(),
+                    )
+                    .on_hover_text(format!("Reset Warm-up ticks to {}", defaults.warmup))
+                    .clicked()
+                {
+                    self.config.warmup = defaults.warmup;
+                }
+                ui.add(egui::Slider::new(&mut self.config.warmup, 0..=240).text("Warm-up ticks"));
             });
-            egui::ComboBox::from_label("Phase").selected_text(format!("{:?}",self.config.phase)).show_ui(ui,|ui| {
-                for phase in [Phase::Stable,Phase::A,Phase::B,Phase::Alternating] { ui.selectable_value(&mut self.config.phase,phase,format!("{phase:?}")); }
-            });
-            ui.checkbox(&mut self.config.interlace, "Interlaced fields").on_hover_text("Each tick scans every other row, alternating fields; the rows it skips only fade by persistence. Use with a 480- or 576-row signal.");
-            ui.small("Each still starts from black. Higher persistence may require more warm-up ticks. Alternating phase depends on tick count.");
+            egui::ComboBox::from_label("Phase")
+                .selected_text(format!("{:?}", self.config.phase))
+                .show_ui(ui, |ui| {
+                    for phase in [Phase::Stable, Phase::A, Phase::B, Phase::Alternating] {
+                        ui.selectable_value(&mut self.config.phase, phase, format!("{phase:?}"));
+                    }
+                });
+            ui.checkbox(&mut self.config.interlace, "Interlaced fields")
+                .on_hover_text(
+                    "Each tick scans every other row, alternating fields; the rows it skips \
+                     only fade by persistence. Use with a 480- or 576-row signal.",
+                );
+            ui.small(
+                "Each still starts from black. Higher persistence may require more warm-up \
+                 ticks. Alternating phase depends on tick count.",
+            );
         });
         if self.config != before {
             self.changed();
@@ -1628,6 +1521,38 @@ impl App {
     }
 }
 
+/// The numeric settings of one section of the panel, in the order `settings::SETTINGS` lists them.
+fn numbers(ui: &mut egui::Ui, config: &mut Config, defaults: &Config, section: settings::Section) {
+    for setting in settings::SETTINGS {
+        let Some(numbers) = setting.numbers.as_ref().filter(|n| n.section == section) else {
+            continue;
+        };
+        let values = (numbers.access.get_mut)(config);
+        match &numbers.control {
+            settings::Control::Slider { span, logarithmic } => {
+                let defaults = (numbers.access.get)(defaults);
+                for (index, value) in values.iter_mut().enumerate() {
+                    slider(
+                        ui,
+                        setting.value_name(index),
+                        value,
+                        defaults[index],
+                        span.clone(),
+                        *logarithmic,
+                    );
+                }
+            }
+            settings::Control::Color => {
+                let rgb: &mut [f32; 3] = values.try_into().expect("a color is three values");
+                ui.horizontal(|ui| {
+                    ui.label(setting.label);
+                    ui.color_edit_button_rgb(rgb);
+                });
+            }
+        }
+    }
+}
+
 /// A setting's slider, with a button that returns it alone to `default`. The button keeps its
 /// place while disabled, so the panel does not shift as values move on and off their defaults.
 fn slider(
@@ -1636,8 +1561,8 @@ fn slider(
     value: &mut f32,
     default: f32,
     range: std::ops::RangeInclusive<f32>,
+    logarithmic: bool,
 ) {
-    let logarithmic = *range.start() >= 1. && *range.end() >= 200.;
     ui.horizontal(|ui| {
         if ui
             .add_enabled(*value != default, egui::Button::new("↺").small())

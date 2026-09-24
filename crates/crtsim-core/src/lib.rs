@@ -3,6 +3,7 @@ mod gpu_prepare;
 pub mod input;
 pub mod mesh;
 pub mod nes_luts;
+pub mod settings;
 pub mod workflow;
 
 use anyhow::{ensure, Context, Result};

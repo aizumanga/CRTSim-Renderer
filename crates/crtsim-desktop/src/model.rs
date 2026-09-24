@@ -1,5 +1,5 @@
 use anyhow::Result;
-use crtsim_core::config::Config;
+use crtsim_core::{config::Config, settings};
 
 /// Limit only the canvas, preserving its aspect and the logical signal.
 pub fn preview_config(c: &Config, input: (u32, u32), max_side: Option<u32>) -> Result<Config> {
@@ -24,62 +24,39 @@ pub struct Difference {
     pub to: String,
 }
 
-/// Every setting that differs between `from` and `to`, in the settings panel's order. Worked
-/// out from the settings' serialized form rather than a hand-kept list, so a setting added
-/// later is still reported, under a name derived from its key until it is given a label.
+/// Every setting that differs between `from` and `to`, in the settings panel's order and under
+/// its names, both from `settings::SETTINGS`. That table lists every key a preset holds -- a core
+/// test keeps it so -- so a setting added later cannot go unreported.
 pub fn differences(from: &Config, to: &Config) -> Vec<Difference> {
     // A LUT is a large table; its name is what a person tells them apart by.
     let lut = |c: &Config| c.lut.as_ref().map_or("None".to_owned(), |l| l.name.clone());
-    let flat = |c: &Config| {
-        let mut entries = vec![];
-        let value = serde_json::to_value(Config {
+    let json = |c: &Config| {
+        serde_json::to_value(Config {
             lut: None,
             ..c.clone()
         })
-        .expect("settings serialize");
-        flatten("", &value, &mut entries);
-        entries
+        .expect("settings serialize")
     };
-    let mut out = vec![];
-    for ((key, a), (_, b)) in flat(from).into_iter().zip(flat(to)) {
-        if key == "version" {
-            continue;
-        }
-        let (a, b) = if key == "lut" {
-            (lut(from), lut(to))
-        } else {
-            (show(&a), show(&b))
-        };
-        if a != b {
-            let (order, setting) = label(&key);
-            out.push((
-                order,
-                Difference {
-                    setting,
-                    from: a,
-                    to: b,
-                },
-            ));
-        }
-    }
-    out.sort_by_key(|(order, _)| *order);
-    out.into_iter().map(|(_, difference)| difference).collect()
-}
-
-fn flatten(prefix: &str, value: &serde_json::Value, out: &mut Vec<(String, serde_json::Value)>) {
-    match value {
-        serde_json::Value::Object(map) => {
-            for (key, value) in map {
-                let key = if prefix.is_empty() {
-                    key.clone()
-                } else {
-                    format!("{prefix}.{key}")
+    let (before, after) = (json(from), json(to));
+    settings::SETTINGS
+        .iter()
+        .filter_map(|setting| {
+            let (was, now) = if setting.key == "lut" {
+                (lut(from), lut(to))
+            } else {
+                let pointer = format!("/{}", setting.key.replace('.', "/"));
+                let at = |value: &serde_json::Value| {
+                    show(value.pointer(&pointer).unwrap_or(&serde_json::Value::Null))
                 };
-                flatten(&key, value, out);
-            }
-        }
-        _ => out.push((prefix.to_owned(), value.clone())),
-    }
+                (at(&before), at(&after))
+            };
+            (was != now).then(|| Difference {
+                setting: setting.label.into(),
+                from: was,
+                to: now,
+            })
+        })
+        .collect()
 }
 
 fn show(value: &serde_json::Value) -> String {
@@ -95,67 +72,6 @@ fn show(value: &serde_json::Value) -> String {
         serde_json::Value::Null => "None".into(),
         serde_json::Value::Object(_) => value.to_string(),
     }
-}
-
-/// The names the settings panel uses, in the order it shows them, which is also the order
-/// differences are listed in.
-const LABELS: &[(&str, &str)] = &[
-    ("signal", "Signal"),
-    ("output", "Export size"),
-    ("fit", "Fit on 4:3 tube"),
-    ("filter", "Resize filter"),
-    ("pixel_aspect", "Pixel aspect"),
-    ("screen_only", "Screen only"),
-    ("source.crop", "Crop (left, top, right, bottom)"),
-    ("source.rotation", "Rotation °"),
-    ("source.zoom", "Source zoom"),
-    ("source.position", "Pan (X, Y)"),
-    ("source.background", "Transparency background"),
-    ("source.checkerboard", "Checker background"),
-    ("lut", "LUT"),
-    ("color_mode", "Color processing"),
-    ("hue", "Hue"),
-    ("chroma", "Chroma"),
-    ("mask_antialias", "Filter mask when shrinking"),
-    ("saturation", "Saturation"),
-    ("sharpness", "Sharpness / ringing"),
-    ("bleed", "Color bleed"),
-    ("artifacts", "Composite artifacts"),
-    ("barrel", "Barrel distortion"),
-    ("overscan", "Overscan"),
-    ("mask_opacity", "Mask opacity"),
-    ("mask_brightness", "Mask brightness"),
-    ("mask_repeats", "Mask columns, rows"),
-    ("dimming", "Edge dimming"),
-    ("fov", "Camera field of view"),
-    ("bloom", "Bloom amount"),
-    ("bloom_power", "Bloom power"),
-    ("bloom_spread", "Bloom spread"),
-    ("reflection", "Edge reflection"),
-    ("frame_color", "Frame color"),
-    ("diffuse", "Diffuse light"),
-    ("specular", "Specular light"),
-    ("specular_power", "Specular power"),
-    ("rim", "Rim light"),
-    ("light_position", "Light position (X, Y, Z)"),
-    ("persistence", "Persistence (R, G, B)"),
-    ("warmup", "Warm-up ticks"),
-    ("phase", "Phase"),
-    ("interlace", "Interlaced fields"),
-];
-
-/// A setting's label and its place in `LABELS`. A setting missing from the table goes last,
-/// under a name made from its key.
-fn label(key: &str) -> (usize, String) {
-    if let Some(index) = LABELS.iter().position(|(k, _)| *k == key) {
-        return (index, LABELS[index].1.to_owned());
-    }
-    let words = key.rsplit('.').next().unwrap_or(key).replace('_', " ");
-    let mut chars = words.chars();
-    let name = chars.next().map_or(String::new(), |first| {
-        first.to_uppercase().chain(chars).collect()
-    });
-    (LABELS.len(), name)
 }
 
 pub struct History {
@@ -227,19 +143,6 @@ mod tests {
             ["Signal", "Export size"],
             "listed in panel order"
         );
-        // Every setting has a label: one missing from the table would be reported by key.
-        let keys = {
-            let mut keys = vec![];
-            flatten(
-                "",
-                &serde_json::to_value(Config::default()).unwrap(),
-                &mut keys,
-            );
-            keys
-        };
-        for (key, _) in keys.iter().filter(|(key, _)| key != "version") {
-            assert!(label(key).0 < LABELS.len(), "no label for {key}");
-        }
         // Nested and array settings, and a LUT by name rather than by table.
         let mut edited = Config::general();
         edited.source.position = [0.25, 0.];

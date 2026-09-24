@@ -179,57 +179,7 @@ impl Config {
         }
         ensure!(self.version == 1, "unsupported config version");
         ensure!(self.warmup <= 240, "warmup must be <=240 ticks");
-        let ranges = [
-            (self.pixel_aspect, 0.1, 10.),
-            (self.sharpness, 0., 3.),
-            (self.bleed, 0., 2.),
-            (self.artifacts, 0., 2.),
-            (self.overscan, 0.1, 3.),
-            (self.barrel, -2., 2.),
-            (self.saturation, 0., 3.),
-            (self.mask_brightness, 0., 2.),
-            (self.mask_opacity, 0., 1.),
-            (self.dimming, 0., 1.),
-            (self.reflection, 0., 2.),
-            (self.diffuse, 0., 2.),
-            (self.specular, 0., 2.),
-            (self.rim, 0., 2.),
-            (self.specular_power, 1., 200.),
-            (self.fov, 5., 90.),
-            (self.bloom, 0., 2.),
-            (self.bloom_power, 0.1, 8.),
-            (self.bloom_spread, 0., 0.2),
-            (self.hue, -180., 180.),
-            (self.chroma, 0., 2.),
-        ];
-        for (v, min, max) in ranges {
-            ensure!(
-                v.is_finite() && v >= min && v <= max,
-                "parameter {v} outside {min}..{max}"
-            );
-        }
-        for v in self.persistence {
-            ensure!(
-                v.is_finite() && (0.0..1.0).contains(&v),
-                "persistence must be >=0 and <1"
-            );
-        }
-        for v in self.frame_color {
-            ensure!(
-                v.is_finite() && (0.0..=1.0).contains(&v),
-                "invalid frame color"
-            );
-        }
-        for v in self.light_position {
-            ensure!(v.is_finite() && v.abs() <= 1000., "invalid light position");
-        }
-        for v in self.mask_repeats {
-            ensure!(
-                v.is_finite() && v > 0. && v <= 16384.,
-                "invalid mask density"
-            );
-        }
-        Ok(())
+        crate::settings::validate(self)
     }
     pub fn signal_size(&self, input: (u32, u32)) -> Result<(u32, u32)> {
         validate_size(input)?;
