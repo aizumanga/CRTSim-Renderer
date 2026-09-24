@@ -144,10 +144,8 @@ impl Iterator for Frames {
                 let pixels = if decoder.has_alpha() {
                     buffer.clone()
                 } else {
-                    buffer
-                        .chunks_exact(3)
-                        .flat_map(|rgb| [rgb[0], rgb[1], rgb[2], 255])
-                        .collect()
+                    let (rgb, _) = buffer.as_chunks::<3>();
+                    rgb.iter().flat_map(|&[r, g, b]| [r, g, b, 255]).collect()
                 };
                 Some(
                     RgbaImage::from_raw(width, height, pixels)
@@ -479,7 +477,8 @@ mod tests {
         let mut bytes = vec![];
         frames.read_to_end(&mut bytes).unwrap();
         decoding.wait().unwrap();
-        let levels: Vec<u8> = bytes.chunks_exact(3 * 2 * 4).map(|f| f[0]).collect();
+        let (frames, _) = bytes.as_chunks::<{ 3 * 2 * 4 }>();
+        let levels: Vec<u8> = frames.iter().map(|frame| frame[0]).collect();
         assert_eq!(levels, vec![0, 10, 20, 20, 30]);
 
         // A one-frame GIF is a still image.
