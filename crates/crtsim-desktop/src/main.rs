@@ -488,7 +488,7 @@ impl App {
         self.dialog_open = true;
         let send = self.dialog_send.clone();
         let ctx = ctx.clone();
-        let video_extension = self.workflow.export_format.extension();
+        let video_extension = self.workflow.export_container.extension();
         std::thread::spawn(move || {
             let chooser = kind.chooser(video_extension);
             let dialog = rfd::FileDialog::new().add_filter(chooser.filter, &chooser.extensions);
@@ -611,12 +611,11 @@ impl App {
                     }
                     Dialog::File => self.load(path),
                     Dialog::ExportVideo => {
-                        if !path.extension().is_some_and(|e| {
-                            e.eq_ignore_ascii_case(self.workflow.export_format.extension())
-                        }) {
+                        let container = self.workflow.export_container;
+                        if crtsim_media::Container::of(&path) != Some(container) {
                             self.error = Some(format!(
                                 "Choose a .{} filename for the selected format.",
-                                self.workflow.export_format.extension()
+                                container.extension()
                             ));
                             continue;
                         }

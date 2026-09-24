@@ -1,52 +1,33 @@
 use crate::{App, Dialog};
-use crtsim_media::{Audio, Encoder, EncodingSpeed, Options, Quality, Timing};
+use crtsim_media::{Audio, Container, Encoder, EncodingSpeed, Options, Quality, Timing};
 use eframe::egui;
 
-#[derive(Clone, Copy, Default, PartialEq)]
-pub enum Format {
-    #[default]
-    Mp4,
-    Mkv,
-    Webm,
+fn container_label(container: Container) -> &'static str {
+    match container {
+        Container::Mp4 => "MP4 · H.264 — recommended",
+        Container::Mkv => "MKV · H.264 — preserve more tracks",
+        Container::Webm => "WebM · VP9 — web playback",
+    }
 }
-impl Format {
-    pub fn extension(self) -> &'static str {
-        match self {
-            Self::Mp4 => "mp4",
-            Self::Mkv => "mkv",
-            Self::Webm => "webm",
+fn container_description(container: Container) -> &'static str {
+    match container {
+        Container::Mp4 => {
+            "H.264 plays on most devices and editing apps. MP4 is the simplest choice for \
+             sharing. Text subtitles are converted; attachments and bitmap subtitles are omitted."
         }
-    }
-    fn label(self) -> &'static str {
-        match self {
-            Self::Mp4 => "MP4 · H.264 — recommended",
-            Self::Mkv => "MKV · H.264 — preserve more tracks",
-            Self::Webm => "WebM · VP9 — web playback",
+        Container::Mkv => {
+            "The same H.264 picture quality in a more flexible container. MKV can retain \
+             subtitles and attachments that MP4 cannot. Some apps have limited MKV support."
         }
-    }
-    fn description(self) -> &'static str {
-        match self {
-            Self::Mp4 => {
-                "H.264 plays on most devices and editing apps. MP4 is the \
-            simplest choice for sharing. Text subtitles are converted; \
-            attachments and bitmap subtitles are omitted."
-            }
-            Self::Mkv => {
-                "The same H.264 picture quality in a more flexible container. \
-            MKV can retain subtitles and attachments that MP4 cannot. \
-            Some apps have limited MKV support."
-            }
-            Self::Webm => {
-                "VP9 is useful for web playback and can compress efficiently, \
-            but software encoding can be slower. Audio uses Opus when \
-            re-encoding; text subtitles become WebVTT."
-            }
+        Container::Webm => {
+            "VP9 is useful for web playback and can compress efficiently, but software encoding \
+             can be slower. Audio uses Opus when re-encoding; text subtitles become WebVTT."
         }
     }
 }
 pub struct ExportDialog {
     options: Options,
-    format: Format,
+    container: Container,
     batch: bool,
 }
 impl App {
@@ -54,10 +35,10 @@ impl App {
         self.stop_playback();
         self.workflow.export_dialog = Some(ExportDialog {
             options: self.video_options.clone(),
-            format: if batch {
-                Format::Mkv
+            container: if batch {
+                Container::Mkv
             } else {
-                self.workflow.export_format
+                self.workflow.export_container
             },
             batch,
         });
@@ -91,19 +72,20 @@ impl App {
                 .show(ui, |ui| {
                     ui.heading("Format & codec");
                     if draft.batch {
-                        ui.label(Format::Mkv.label());
+                        ui.label(container_label(Container::Mkv));
                     } else {
-                        for format in [Format::Mp4, Format::Mkv, Format::Webm] {
+                        for container in Container::ALL {
+                            let label = container_label(container);
                             if ui
-                                .radio_value(&mut draft.format, format, format.label())
+                                .radio_value(&mut draft.container, container, label)
                                 .changed()
                             {
                                 draft.options.crf = None;
                             }
                         }
                     }
-                    ui.small(draft.format.description());
-                    if draft.format == Format::Webm {
+                    ui.small(container_description(draft.container));
+                    if draft.container == Container::Webm {
                         draft.options.encoder = Encoder::Software;
                     }
                     ui.separator();
@@ -151,15 +133,13 @@ impl App {
                     );
                     if let Some(video) = &self.video {
                         if draft.options.preserve_streams && !draft.batch {
-                            for note in
-                                crtsim_media::preservation_notes(video, draft.format.extension())
-                            {
+                            for note in crtsim_media::preservation_notes(video, draft.container) {
                                 ui.small(note);
                             }
                         }
                     }
                     crate::chrome::Section::new("Advanced encoding settings").show(ui, |ui| {
-                        if draft.format == Format::Webm {
+                        if draft.container == Container::Webm {
                             ui.label("VP9 uses software encoding.");
                         } else {
                             egui::ComboBox::from_label("Encoding method")
@@ -184,9 +164,8 @@ impl App {
                         if draft.options.encoder == Encoder::Software {
                             let mut custom = draft.options.crf.is_some();
                             if ui.checkbox(&mut custom, "Custom quality (CRF)").changed() {
-                                draft.options.crf = custom.then(|| {
-                                    draft.options.effective_crf(draft.format == Format::Webm)
-                                });
+                                draft.options.crf =
+                                    custom.then(|| draft.options.effective_crf(draft.container));
                             }
                             if let Some(crf) = draft.options.crf.as_mut() {
                                 ui.add(egui::Slider::new(crf, 0..=51).text("CRF"));
@@ -253,7 +232,7 @@ impl App {
             }
             self.video_options = draft.options;
             if !draft.batch {
-                self.workflow.export_format = draft.format;
+                self.workflow.export_container = draft.container;
                 self.dialog(Dialog::ExportVideo, ctx);
             }
         } else if open && !cancel {

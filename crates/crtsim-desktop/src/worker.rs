@@ -645,12 +645,7 @@ fn export_video(
     progress: &dyn Fn(RenderProgress),
 ) -> Result<()> {
     let renderer = graphics.renderer(|| {})?;
-    crtsim_media::export(video, path, config, options, renderer, cancel, |p| {
-        progress(RenderProgress {
-            fraction: p.fraction,
-            stage: p.stage,
-        })
-    })
+    crtsim_media::export(video, path, config, options, renderer, cancel, progress)
 }
 
 /// Streams rendered frames of `video` into `frames`, which the interface plays from. An error
