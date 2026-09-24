@@ -67,7 +67,8 @@ large embedded LUTs repeated across many jobs can reach this limit. Storage erro
 ## Batch exports
 
 Open **Batch queue → Add files…**, select images/videos, then choose a destination folder.
-Each job captures the current render settings and video options. Images use PNG; videos use MKV for broader stream preservation.
+Each job captures the current render settings and video options. Images use PNG; videos and animated GIFs use MKV for broader
+stream preservation. Animated WebPs still become a PNG of their first frame, as they did before animations could be opened.
 Generated names include `-crt` and a numeric suffix when needed. Existing destinations are refused when a job starts.
 Use Start / resume, Pause after current, Cancel current, Retry, Move up or Remove. Failed jobs retain their errors while subsequent
 jobs can continue. No temporary PNG frame sequences are written. Cancelling or closing the app reaps FFmpeg subprocesses.
@@ -80,6 +81,32 @@ MKV/H.264 favors stream preservation, and WebM/VP9 targets web playback. Each fo
 Leave overrides off to use the quality profile. Selecting another profile resets custom CRF/bitrate. Format switches reset CRF
 because H.264 and VP9 use different quality scales. WebM always uses software VP9.
 The batch queue has its own **Video settings…** window for new jobs; existing jobs keep their settings.
+
+## GIF and animated WebP
+
+The same window offers **GIF** and **Animated WebP**, neither with sound. Both grow quickly with size, rate and length,
+so their defaults are small: the CRT is rendered with its longest side at 640 pixels, at 24 frames per second, for the
+first 10 seconds. The CRT is rendered at that size rather than scaled down afterwards, which would turn the mask and
+scanlines into moiré. **Start at the frame shown** begins at the frame on screen; **Only the first … s** limits the length.
+Timing is Stable or Persistence off: NTSC timing needs 60 frames per second.
+
+GIF allows up to 30 frames per second. It stores each frame's time in hundredths of a second, so at 24 per second
+frames alternate between 4 and 5 hundredths, averaging exactly 24. One palette of 256 colors is chosen from the whole
+animation, so the frames are first encoded losslessly to a temporary file next to the destination; the window shows
+how much space that needs. Dithering can be a pattern (smallest), diffusion (smoother) or none (banding).
+Animated WebP allows up to 60 frames per second and is usually several times smaller, with full color. Lossy WebP
+stores color at half resolution, softening the mask's colored stripes; **Lossless** keeps them at a larger size.
+
+Below the settings the window shows the rendered size, the frame count and a likely size range, from still scenes
+(low) to busy footage with room to spare (high). Above 25 MB the estimate turns amber and names what shrinks the file
+most, and choosing a destination asks once more. GIF and WebP files do not store the renderer preset.
+
+## Keyboard
+
+Click or drag any slider to give it the keyboard, marked by its highlighted handle. **←/→** step it by 1% of its range,
+**Shift+←/→** by 10% and **Alt+←/→** by 0.1%; logarithmic sliders step by the same proportion at any value, and
+whole-number sliders by at least one. **Delete** or **Backspace** returns it to its default, as its ↺ button does.
+**Esc** or a click elsewhere lets go; until then the arrows no longer step video frames. Holding a key is one undo step.
 
 Draft, Balanced, High and Archival select software CRF 26/18/14/10 for H.264 and 32/24/20/16 for VP9.
 Archival is a high-quality lossy profile. Hardware H.264 choices are NVIDIA NVENC, Intel Quick Sync, AMD AMF and Apple VideoToolbox.

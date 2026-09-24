@@ -6,6 +6,10 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+# A new push to a pull request replaces its checks in progress; main and tags always finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   package:
     strategy:
@@ -30,10 +34,13 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: echo 'RUSTFLAGS=-C target-feature=+crt-static' >> "$GITHUB_ENV"
-      - name: Build and test
-        run: |
-          cargo test --workspace --locked
-          cargo build --release --locked -p crtsim-desktop -p crtsim-cli
+      # Pull requests are tested on these same systems by the validation workflow, so only
+      # tagged and manual builds test again here before packaging.
+      - name: Test
+        if: github.event_name != 'pull_request'
+        run: cargo test --workspace --locked
+      - name: Build
+        run: cargo build --release --locked -p crtsim-desktop -p crtsim-cli
       - name: Package binaries and licenses
         shell: bash
         env:

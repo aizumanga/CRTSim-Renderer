@@ -1,5 +1,15 @@
 # Portable releases (Phase 4)
 
+## v0.6.0
+
+- Animated GIF and WebP open as animations, with frame navigation, playback and export. They are decoded without FFmpeg.
+  Single-frame GIFs open as still images.
+- Export to GIF and animated WebP with small defaults (640 px, 24 FPS, 10 seconds), a file-size estimate, and a
+  confirmation above 25 MB.
+- Sliders step with the arrow keys once clicked: Shift for larger steps, Alt for finer ones, Delete to reset.
+- Nothing that worked before changes: presets, projects and exported videos are written as before, and batches still
+  turn animated WebP into PNG.
+
 ## v0.1.1 hardening
 
 - Video sequences reuse their signal, surface, bloom, depth and readback GPU resources instead of reallocating them for every frame.

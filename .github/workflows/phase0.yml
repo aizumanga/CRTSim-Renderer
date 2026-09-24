@@ -5,6 +5,10 @@ on:
   pull_request:
 permissions:
   contents: read
+# A new push to a pull request replaces its checks in progress; main and tags always finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   build:
     strategy:
@@ -17,6 +21,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      # Pull requests start from main's build cache; only main saves one, so branches do not
+      # crowd each other out of the repository's cache space.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install Linux windowing development libraries
         if: runner.os == 'Linux'
         run: sudo apt-get update -qq && sudo apt-get install -y libxkbcommon-dev libwayland-dev libegl1-mesa-dev
@@ -43,6 +52,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install software Vulkan driver
         run: sudo apt-get update -qq && sudo apt-get install -y mesa-vulkan-drivers libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libegl1-mesa-dev xvfb ffmpeg
       - run: cargo test --locked -p crtsim-core gpu_smoke -- --ignored --nocapture
@@ -84,6 +96,8 @@ jobs:
           xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-desktop -- --backend vulkan --smoke-test output/lut-gallery.png --smoke-lut-gallery
           xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-desktop -- output/video-input.mkv --backend vulkan --smoke-test output/video-desktop.png
           xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-desktop -- output/video-input.mkv --backend vulkan --smoke-test output/video-export-window.png --smoke-export
+          ffmpeg -v error -f lavfi -i testsrc2=size=160x120:rate=10 -t 1 -c:v gif -loop 0 output/animation-input.gif
+          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-desktop -- output/animation-input.gif --backend vulkan --smoke-test output/animation-desktop.png
       - uses: actions/upload-artifact@v4
         # Runs on failure too: a golden mismatch writes its rendered and diff images here.
         if: always()

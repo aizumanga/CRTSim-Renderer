@@ -8,7 +8,8 @@ It is not an official product or an exact reconstruction of a commercial game's 
 
 ## What works in this prototype
 
-- PNG/JPEG/WebP/BMP input and PNG export; an original test card when input is omitted.
+- PNG/JPEG/WebP/BMP/GIF input and PNG export; an original test card when input is omitted.
+- Animated GIF and WebP open as animations, decoded without FFmpeg; videos, GIFs and animated WebPs export to MP4, MKV, WebM, GIF or animated WebP.
 - The original curved-screen and frame meshes, including colors, normals, UVs and reflection weights.
 - Composite artifacts, horizontal ringing, separate RGB persistence, shadow mask, lighting, edge reflections and bloom.
 - Deterministic still jobs, cleared feedback buffers, phase A/B/stable/alternating selection and configurable warm-up.
@@ -81,7 +82,7 @@ With stable Rust installed, run from the repository folder:
 cargo run --release --locked -p crtsim-desktop
 ```
 
-Use **Open File** or drag one PNG/JPEG/WebP/BMP into the window. Adjust the controls on the left;
+Use **Open File** or drag one PNG/JPEG/WebP/BMP/GIF into the window. Adjust the controls on the left;
 the preview refreshes after you finish a drag or pause typing. **Export PNG** renders using the export size,
 even when the preview is smaller. The window remains responsive while loading, rendering and exporting.
 Settings changed during an export apply to the next export. The native save dialog asks for confirmation when a desktop PNG or JSON preset
@@ -94,6 +95,7 @@ already exists; after confirmation, the app writes a complete temporary file and
 - **Load / Save preset** uses the same version-1 JSON format as the CLI. **Undo / Redo / Reset** acts on settings, not source files or exported files.
   `Ctrl+Z` and `Ctrl+Shift+Z` provide undo and redo shortcuts (`Command` equivalents are also accepted on macOS).
 - Signal and export size boxes accept named presets or custom `WIDTHxHEIGHT`. Resolved dimensions and crop/mask warnings are shown in the window.
+- Click or drag a slider to give it the keyboard: **←/→** step it by 1% of its range, **Shift** by 10%, **Alt** by 0.1%, and **Delete** returns it to its default. **Esc** or a click elsewhere lets go.
 
 The original-image display is limited to a 2048-pixel thumbnail; export always uses the loaded source.
 Still previews are debounced; video playback streams frames with persistent CRT history and a short buffer.
@@ -133,16 +135,19 @@ Vulkan/DX12/Metal implementation will show a compatible-adapter error; it is not
 
 Install `ffmpeg` and `ffprobe` on PATH (on Arch: `sudo pacman -S ffmpeg`). The image renderer does not need them.
 For a portable installation, set `CRTSIM_FFMPEG` and `CRTSIM_FFPROBE` to the respective executable paths.
-FFmpeg must include `libx264` for MP4/MKV, `libvpx-vp9` for WebM, and AAC/Opus encoders when converting audio.
+FFmpeg must include `libx264` for MP4/MKV, `libvpx-vp9` for WebM, `libwebp` for animated WebP export, and AAC/Opus encoders when converting audio.
+Animated GIF and WebP open and play without FFmpeg; exporting any video or animation needs it.
 Missing executables/codecs produce an error in the window; nothing is downloaded automatically.
 
-1. Choose **Open File…**, drop a video, or pass its path on the command line.
-2. Use **Previous frame / Next frame**, arrow keys, the frame number field or the wide slider beneath the preview.
+1. Choose **Open File…**, drop a video or an animated GIF/WebP, or pass its path on the command line.
+   A GIF or WebP with a single frame opens as a still image. Batches keep turning animated WebP into a PNG of its first frame, as before; animated GIFs batch as MKV video.
+2. Use **Previous frame / Next frame**, arrow keys (when no slider has the keyboard), the frame number field or the wide slider beneath the preview.
    Selection loads when you release the slider or choose **Go**. Frame numbers start at 1 and follow actual decoded frames, including VFR sources.
    **Play / Pause** (Space) starts buffered playback with CRT history. **Export frame** saves the displayed source frame as a full-resolution, settled CRT PNG.
    When a valid container frame count exists it is used immediately. Other files require one decoded-frame count on open. Exact seeks decode by ordinal from the start and can take time on long videos; loading/seeking is cancellable.
 3. Choose output resolution and video timing: source-rate stable artifacts (default), 60 Hz alternating artifacts, or persistence off.
-4. Choose **Export → Video…**. A separate window explains MP4/H.264, MKV/H.264 and WebM/VP9, with quality/audio controls and optional advanced encoding settings. Then choose the destination.
+4. Choose **Export → Video…**. A separate window explains MP4/H.264, MKV/H.264 and WebM/VP9, with quality/audio controls and optional advanced encoding settings,
+   and offers GIF and animated WebP with their own size, frame-rate and length settings and a file-size estimate. Then choose the destination.
 
 The compact toolbar groups media/projects under **File**, gallery/imports under **Presets**, themes under **View**, and rendering under **Export**. Video previews are silent; audio is retained in exports unless explicitly muted.
 

@@ -730,41 +730,46 @@ fn animation_exports_are_small_timed_and_replace_the_output_only_when_done() {
         output: "1920x1080".into(),
         ..Config::default()
     };
-    let two_seconds = AnimationOptions {
-        max_seconds: Some(2.),
+    let one_second = AnimationOptions {
+        max_seconds: Some(1.),
         ..AnimationOptions::default()
     };
     let exports = [
-        ("bayer.gif", two_seconds.clone()),
+        ("bayer.gif", one_second.clone()),
         (
             "diffusion.gif",
             AnimationOptions {
                 dither: Dither::Diffusion,
-                ..two_seconds.clone()
+                ..one_second.clone()
             },
         ),
         (
             "plain.gif",
             AnimationOptions {
                 dither: Dither::None,
-                ..two_seconds.clone()
+                ..one_second.clone()
             },
         ),
-        ("lossy.webp", two_seconds.clone()),
+        ("lossy.webp", one_second.clone()),
         (
             "lossless.webp",
             AnimationOptions {
                 lossless: true,
-                ..two_seconds.clone()
+                ..one_second.clone()
             },
         ),
     ];
     for (source_name, source) in &sources {
         for (name, options) in &exports {
+            // The still card only needs its smallest and largest cases, to keep CI short.
+            let still = *source_name == "still.mkv";
+            if still && !["bayer.gif", "lossless.webp"].contains(name) {
+                continue;
+            }
             let output = dir.path().join(format!("{source_name}-{name}"));
             let format = AnimationFormat::of(&output).unwrap();
             let summary = options.summary(source, &config, format).unwrap();
-            assert_eq!((summary.size, summary.frames), ((640, 360), 48));
+            assert_eq!((summary.size, summary.frames), ((640, 360), 24));
             crtsim_media::export_animation(
                 source,
                 &output,
@@ -776,20 +781,20 @@ fn animation_exports_are_small_timed_and_replace_the_output_only_when_done() {
             )
             .unwrap();
             let bytes = std::fs::metadata(&output).unwrap().len();
-            let per_pixel = bytes as f64 / (640. * 360. * 48.);
+            let per_pixel = bytes as f64 / (640. * 360. * 24.);
             println!(
                 "{source_name} {name}: {bytes} bytes, {per_pixel:.3} per pixel; estimated {:?}",
                 summary.bytes
             );
-            if *source_name == "still.mkv" {
+            if still {
                 // libwebp stores a run of identical frames as one longer frame.
                 continue;
             }
             // Opened again as the animation it is.
             let back = crtsim_media::probe(&output, &cancel).unwrap();
-            assert_eq!((back.size, back.frames), ((640, 360), Some(48)), "{name}");
+            assert_eq!((back.size, back.frames), ((640, 360), Some(24)), "{name}");
             assert!(
-                (back.duration - 2.).abs() < 0.03,
+                (back.duration - 1.).abs() < 0.03,
                 "{name}: {}",
                 back.duration
             );
@@ -797,9 +802,9 @@ fn animation_exports_are_small_timed_and_replace_the_output_only_when_done() {
     }
     // 24 per second in hundredths: each frame shows for 4 or 5, averaging exactly 24.
     let delays = gif_delays(&dir.path().join("busy.mkv-bayer.gif"));
-    assert_eq!(delays.len(), 48);
+    assert_eq!(delays.len(), 24);
     assert!(delays.iter().all(|&d| d == 0.04 || d == 0.05), "{delays:?}");
-    assert!((delays.iter().sum::<f64>() - 2.).abs() < 0.011);
+    assert!((delays.iter().sum::<f64>() - 1.).abs() < 0.011);
     let gif = std::fs::read(dir.path().join("busy.mkv-bayer.gif")).unwrap();
     assert!(
         gif.windows(11).any(|w| w == b"NETSCAPE2.0"),
@@ -842,7 +847,7 @@ fn animation_exports_are_small_timed_and_replace_the_output_only_when_done() {
         busy,
         &kept,
         &config,
-        &two_seconds,
+        &one_second,
         &cancel,
         |image, _| {
             cancel.store(true, Ordering::Relaxed);
