@@ -40,6 +40,20 @@ pub fn builtins() -> Vec<Entry> {
             Config::default(),
         ),
         entry(
+            "Super Win the Game",
+            "The game's own CRT options: the public reference with a 30° field of view, NTSC \
+             blending at 0.35 and its NTSC palette (Tint 5.18, I 1.75, Q 1.00). The palette's \
+             decoder stands in for the game's unpublished one; it recolours art in MAME's NES \
+             palette.",
+            Config {
+                fov: 30.,
+                phase: Phase::Alternating,
+                ntsc_blending: 0.35,
+                palette: Some(Default::default()),
+                ..Config::default()
+            },
+        ),
+        entry(
             "Soft television",
             "Gentler mask and ringing for illustrations and photos.",
             Config {
@@ -418,11 +432,54 @@ mod tests {
     }
 
     #[test]
+    fn the_game_preset_matches_its_options_screen() {
+        let game = builtins()
+            .into_iter()
+            .find(|e| e.name == "Super Win the Game")
+            .unwrap()
+            .config;
+        // As the game's CRT options show them.
+        assert_eq!(game.fov, 30.);
+        assert_eq!(game.ntsc_blending, 0.35);
+        assert_eq!(game.lut_strength, 1.);
+        let palette = game.palette.unwrap();
+        assert_eq!(
+            (palette.tint, palette.tint_i, palette.tint_q),
+            (5.18, 1.75, 1.)
+        );
+        let reference = Config::default();
+        assert_eq!(
+            (
+                game.overscan,
+                game.barrel,
+                game.pixel_aspect,
+                game.saturation
+            ),
+            (
+                reference.overscan,
+                reference.barrel,
+                reference.pixel_aspect,
+                1.35
+            )
+        );
+        assert_eq!((game.mask_opacity, game.mask_brightness), (1., 0.45));
+        assert_eq!(
+            (game.sharpness, game.persistence[0], game.bleed),
+            (0.8, 0.7, 0.5)
+        );
+        assert_eq!(
+            (game.bloom, game.bloom_power, game.frame_color),
+            (0.25, 2., [0.06; 3])
+        );
+    }
+
+    #[test]
     fn presets_for_a_line_count_have_the_mask_follow_it() {
         for entry in builtins() {
             let follows = matches!(
                 entry.name.as_str(),
                 "Original CRTSim"
+                    | "Super Win the Game"
                     | "Pixel art 240p"
                     | "NTSC 240p"
                     | "NTSC 480i"
