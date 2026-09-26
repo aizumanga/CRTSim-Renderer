@@ -27,12 +27,8 @@ struct Chooser {
 impl Dialog {
     fn chooser(self, export: ExportFormat) -> Chooser {
         let (filter, extensions, save_as) = match self {
-            Self::OpenProject => ("CRT project", vec![workflow::PROJECT_EXTENSION], None),
-            Self::SaveProject => (
-                "CRT project",
-                vec![workflow::PROJECT_EXTENSION],
-                Some("project"),
-            ),
+            Self::OpenProject => ("CRT project", vec![project::EXTENSION], None),
+            Self::SaveProject => ("CRT project", vec![project::EXTENSION], Some("project")),
             Self::Lut => ("3D color LUT", vec!["cube"], None),
             Self::File => ("Images and videos", files::media_extensions(), None),
             Self::ExportVideo => (export.filter(), vec![export.extension()], Some("rendered")),

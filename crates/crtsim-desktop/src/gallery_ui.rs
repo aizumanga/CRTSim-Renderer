@@ -63,7 +63,7 @@ impl App {
                     Some(store) => {
                         ui.small(format!(
                             "Personal presets: {}",
-                            store.root.join("presets").display()
+                            store.presets_folder().display()
                         ));
                     }
                     None => {
@@ -148,7 +148,7 @@ impl App {
         let Some(store) = &self.store else {
             return;
         };
-        match store.save(&self.gallery_name, &self.config, self.input.dimensions()) {
+        match store.save_preset(&self.gallery_name, &self.config, self.input.dimensions()) {
             Ok(()) => {
                 self.status = format!("Saved '{}' to My presets", self.gallery_name);
                 self.error = None;

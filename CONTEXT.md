@@ -32,3 +32,13 @@ playback prerolls again.
 **Batch queue**: exports that each render one file with the settings in use when they were
 added, one at a time and in order (`crates/crtsim-desktop/src/batch.rs`). Each output is named
 after its source and never replaces a file; cancelling a job pauses the queue.
+
+**Project**: a source, its settings and the batch queue, saved as a `.crtsim` file to pick up
+later (`crates/crtsim-desktop/src/project.rs`).
+
+**Session**: the project the app saves to its app data every two seconds, and offers to
+recover on the next start.
+
+**App data**: the folder holding everything the app remembers between runs: the welcome
+acknowledged, the theme, tool window placement, personal presets, recent projects and the
+session (`crates/crtsim-desktop/src/app_data.rs`). Only that module knows the files in it.

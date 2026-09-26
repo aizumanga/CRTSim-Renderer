@@ -1,3 +1,4 @@
+mod app_data;
 mod audition;
 mod batch;
 mod chrome;
@@ -11,6 +12,7 @@ mod lut_gallery;
 mod model;
 mod playback;
 mod preview_ui;
+mod project;
 mod schedule;
 mod settings_ui;
 mod smoke;
@@ -93,7 +95,7 @@ struct App {
     animation_options: crtsim_media::AnimationOptions,
     work: Work,
     worker_thread: Option<std::thread::JoinHandle<()>>,
-    store: Option<gallery::Store>,
+    store: Option<app_data::Store>,
     theme: theme::Theme,
     show_welcome: bool,
     show_credits: bool,
@@ -115,8 +117,8 @@ struct App {
     gallery_warnings: Vec<String>,
     gallery_name: String,
     description_edit: Option<(String, String)>,
-    tool_windows: gallery::Layout,
-    tool_windows_saved: gallery::Layout,
+    tool_windows: app_data::Layout,
+    tool_windows_saved: app_data::Layout,
     config: Config,
     history: model::History,
     input: Arc<RgbaImage>,
@@ -211,11 +213,11 @@ impl App {
         let render_state = gpu.render_state().cloned();
         let (jobs, events, worker_thread) = worker::start(ctx.clone(), gpu);
         let (dialog_send, dialog_receive) = mpsc::channel();
-        let (store, mut storage_error) = match gallery::Store::discover() {
+        let (store, mut storage_error) = match app_data::Store::discover() {
             Ok(s) => (Some(s), None),
             Err(e) => (None, Some(format!("App data unavailable: {e:#}"))),
         };
-        let theme = match store.as_ref().map(gallery::Store::theme) {
+        let theme = match store.as_ref().map(app_data::Store::theme) {
             Some(Ok(Some(theme))) => theme,
             Some(Ok(None)) | None => theme::Theme::default(),
             Some(Err(e)) => {
@@ -226,14 +228,14 @@ impl App {
             }
         };
         theme.apply(ctx);
-        let tool_windows = match store.as_ref().map(gallery::Store::tool_windows) {
+        let tool_windows = match store.as_ref().map(app_data::Store::tool_windows) {
             Some(Ok(windows)) => windows,
             // Window placement is a convenience; opening at the default size is fine.
-            Some(Err(_)) | None => gallery::Layout::new(),
+            Some(Err(_)) | None => app_data::Layout::new(),
         };
         let show_welcome = match &smoke {
             Some(smoke) => smoke.welcome,
-            None => store.as_ref().is_none_or(gallery::Store::welcome_needed),
+            None => store.as_ref().is_none_or(app_data::Store::welcome_needed),
         };
         let (show_gallery, show_lut_gallery) = smoke
             .as_ref()
@@ -372,7 +374,7 @@ impl App {
         !self.modal_open() && self.work.is_idle()
     }
     /// Where settings, sessions and window placement are kept; none during a smoke run.
-    fn app_data(&self) -> Option<&gallery::Store> {
+    fn app_data(&self) -> Option<&app_data::Store> {
         self.store.as_ref().filter(|_| self.smoke.is_none())
     }
     /// Makes `input` the image being edited: the file at `path`, a frame of `video`, or with
@@ -401,7 +403,7 @@ impl App {
         self.stop_playback();
         if path
             .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case(workflow::PROJECT_EXTENSION))
+            .is_some_and(|e| e.eq_ignore_ascii_case(project::EXTENSION))
         {
             self.open_project(path);
             return;
@@ -524,7 +526,7 @@ impl App {
     /// Writes the window layout only when it actually changed, so the two-second tick that
     /// calls this does not rewrite the file while nothing moves.
     pub(crate) fn save_tool_windows(&mut self) {
-        let layout: gallery::Layout = self
+        let layout: app_data::Layout = self
             .tool_windows
             .iter()
             .map(|(title, window)| (title.clone(), window.to_save()))
