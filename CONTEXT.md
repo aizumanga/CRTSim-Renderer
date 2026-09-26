@@ -20,3 +20,11 @@ it becomes an undo step and, with live preview on, is previewed.
 **Audition**: previewing a preset or LUT by pointing at it in a gallery, without applying it.
 An audition is previewed whether or not live preview is on, and never reaches the settings,
 their undo history or an export.
+
+**Playback**: playing a video in the preview (`crates/crtsim-desktop/src/playback.rs`). The
+worker renders frames ahead into a small buffer, and each is shown when its time comes. Frames
+already overdue are skipped rather than shown late.
+
+**Preroll**: the frames playback waits for before its clock starts: three, or all the buffer
+holds when large frames make it smaller. When the renderer falls behind, the clock stops and
+playback prerolls again.

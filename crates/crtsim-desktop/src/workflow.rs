@@ -1,17 +1,13 @@
-use crate::{files, texture, worker, App, Dialog, Job};
+use crate::{files, worker, App, Dialog};
 use anyhow::{ensure, Result};
 use crtsim_core::config::Config;
 use crtsim_media::Options;
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::VecDeque,
     io::Write,
     path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        mpsc, Arc,
-    },
+    sync::{atomic::Ordering, mpsc},
     time::{Duration, Instant},
 };
 use worker::Failure;
@@ -87,25 +83,9 @@ fn save_project(path: &Path, project: &Project) -> Result<()> {
     files::save_atomic(path, |f| Ok(f.write_all(&bytes)?))
 }
 
-pub struct Playback {
-    cancel: Arc<AtomicBool>,
-    receive: mpsc::Receiver<Result<worker::PlaybackFrame, String>>,
-    buffered: VecDeque<worker::PlaybackFrame>,
-    clock: Option<(Instant, f64)>,
-    ended: bool,
-    capacity: usize,
-}
-impl Drop for Playback {
-    fn drop(&mut self) {
-        self.cancel.store(true, Ordering::Relaxed);
-    }
-}
-
 pub struct State {
     pub source: Option<PathBuf>,
     pub comparison: f32,
-    pub playback: Option<Playback>,
-    pub play_time: f64,
     pub export_dialog: Option<crate::export_ui::ExportDialog>,
     pub export_format: crate::export_ui::ExportFormat,
     pub project_path: Option<PathBuf>,
@@ -126,8 +106,6 @@ impl Default for State {
         Self {
             source: None,
             comparison: 0.5,
-            playback: None,
-            play_time: 0.,
             export_dialog: None,
             export_format: Default::default(),
             project_path: None,
@@ -274,124 +252,6 @@ impl App {
         self.replace_config(p.config);
         self.status = "Project restored; queue paused".into();
     }
-    pub fn stop_playback(&mut self) {
-        if self.workflow.playback.take().is_some() {
-            self.status = "Playback paused".into();
-        }
-    }
-    pub fn start_playback(&mut self) {
-        let Some(video) = self.video.clone() else {
-            return;
-        };
-        self.stop_playback();
-        let config = match self
-            .config
-            .with_max_output_side(self.input.dimensions(), self.preview_limit)
-        {
-            Ok(c) => c,
-            Err(e) => {
-                self.error = Some(format!("Cannot play: {e:#}"));
-                return;
-            }
-        };
-        let start = if self.workflow.play_time >= video.duration - 1. / video.fps {
-            0.
-        } else {
-            self.workflow.play_time
-        };
-        // Target 128 MB across both buffers, with one pair per buffer at minimum.
-        let out = config.output_size(video.size).unwrap_or(video.size);
-        let pair_bytes = 4
-            * (u64::from(video.size.0) * u64::from(video.size.1)
-                + u64::from(out.0) * u64::from(out.1));
-        let capacity = ((64 * 1024 * 1024) / pair_bytes.max(1)).clamp(1, 4) as usize;
-        let (frames, receive) = mpsc::sync_channel(capacity);
-        let cancel = Arc::new(AtomicBool::new(false));
-        self.workflow.playback = Some(Playback {
-            cancel: cancel.clone(),
-            receive,
-            buffered: VecDeque::new(),
-            clock: None,
-            ended: false,
-            capacity,
-        });
-        self.schedule.drop_pending();
-        self.status = "Buffering · warming CRT history…".into();
-        self.send(Job::Playback {
-            video,
-            start,
-            config,
-            options: self.video_options.clone(),
-            cancel,
-            frames,
-        });
-    }
-    fn tick_playback(&mut self, ctx: &egui::Context) {
-        let Some(p) = self.workflow.playback.as_mut() else {
-            return;
-        };
-        while p.buffered.len() < p.capacity && !p.ended {
-            match p.receive.try_recv() {
-                Ok(Ok(f)) => p.buffered.push_back(f),
-                Ok(Err(e)) => {
-                    self.error = Some(e);
-                    p.ended = true;
-                }
-                Err(mpsc::TryRecvError::Disconnected) => p.ended = true,
-                Err(mpsc::TryRecvError::Empty) => break,
-            }
-        }
-        if p.clock.is_none()
-            && (p.buffered.len() >= p.capacity.min(3) || (p.ended && !p.buffered.is_empty()))
-        {
-            let time = p.buffered.front().unwrap().time;
-            p.clock = Some((Instant::now(), time));
-            self.status = "Playing".into();
-        }
-        if let Some((clock, base)) = p.clock {
-            let target = base + clock.elapsed().as_secs_f64();
-            let mut next = None;
-            while p.buffered.front().is_some_and(|f| f.time <= target) {
-                next = p.buffered.pop_front();
-            }
-            if let Some(f) = next {
-                self.workflow.play_time = f.time;
-                self.original = texture(ctx, "playing-source", &f.source, 2048);
-                let frame = texture(
-                    ctx,
-                    "playing-crt",
-                    &f.crt,
-                    ctx.input(|i| i.max_texture_side) as u32,
-                );
-                crate::App::replace_preview(
-                    &mut self.rendered,
-                    self.render_state.as_ref(),
-                    Some(crate::Displayed::Uploaded(frame)),
-                );
-                self.schedule.show_current();
-                self.input = Arc::new(f.source);
-                if let Some(v) = &self.video {
-                    self.video_frame = (f.time * v.fps).round() as u64;
-                    self.video_frame = self.video_frame.min(self.video_frames.saturating_sub(1));
-                    self.selected_frame = self.video_frame;
-                }
-            }
-            let frame_duration = self.video.as_ref().map_or(1. / 30., |v| 1. / v.fps);
-            if p.buffered.is_empty()
-                && !p.ended
-                && target > self.workflow.play_time + frame_duration
-            {
-                p.clock = None;
-                self.status = "Buffering · renderer is catching up…".into();
-            }
-        }
-        if p.ended && p.buffered.is_empty() {
-            self.stop_playback();
-            self.status = "Playback finished".into();
-        } else {
-            ctx.request_repaint_after(Duration::from_millis(8));
-        }
-    }
     pub fn queue_finished(&mut self, result: &worker::Outcome<PathBuf>) {
         if let Some(index) = self.workflow.active.take() {
             self.workflow.queue[index].status = match result {
@@ -416,7 +276,7 @@ impl App {
             || !self.can_start_work()
             || self.schedule.rendering()
             || self.workflow.recovery.is_some()
-            || self.workflow.playback.is_some()
+            || self.playback.is_some()
         {
             return;
         }
@@ -697,44 +557,6 @@ impl App {
 mod tests {
     use super::*;
     #[test]
-    fn playback_buffers_before_presenting_and_cancel_discards_pending_frames() {
-        let ctx = egui::Context::default();
-        let mut app = App::new(
-            &ctx,
-            crate::worker::Gpu::Own(wgpu::Backends::PRIMARY),
-            None,
-            Some(crate::Smoke::new("unused-smoke.png".into())),
-        );
-        let (send, receive) = mpsc::sync_channel(4);
-        let cancel = Arc::new(AtomicBool::new(false));
-        app.workflow.playback = Some(Playback {
-            cancel: cancel.clone(),
-            receive,
-            buffered: VecDeque::new(),
-            clock: None,
-            ended: false,
-            capacity: 4,
-        });
-        let make_frame = |time| {
-            Ok(worker::PlaybackFrame {
-                time,
-                source: image::RgbaImage::new(4, 4),
-                crt: image::RgbaImage::new(4, 4),
-            })
-        };
-        send.send(make_frame(0.)).unwrap();
-        app.tick_playback(&ctx);
-        assert!(app.rendered.is_none());
-        send.send(make_frame(0.04)).unwrap();
-        send.send(make_frame(0.08)).unwrap();
-        app.tick_playback(&ctx);
-        assert!(app.rendered.is_some());
-        assert!(app.workflow.playback.as_ref().unwrap().clock.is_some());
-        app.stop_playback();
-        assert!(cancel.load(Ordering::Relaxed));
-        assert!(send.send(make_frame(0.12)).is_err());
-    }
-    #[test]
     fn batch_captures_settings_refuses_existing_outputs_and_pauses_on_cancel() {
         let ctx = egui::Context::default();
         let dir = tempfile::tempdir().unwrap();
@@ -760,7 +582,7 @@ mod tests {
         app.workflow.queue_running = true;
         app.dispatch_queue();
         match receive.try_recv().unwrap() {
-            Job::Export {
+            crate::Job::Export {
                 export: crate::worker::Export::Batch { config, .. },
                 ..
             } => assert_eq!(config, captured),
@@ -808,7 +630,7 @@ mod tests {
         }
         app.workflow.queue_running = true;
         app.dispatch_queue();
-        let Ok(Job::Export {
+        let Ok(crate::Job::Export {
             export: crate::worker::Export::Batch { .. },
             path,
             cancel,

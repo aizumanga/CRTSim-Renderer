@@ -8,6 +8,7 @@ mod gallery;
 mod gallery_ui;
 mod lut_gallery;
 mod model;
+mod playback;
 mod preview_ui;
 mod schedule;
 mod settings_ui;
@@ -83,6 +84,10 @@ struct App {
     video_frame: u64,
     selected_frame: u64,
     video_frames: u64,
+    /// Where in the video the frame on screen is, in seconds; playing starts from here.
+    play_time: f64,
+    /// The video playing in the preview, if it is.
+    playback: Option<playback::Playback>,
     video_options: crtsim_media::Options,
     animation_options: crtsim_media::AnimationOptions,
     work: Work,
@@ -235,6 +240,8 @@ impl App {
             video_frame: 0,
             selected_frame: 0,
             video_frames: 0,
+            play_time: 0.,
+            playback: None,
             video_options: crtsim_media::Options::default(),
             animation_options: Default::default(),
             work: Work::Idle,
@@ -288,22 +295,12 @@ impl App {
     /// Puts a preview on screen, releasing the registration of the one it replaces. egui keeps
     /// no ownership of a frame handed to it, so nothing else frees these.
     fn show_preview(&mut self, next: Option<Displayed>) {
-        Self::replace_preview(&mut self.rendered, self.render_state.as_ref(), next);
-    }
-
-    /// The same, reached through fields rather than through `self`, for callers that are
-    /// already holding a borrow of another part of the application.
-    fn replace_preview(
-        rendered: &mut Option<Displayed>,
-        state: Option<&eframe::egui_wgpu::RenderState>,
-        next: Option<Displayed>,
-    ) {
-        if let Some(Displayed::Frame { id, .. }) = rendered.take() {
-            if let Some(state) = state {
+        if let Some(Displayed::Frame { id, .. }) = self.rendered.take() {
+            if let Some(state) = &self.render_state {
                 state.renderer.write().free_texture(&id);
             }
         }
-        *rendered = next;
+        self.rendered = next;
     }
 
     /// Prepares a finished preview for drawing. A frame is registered with egui; pixels are
@@ -484,7 +481,7 @@ impl App {
     /// Also while exporting: previews have their own worker, and the export works from the
     /// settings it captured, so the ones on screen are free to change.
     fn request_preview(&mut self) {
-        if self.work.is_loading() || self.workflow.playback.is_some() {
+        if self.work.is_loading() || self.playback.is_some() {
             return;
         }
         let Some(revision) = self.schedule.take() else {

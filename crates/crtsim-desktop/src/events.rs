@@ -104,7 +104,7 @@ impl App {
     fn show_loaded(&mut self, loaded: worker::Loaded) {
         let status = match &loaded.video {
             Some(at) => {
-                self.workflow.play_time = at.frame as f64 / at.video.fps;
+                self.play_time = at.frame as f64 / at.video.fps;
                 self.video_frame = at.frame;
                 self.selected_frame = at.frame;
                 self.video_frames = at.frames;

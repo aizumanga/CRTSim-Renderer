@@ -166,11 +166,9 @@ pub enum Job {
     },
     Playback {
         video: Video,
-        start: f64,
         config: Config,
         options: Options,
-        cancel: Arc<AtomicBool>,
-        frames: mpsc::SyncSender<Result<PlaybackFrame, String>>,
+        feed: Feed,
     },
     Shutdown,
 }
@@ -275,6 +273,13 @@ pub struct PlaybackFrame {
     pub time: f64,
     pub source: RgbaImage,
     pub crt: RgbaImage,
+}
+/// The worker's end of a playback: where in the video to start, where to send the frames it
+/// renders, and the flag that says to stop.
+pub struct Feed {
+    pub start: f64,
+    pub frames: mpsc::SyncSender<Result<PlaybackFrame, String>>,
+    pub cancel: Arc<AtomicBool>,
 }
 /// A finished preview. A renderer on its own device cannot hand its textures to the
 /// interface, so it still sends pixels.
@@ -491,22 +496,11 @@ fn work(ctx: egui::Context, gpu: Gpu, jobs: mpsc::Receiver<Job>, events: mpsc::S
             Job::Shutdown => break,
             Job::Playback {
                 video,
-                start,
                 config,
                 options,
-                cancel,
-                frames,
+                feed,
             } => {
-                play(
-                    &mut graphics,
-                    &ctx,
-                    &video,
-                    start,
-                    &config,
-                    &options,
-                    &cancel,
-                    &frames,
-                );
+                play(&mut graphics, &ctx, &video, &config, &options, &feed);
                 continue;
             }
             // Loading an image cannot be cancelled.
@@ -687,24 +681,26 @@ fn export_video(
     crtsim_media::export(video, path, config, options, renderer, cancel, progress)
 }
 
-/// Streams rendered frames of `video` into `frames`, which the interface plays from. An error
+/// Streams rendered frames of `video` into the feed, which the interface plays from. An error
 /// is queued behind the frames already there, unless playback has been stopped meanwhile.
-#[allow(clippy::too_many_arguments)]
 fn play(
     graphics: &mut Graphics,
     ctx: &egui::Context,
     video: &Video,
-    start: f64,
     config: &Config,
     options: &Options,
-    cancel: &Arc<AtomicBool>,
-    frames: &mpsc::SyncSender<std::result::Result<PlaybackFrame, String>>,
+    feed: &Feed,
 ) {
+    let Feed {
+        start,
+        frames,
+        cancel,
+    } = feed;
     let played = graphics.guard("Playback graphics driver failed", |g| {
         let renderer = g.renderer(|| {})?;
         crtsim_media::playback(
             video,
-            start,
+            *start,
             config,
             options,
             renderer,

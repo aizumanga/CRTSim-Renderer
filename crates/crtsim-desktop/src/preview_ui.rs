@@ -143,14 +143,14 @@ impl App {
         ui.add_enabled_ui(enabled, |ui| {
             ui.horizontal_wrapped(|ui| {
                 if ui
-                    .button(if self.workflow.playback.is_some() {
+                    .button(if self.playback.is_some() {
                         "Ⅱ Pause"
                     } else {
                         "▶ Play"
                     })
                     .clicked()
                 {
-                    if self.workflow.playback.is_some() {
+                    if self.playback.is_some() {
                         self.stop_playback();
                     } else {
                         self.start_playback();
@@ -159,8 +159,8 @@ impl App {
                 ui.small("Silent preview");
                 ui.monospace(format!(
                     "{:02}:{:02} / {:02}:{:02}",
-                    self.workflow.play_time as u64 / 60,
-                    self.workflow.play_time as u64 % 60,
+                    self.play_time as u64 / 60,
+                    self.play_time as u64 % 60,
                     video.duration as u64 / 60,
                     video.duration as u64 % 60
                 ));
@@ -202,7 +202,7 @@ impl App {
             });
             if !ui.ctx().wants_keyboard_input() {
                 if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space)) {
-                    if self.workflow.playback.is_some() {
+                    if self.playback.is_some() {
                         self.stop_playback();
                     } else {
                         self.start_playback();
