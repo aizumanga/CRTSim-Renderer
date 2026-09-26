@@ -23,8 +23,7 @@ pub fn load_preset(path: &Path, input: (u32, u32)) -> Result<Config> {
         "Preset exceeds 32 MB"
     );
     let c = Config::from_json_slice(&std::fs::read(path)?)?;
-    c.signal_size(input)?;
-    c.output_size(input)?;
+    c.validate_for(input)?;
     Ok(c)
 }
 /// Publish only a complete file, atomically replacing a destination approved by the save dialog.
@@ -87,8 +86,7 @@ pub fn load_preset_from_image(path: &Path, input: (u32, u32)) -> Result<Config> 
         "Preset metadata exceeds 32 MB"
     );
     let c = Config::from_json_slice(json).context("Embedded preset metadata is invalid")?;
-    c.signal_size(input)?;
-    c.output_size(input)?;
+    c.validate_for(input)?;
     Ok(c)
 }
 

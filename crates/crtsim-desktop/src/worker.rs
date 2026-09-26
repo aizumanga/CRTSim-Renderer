@@ -1,4 +1,4 @@
-use crate::files;
+use crate::{file_name, files};
 use anyhow::{ensure, Result};
 use crtsim_core::{config::Config, nes_luts, RenderProgress, Renderer, Sequence};
 use crtsim_media::{Options, Video};
@@ -143,7 +143,7 @@ pub enum PreviewJob {
     Shutdown,
 }
 
-/// Work for the other thread: loading, exports, batches and playback, one at a time.
+/// Work for the other thread: loading, exports and playback, one at a time.
 pub enum Job {
     Load(PathBuf),
     LoadVideo {
@@ -158,30 +158,9 @@ pub enum Job {
         input: (u32, u32),
         cancel: Arc<AtomicBool>,
     },
+    /// Rendered and saved to `path`, which is only replaced once the whole file is ready.
     Export {
-        input: Arc<RgbaImage>,
-        config: Config,
-        path: PathBuf,
-        cancel: Arc<AtomicBool>,
-    },
-    ExportVideo {
-        video: Video,
-        options: Options,
-        config: Config,
-        path: PathBuf,
-        cancel: Arc<AtomicBool>,
-    },
-    ExportAnimation {
-        video: Video,
-        options: crtsim_media::AnimationOptions,
-        config: Config,
-        path: PathBuf,
-        cancel: Arc<AtomicBool>,
-    },
-    Batch {
-        source: PathBuf,
-        config: Config,
-        options: Options,
+        export: Export,
         path: PathBuf,
         cancel: Arc<AtomicBool>,
     },
@@ -195,6 +174,89 @@ pub enum Job {
     },
     Shutdown,
 }
+
+/// What an export renders, each with the settings captured when it was asked for.
+pub enum Export {
+    /// A still, saved as a PNG that carries its settings.
+    Image {
+        input: Arc<RgbaImage>,
+        config: Config,
+    },
+    /// A whole video, with its audio and other tracks.
+    Video {
+        video: Video,
+        options: Options,
+        config: Config,
+    },
+    /// An animated GIF or WebP, as the path's extension asks.
+    Animation {
+        video: Video,
+        options: crtsim_media::AnimationOptions,
+        config: Config,
+    },
+    /// A batch job, whose source is only read once it runs. The queue chose a video or a PNG
+    /// when it named the output.
+    Batch {
+        source: PathBuf,
+        options: Options,
+        config: Config,
+    },
+}
+
+impl Export {
+    /// Reported when the graphics driver fails under the export.
+    fn driver_failed(&self) -> &'static str {
+        match self {
+            Self::Image { .. } => STILL_FAILED,
+            Self::Video { .. } => "Video graphics driver failed. Try a smaller resolution.",
+            Self::Animation { .. } => "Animation graphics driver failed. Try a smaller size.",
+            Self::Batch { .. } => "Batch graphics driver failed. Try a smaller resolution.",
+        }
+    }
+
+    fn run(
+        &self,
+        graphics: &mut Graphics,
+        path: &Path,
+        cancel: &Arc<AtomicBool>,
+        progress: &dyn Fn(RenderProgress),
+    ) -> Result<()> {
+        match self {
+            Self::Image { input, config } => {
+                export_image(graphics, input, config, path, cancel, progress)
+            }
+            Self::Video {
+                video,
+                options,
+                config,
+            } => export_video(graphics, video, config, options, path, cancel, progress),
+            Self::Animation {
+                video,
+                options,
+                config,
+            } => {
+                let renderer = graphics.renderer(|| {})?;
+                crtsim_media::export_animation(
+                    video, path, config, options, renderer, cancel, progress,
+                )
+            }
+            Self::Batch {
+                source,
+                options,
+                config,
+            } => {
+                if crtsim_media::Container::of(path).is_some() {
+                    let video = crtsim_media::probe(source, cancel)?;
+                    export_video(graphics, &video, config, options, path, cancel, progress)
+                } else {
+                    let input = crtsim_core::input::load_image(source)?;
+                    export_image(graphics, &input, config, path, cancel, progress)
+                }
+            }
+        }
+    }
+}
+
 /// Which gallery entry a thumbnail belongs to.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ThumbnailKey {
@@ -248,17 +310,20 @@ impl Failure {
 }
 pub type Outcome<T> = std::result::Result<T, Failure>;
 
-pub struct LoadedImage {
+/// A source opened for editing: an image, or one frame of a video.
+pub struct Loaded {
+    /// Where it is, with links resolved.
     pub path: PathBuf,
+    /// What to call it.
+    pub name: String,
     pub image: RgbaImage,
     /// The image made opaque and at most 2048 pixels on a side, for showing the original.
     pub thumbnail: RgbaImage,
+    /// For a frame of a video, the video and where in it the frame is.
+    pub video: Option<VideoFrame>,
 }
-pub struct LoadedVideo {
+pub struct VideoFrame {
     pub video: Video,
-    /// The requested frame, and a thumbnail of it as for an image.
-    pub image: RgbaImage,
-    pub thumbnail: RgbaImage,
     pub frame: u64,
     /// How many frames the video decodes to.
     pub frames: u64,
@@ -276,8 +341,7 @@ pub struct Previewed {
 
 pub enum Event {
     Progress(RenderProgress),
-    Loaded(std::result::Result<LoadedImage, String>),
-    VideoLoaded(Outcome<LoadedVideo>),
+    Loaded(Outcome<Loaded>),
     PresetImported(Outcome<ImportedPreset>),
     Preview {
         revision: u64,
@@ -445,13 +509,16 @@ fn work(ctx: egui::Context, gpu: Gpu, jobs: mpsc::Receiver<Job>, events: mpsc::S
                 );
                 continue;
             }
-            Job::Load(path) => Event::Loaded(load_image(path).map_err(|e| format!("{e:#}"))),
+            // Loading an image cannot be cancelled.
+            Job::Load(path) => {
+                Event::Loaded(load_image(path).map_err(|e| Failure::Failed(format!("{e:#}"))))
+            }
             Job::LoadVideo {
                 path,
                 frame,
                 cached,
                 cancel,
-            } => Event::VideoLoaded(
+            } => Event::Loaded(
                 load_video(&path, frame, cached, &cancel).map_err(|e| Failure::of(e, &cancel)),
             ),
             Job::ImportPreset {
@@ -462,76 +529,14 @@ fn work(ctx: egui::Context, gpu: Gpu, jobs: mpsc::Receiver<Job>, events: mpsc::S
                 import_preset(path, input, &cancel).map_err(|e| Failure::of(e, &cancel)),
             ),
             Job::Export {
-                input,
-                config,
+                export,
                 path,
                 cancel,
             } => Event::Exported(
                 graphics
-                    .guard(STILL_FAILED, |g| {
-                        export_image(g, &input, &config, &path, &cancel, &progress)
+                    .guard(export.driver_failed(), |g| {
+                        export.run(g, &path, &cancel, &progress)
                     })
-                    .map(|()| path)
-                    .map_err(|e| Failure::of(e, &cancel)),
-            ),
-            Job::ExportVideo {
-                video,
-                options,
-                config,
-                path,
-                cancel,
-            } => Event::Exported(
-                graphics
-                    .guard(
-                        "Video graphics driver failed. Try a smaller resolution.",
-                        |g| export_video(g, &video, &config, &options, &path, &cancel, &progress),
-                    )
-                    .map(|()| path)
-                    .map_err(|e| Failure::of(e, &cancel)),
-            ),
-            Job::ExportAnimation {
-                video,
-                options,
-                config,
-                path,
-                cancel,
-            } => Event::Exported(
-                graphics
-                    .guard(
-                        "Animation graphics driver failed. Try a smaller size.",
-                        |g| {
-                            let renderer = g.renderer(|| {})?;
-                            crtsim_media::export_animation(
-                                &video, &path, &config, &options, renderer, &cancel, &progress,
-                            )
-                        },
-                    )
-                    .map(|()| path)
-                    .map_err(|e| Failure::of(e, &cancel)),
-            ),
-            Job::Batch {
-                source,
-                config,
-                options,
-                path,
-                cancel,
-            } => Event::Exported(
-                graphics
-                    .guard(
-                        "Batch graphics driver failed. Try a smaller resolution.",
-                        |g| {
-                            // The queue chose PNG or video when it named the output.
-                            if crtsim_media::Container::of(&path).is_some() {
-                                let video = crtsim_media::probe(&source, &cancel)?;
-                                export_video(
-                                    g, &video, &config, &options, &path, &cancel, &progress,
-                                )
-                            } else {
-                                let input = crtsim_core::input::load_image(&source)?;
-                                export_image(g, &input, &config, &path, &cancel, &progress)
-                            }
-                        },
-                    )
                     .map(|()| path)
                     .map_err(|e| Failure::of(e, &cancel)),
             ),
@@ -543,7 +548,7 @@ fn work(ctx: egui::Context, gpu: Gpu, jobs: mpsc::Receiver<Job>, events: mpsc::S
     }
 }
 
-fn load_image(path: PathBuf) -> Result<LoadedImage> {
+fn load_image(path: PathBuf) -> Result<Loaded> {
     let image = crtsim_core::input::load_image(&path)?;
     // Keep thumbnail processing off the UI thread, including alpha before resizing.
     let mut opaque = image.clone();
@@ -551,10 +556,12 @@ fn load_image(path: PathBuf) -> Result<LoadedImage> {
     let thumbnail = image::DynamicImage::ImageRgba8(opaque)
         .thumbnail(2048, 2048)
         .to_rgba8();
-    Ok(LoadedImage {
-        path,
+    Ok(Loaded {
+        name: file_name(&path),
+        path: path.canonicalize().unwrap_or(path),
         image,
         thumbnail,
+        video: None,
     })
 }
 
@@ -563,7 +570,7 @@ fn load_video(
     frame: u64,
     cached: Option<(Video, u64)>,
     cancel: &Arc<AtomicBool>,
-) -> Result<LoadedVideo> {
+) -> Result<Loaded> {
     let (video, frames) = match cached {
         Some(cached) => cached,
         None => {
@@ -577,12 +584,16 @@ fn load_video(
     let thumbnail = image::DynamicImage::ImageRgba8(image.clone())
         .thumbnail(2048, 2048)
         .to_rgba8();
-    Ok(LoadedVideo {
-        video,
+    Ok(Loaded {
+        path: video.path.clone(),
+        name: file_name(&video.path),
         image,
         thumbnail,
-        frame,
-        frames,
+        video: Some(VideoFrame {
+            video,
+            frame,
+            frames,
+        }),
     })
 }
 
@@ -788,11 +799,13 @@ mod tests {
         let input = Arc::new(crtsim_core::config::test_card());
         // Long enough to still be running when the preview is done: the maximum warm-up, at 4K.
         jobs.send(Job::Export {
-            input: input.clone(),
-            config: Config {
-                output: "4k".into(),
-                warmup: 240,
-                ..Config::default()
+            export: Export::Image {
+                input: input.clone(),
+                config: Config {
+                    output: "4k".into(),
+                    warmup: 240,
+                    ..Config::default()
+                },
             },
             path: dir.path().join("export.png"),
             cancel: cancel.clone(),

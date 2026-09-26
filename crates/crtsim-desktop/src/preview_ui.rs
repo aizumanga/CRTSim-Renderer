@@ -48,8 +48,9 @@ impl App {
             export resolution. Inspect mask detail at Export resolution \
             and 1× zoom.",
         );
-        if let Ok(c) =
-            model::preview_config(&self.config, self.input.dimensions(), self.preview_limit)
+        if let Ok(c) = self
+            .config
+            .with_max_output_side(self.input.dimensions(), self.preview_limit)
         {
             let input = self.input.dimensions();
             if let (Ok((w, h)), Ok(signal)) = (c.output_size(input), c.signal_size(input)) {

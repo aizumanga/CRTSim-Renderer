@@ -1,5 +1,6 @@
 mod audition;
 mod chrome;
+mod dialogs;
 mod events;
 mod export_ui;
 mod files;
@@ -9,16 +10,20 @@ mod lut_gallery;
 mod model;
 mod preview_ui;
 mod settings_ui;
+mod smoke;
 mod theme;
 mod thumbnails;
+mod toolbar;
 mod widgets;
 mod worker;
 mod workflow;
 
 use crtsim_core::config::{self, ColorMode, Config, Filter, Fit, MaskRepeats, Phase};
 use crtsim_core::{settings, RenderProgress};
+use dialogs::Dialog;
 use eframe::egui::{self, TextureHandle};
 use image::RgbaImage;
+use smoke::Smoke;
 use std::{
     path::{Path, PathBuf},
     sync::{
@@ -29,72 +34,6 @@ use std::{
 };
 use worker::{Event, Failure, Job, PreviewJob};
 
-#[derive(Clone, Copy)]
-enum Dialog {
-    OpenProject,
-    SaveProject,
-    Lut,
-    File,
-    ExportVideo,
-    ImportPreset,
-    LoadPreset,
-    SavePreset,
-    Export,
-}
-
-/// What a file dialog offers: the files it filters for and, when it saves, the name it suggests.
-struct Chooser {
-    filter: &'static str,
-    extensions: Vec<&'static str>,
-    /// For a save dialog, the suggested file name before its extension, the filter's only one.
-    save_as: Option<&'static str>,
-}
-
-impl Dialog {
-    fn chooser(self, export: export_ui::ExportFormat) -> Chooser {
-        let (filter, extensions, save_as) = match self {
-            Self::OpenProject => ("CRT project", vec![workflow::PROJECT_EXTENSION], None),
-            Self::SaveProject => (
-                "CRT project",
-                vec![workflow::PROJECT_EXTENSION],
-                Some("project"),
-            ),
-            Self::Lut => ("3D color LUT", vec!["cube"], None),
-            Self::File => ("Images and videos", files::media_extensions(), None),
-            Self::ExportVideo => (export.filter(), vec![export.extension()], Some("rendered")),
-            Self::ImportPreset => (
-                "Rendered image/video",
-                [&["png"], crtsim_media::VIDEO_EXTENSIONS].concat(),
-                None,
-            ),
-            Self::LoadPreset => ("CRT preset", vec!["json"], None),
-            Self::SavePreset => ("CRT preset", vec!["json"], Some("my-crt")),
-            Self::Export => ("PNG image", vec!["png"], Some("rendered")),
-        };
-        Chooser {
-            filter,
-            extensions,
-            save_as,
-        }
-    }
-}
-
-/// Native dialogs confirm the path they return. Where it lacks the extension and one is appended,
-/// the actual destination is confirmed too, rather than silently replacing another file.
-fn with_extension_confirmed(mut path: PathBuf, extension: &str) -> Option<PathBuf> {
-    if path.extension().is_some() {
-        return Some(path);
-    }
-    path.set_extension(extension);
-    let replace = !path.exists()
-        || rfd::MessageDialog::new()
-            .set_title("Replace file?")
-            .set_description(format!("Replace {}?", path.display()))
-            .set_buttons(rfd::MessageButtons::YesNo)
-            .show()
-            == rfd::MessageDialogResult::Yes;
-    replace.then_some(path)
-}
 #[derive(Clone, Copy, PartialEq)]
 enum View {
     Crt,
@@ -131,30 +70,6 @@ impl Work {
             Self::Idle => None,
             Self::Loading(cancel) => cancel.as_ref(),
             Self::Exporting { cancel, .. } => Some(cancel),
-        }
-    }
-}
-
-/// A CI run: open the window, wait for a rendered preview, save a screenshot and quit. It
-/// never reads or writes the app data a person's own runs keep.
-struct Smoke {
-    screenshot: PathBuf,
-    /// Screenshot the welcome as it first appears, not waiting for a preview.
-    welcome: bool,
-    /// Open the video export dialog once a preview is ready, and screenshot that.
-    export: bool,
-    requested: bool,
-    started: Instant,
-}
-
-impl Smoke {
-    fn new(screenshot: PathBuf) -> Self {
-        Self {
-            screenshot,
-            welcome: false,
-            export: false,
-            requested: false,
-            started: Instant::now(),
         }
     }
 }
@@ -255,13 +170,16 @@ fn file_stem(path: &Path) -> String {
         .into_owned()
 }
 
+/// `image` uploaded for drawing, shrunk first where it is larger than `limit` on a side.
 fn texture(ctx: &egui::Context, name: &str, image: &RgbaImage, limit: u32) -> TextureHandle {
+    let shrunk;
     let image = if image.width().max(image.height()) > limit {
-        image::DynamicImage::ImageRgba8(image.clone())
+        shrunk = image::DynamicImage::ImageRgba8(image.clone())
             .thumbnail(limit, limit)
-            .to_rgba8()
+            .to_rgba8();
+        &shrunk
     } else {
-        image.clone()
+        image
     };
     ctx.load_texture(
         name,
@@ -306,18 +224,14 @@ impl App {
             // Window placement is a convenience; opening at the default size is fine.
             Some(Err(_)) | None => gallery::Layout::new(),
         };
-        let show_welcome = smoke.is_none() && store.as_ref().is_none_or(|s| s.welcome_needed());
-        let mut gallery_entries = gallery::builtins();
-        let mut gallery_warnings = vec![];
-        if let Some(ref s) = store {
-            match s.scan() {
-                Ok((entries, warnings)) => {
-                    gallery_entries.extend(entries);
-                    gallery_warnings = warnings;
-                }
-                Err(e) => gallery_warnings.push(format!("{e:#}")),
-            }
-        }
+        let show_welcome = match &smoke {
+            Some(smoke) => smoke.welcome,
+            None => store.as_ref().is_none_or(gallery::Store::welcome_needed),
+        };
+        let (show_gallery, show_lut_gallery) = smoke
+            .as_ref()
+            .map_or((false, false), |smoke| (smoke.gallery, smoke.lut_gallery));
+        let (gallery_entries, gallery_warnings) = gallery::entries(store.as_ref());
         let mut app = Self {
             workflow: workflow::State::default(),
             ui_context: ctx.clone(),
@@ -333,8 +247,8 @@ impl App {
             theme,
             show_welcome,
             show_credits: false,
-            show_gallery: false,
-            show_lut_gallery: false,
+            show_gallery,
+            show_lut_gallery,
             lut_gallery_search: String::new(),
             gallery_entries,
             audition: None,
@@ -490,29 +404,6 @@ impl App {
         let card = config::test_card();
         self.set_source(None, "Built-in test card".into(), None, card.clone(), &card);
     }
-    fn dialog(&mut self, kind: Dialog, ctx: &egui::Context) {
-        self.stop_playback();
-        self.dialog_open = true;
-        let send = self.dialog_send.clone();
-        let ctx = ctx.clone();
-        let export = self.workflow.export_format;
-        std::thread::spawn(move || {
-            let chooser = kind.chooser(export);
-            let dialog = rfd::FileDialog::new().add_filter(chooser.filter, &chooser.extensions);
-            let path = match chooser.save_as {
-                None => dialog.pick_file(),
-                Some(name) => {
-                    let extension = chooser.extensions[0];
-                    dialog
-                        .set_file_name(format!("{name}.{extension}"))
-                        .save_file()
-                        .and_then(|path| with_extension_confirmed(path, extension))
-                }
-            };
-            let _ = send.send((kind, path));
-            ctx.request_repaint();
-        });
-    }
     fn load(&mut self, path: PathBuf) {
         self.stop_playback();
         if path
@@ -563,27 +454,43 @@ impl App {
         self.work = Work::Idle;
         self.dirty = false;
     }
+    /// The image, or frame, on screen, exported as a PNG at full resolution.
     fn export(&mut self, path: PathBuf) {
         self.stop_playback();
-        if let Err(e) = model::preview_config(&self.config, self.input.dimensions(), None) {
+        if let Err(e) = self.config.validate_for(self.input.dimensions()) {
             self.error = Some(format!("{e:#}"));
             return;
         }
-        let cancel = Arc::new(AtomicBool::new(false));
-        self.work = Work::Exporting {
-            cancel: cancel.clone(),
-            progress: Some(RenderProgress {
-                fraction: 0.,
-                stage: "Queued for export".into(),
-            }),
-        };
-        self.status = format!(
+        let status = format!(
             "Exporting {}… Settings are captured for this export.",
             path.display()
         );
-        self.send(Job::Export {
+        let export = worker::Export::Image {
             input: self.input.clone(),
             config: self.config.clone(),
+        };
+        self.start_export(export, path, status, Some("Queued for export"));
+    }
+    /// Hands `export` to the work thread, which saves it to `path`. It can be cancelled from the
+    /// status bar, which shows the `queued` stage until the worker reports its own.
+    fn start_export(
+        &mut self,
+        export: worker::Export,
+        path: PathBuf,
+        status: String,
+        queued: Option<&str>,
+    ) {
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.work = Work::Exporting {
+            cancel: cancel.clone(),
+            progress: queued.map(|stage| RenderProgress {
+                fraction: 0.,
+                stage: stage.into(),
+            }),
+        };
+        self.status = status;
+        self.send(Job::Export {
+            export,
             path,
             cancel,
         });
@@ -597,11 +504,10 @@ impl App {
         self.history.commit(&self.config);
         self.dirty = false;
         self.audition_pending = false;
-        match model::preview_config(
-            self.shown_config(),
-            self.input.dimensions(),
-            self.preview_limit,
-        ) {
+        match self
+            .shown_config()
+            .with_max_output_side(self.input.dimensions(), self.preview_limit)
+        {
             Ok(config) => {
                 self.rendering = true;
                 self.send_preview(PreviewJob::Preview {
@@ -611,107 +517,6 @@ impl App {
                 });
             }
             Err(e) => self.preview_error = Some(format!("Cannot preview: {e:#}")),
-        }
-    }
-    fn toolbar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        ui.horizontal_wrapped(|ui| {
-            chrome::monitor(ui);
-            ui.label(egui::RichText::new("CRTSim Renderer").strong().size(17.));
-            ui.separator();
-            ui.add_enabled_ui(self.can_start_work(), |ui| {
-                ui.menu_button("File", |ui| {
-                    if ui.button("Open media…").clicked() {
-                        self.dialog(Dialog::File, ctx);
-                        ui.close_menu();
-                    }
-                    if ui.button("Test card").clicked() {
-                        self.show_test_card();
-                        ui.close_menu();
-                    }
-                    ui.separator();
-                    self.project_menu(ui, ctx);
-                });
-                ui.menu_button("Presets", |ui| {
-                    if ui.button("Preset gallery…").clicked() {
-                        self.refresh_gallery();
-                        self.show_gallery = true;
-                        ui.close_menu();
-                    }
-                    for (label, kind) in [
-                        ("Load preset…", Dialog::LoadPreset),
-                        ("Save preset…", Dialog::SavePreset),
-                        ("Import from image / video…", Dialog::ImportPreset),
-                    ] {
-                        if ui.button(label).clicked() {
-                            self.dialog(kind, ctx);
-                            ui.close_menu();
-                        }
-                    }
-                });
-                ui.menu_button("View", |ui| {
-                    ui.label("Interface theme");
-                    let mut selected = self.theme;
-                    for theme in theme::Theme::ALL {
-                        ui.selectable_value(&mut selected, theme, theme.name())
-                            .on_hover_text(theme.description());
-                    }
-                    if selected != self.theme {
-                        self.theme = selected;
-                        self.theme.apply(ctx);
-                        if let Some(store) = &self.store {
-                            if let Err(e) = store.set_theme(self.theme) {
-                                self.error =
-                                    Some(format!("Could not remember the selected theme: {e:#}"));
-                            }
-                        }
-                        ui.close_menu();
-                    }
-                });
-                ui.menu_button("Export", |ui| {
-                    if ui
-                        .button(if self.video.is_some() {
-                            "Current frame as PNG…"
-                        } else {
-                            "Image as PNG…"
-                        })
-                        .clicked()
-                    {
-                        self.dialog(Dialog::Export, ctx);
-                        ui.close_menu();
-                    }
-                    if ui
-                        .add_enabled(self.video.is_some(), egui::Button::new("Video…"))
-                        .clicked()
-                    {
-                        self.open_video_export(false);
-                        ui.close_menu();
-                    }
-                    ui.separator();
-                    if ui.button("Batch queue…").clicked() {
-                        self.workflow.show_queue = true;
-                        ui.close_menu();
-                    }
-                });
-            });
-            if ui.button("Credits").clicked() {
-                self.show_credits = true;
-            }
-        });
-    }
-}
-
-impl App {
-    fn refresh_gallery(&mut self) {
-        self.gallery_entries = gallery::builtins();
-        self.gallery_warnings.clear();
-        if let Some(ref store) = self.store {
-            match store.scan() {
-                Ok((entries, warnings)) => {
-                    self.gallery_entries.extend(entries);
-                    self.gallery_warnings = warnings;
-                }
-                Err(e) => self.gallery_warnings.push(format!("{e:#}")),
-            }
         }
     }
     /// Remembered placement for one tool window. Copied out so the window's contents can
@@ -879,49 +684,6 @@ impl eframe::App for App {
     }
 }
 
-impl App {
-    /// Drives a smoke run: once the preview has rendered, opens the export dialog if asked to,
-    /// then takes the screenshot, saves it and closes the window. A run that never gets there
-    /// fails after two minutes rather than hanging CI.
-    fn advance_smoke(&mut self, ctx: &egui::Context) {
-        let ready = self.rendered_revision == Some(self.revision);
-        if ready && self.smoke.as_ref().is_some_and(|smoke| smoke.export) {
-            if let Some(smoke) = &mut self.smoke {
-                smoke.export = false;
-            }
-            self.open_video_export(false);
-            ctx.request_repaint();
-            return;
-        }
-        let thumbnails_pending = self.thumbnails_pending();
-        let (error, preview_error) = (&self.error, &self.preview_error);
-        let Some(smoke) = &mut self.smoke else {
-            return;
-        };
-        if smoke.started.elapsed() > Duration::from_secs(120) {
-            eprintln!("Desktop smoke test timed out: {error:?}; {preview_error:?}");
-            std::process::exit(1);
-        }
-        if (smoke.welcome || ready && !thumbnails_pending) && !smoke.requested {
-            smoke.requested = true;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot);
-        }
-        for event in ctx.input(|i| i.events.clone()) {
-            if let egui::Event::Screenshot { image, .. } = event {
-                let bytes: Vec<u8> = image.pixels.iter().flat_map(|p| p.to_array()).collect();
-                let im = RgbaImage::from_raw(image.width() as u32, image.height() as u32, bytes)
-                    .unwrap();
-                if let Err(e) = files::save_png(&smoke.screenshot, im, None) {
-                    eprintln!("{e:#}");
-                    std::process::exit(1);
-                }
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
-        }
-        ctx.request_repaint_after(Duration::from_millis(100));
-    }
-}
-
 impl Drop for App {
     fn drop(&mut self) {
         self.stop_playback();
@@ -1044,20 +806,19 @@ fn main() -> eframe::Result<()> {
                 }
                 _ => worker::Gpu::Own(backends),
             };
-            let smoke = smoke.map(|screenshot| Smoke {
-                welcome: smoke_welcome,
-                export: smoke_export,
-                ..Smoke::new(screenshot)
+            let smoke = smoke.map(|screenshot| {
+                let mut smoke = Smoke::new(screenshot);
+                smoke.welcome = smoke_welcome;
+                smoke.export = smoke_export;
+                smoke.gallery = smoke_gallery;
+                smoke.lut_gallery = smoke_lut_gallery;
+                smoke
             });
-            let mut app = App::new(&cc.egui_ctx, gpu, input, smoke);
-            if app.smoke.is_some() {
-                app.show_welcome = smoke_welcome;
-                app.show_gallery = smoke_gallery;
-                app.show_lut_gallery = smoke_lut_gallery;
+            if smoke.is_some() {
                 // Keep galleries inside the main window so the smoke screenshot captures them.
                 cc.egui_ctx.set_embed_viewports(true);
             }
-            Box::new(app)
+            Box::new(App::new(&cc.egui_ctx, gpu, input, smoke))
         }),
     )
 }
@@ -1087,8 +848,10 @@ mod tests {
         assert!(app.rendered.is_none());
         assert!(!app.rendering);
         assert!(app.dirty);
-        send.send(Event::Loaded(Err("Cannot decode selected file".into())))
-            .unwrap();
+        send.send(Event::Loaded(Err(Failure::Failed(
+            "Cannot decode selected file".into(),
+        ))))
+        .unwrap();
         send.send(Event::Preview {
             revision: app.revision,
             result: Ok(worker::Previewed {
@@ -1137,8 +900,7 @@ mod tests {
         app.input = Arc::new(RgbaImage::new(1, 1));
         match receive.recv().unwrap() {
             Job::Export {
-                input,
-                config,
+                export: worker::Export::Image { input, config },
                 cancel,
                 ..
             } => {

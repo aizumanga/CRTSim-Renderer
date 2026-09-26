@@ -3,6 +3,13 @@ use crate::{chrome, gallery, model, thumbnails, App, Dialog};
 use crtsim_core::config::Config;
 use eframe::egui::{self, TextureHandle};
 
+const DISCLAIMER: &str = "This project is what some would call \"vibe-coded slop\", built based on J. Kyle Pittman's public CRTSim. The original CRT simulation, shaders, textures and meshes are his work; this project's AI-assisted renderer port and interface are separate additions. This is an unofficial project, not made or endorsed by him.";
+const SUPPORT: &str = "Please support J. Kyle Pittman and Minor Key Games: buy and play their games on itch.io and Steam.";
+const ITCH: &str = "https://piratehearts.itch.io/";
+const STEAM: &str = "https://store.steampowered.com/developer/MinorKeyGames";
+const ARTICLE: &str =
+    "https://www.gamedeveloper.com/programming/crt-simulation-in-super-win-the-game";
+
 impl App {
     pub(crate) fn gallery_window(&mut self, ctx: &egui::Context) {
         if !self.show_gallery || self.show_welcome {
@@ -133,6 +140,10 @@ impl App {
             self.replace_config(config);
         }
     }
+    /// Reads the personal presets again, which may have changed on disk.
+    pub(crate) fn refresh_gallery(&mut self) {
+        (self.gallery_entries, self.gallery_warnings) = gallery::entries(self.store.as_ref());
+    }
     fn save_to_gallery(&mut self) {
         let Some(store) = &self.store else {
             return;
@@ -186,7 +197,7 @@ impl App {
         }
     }
     fn credit_text(ui: &mut egui::Ui) {
-        ui.label(gallery::DISCLAIMER);
+        ui.label(DISCLAIMER);
         ui.separator();
         ui.strong("Original CRTSim: J. Kyle Pittman");
         ui.label(
@@ -199,15 +210,12 @@ impl App {
             "https://github.com/MinorKeyGames/CRTSim",
         );
         ui.separator();
-        ui.label(gallery::SUPPORT);
+        ui.label(SUPPORT);
         ui.horizontal(|ui| {
-            ui.hyperlink_to("J. Kyle Pittman on itch.io", gallery::ITCH);
-            ui.hyperlink_to("Minor Key Games on Steam", gallery::STEAM);
+            ui.hyperlink_to("J. Kyle Pittman on itch.io", ITCH);
+            ui.hyperlink_to("Minor Key Games on Steam", STEAM);
         });
-        ui.hyperlink_to(
-            "Read: CRT Simulation in Super Win the Game",
-            gallery::ARTICLE,
-        );
+        ui.hyperlink_to("Read: CRT Simulation in Super Win the Game", ARTICLE);
         ui.separator();
         ui.strong("NES LUT collection: Wellington Uemura (wtuemura)");
         ui.label(

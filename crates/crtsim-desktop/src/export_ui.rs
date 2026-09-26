@@ -628,7 +628,11 @@ mod tests {
             .unwrap();
         app.receive(&ctx);
         match receive.try_recv() {
-            Ok(Job::ExportAnimation { options, path, .. }) => {
+            Ok(Job::Export {
+                export: worker::Export::Animation { options, .. },
+                path,
+                ..
+            }) => {
                 assert_eq!(options.fps, 12);
                 assert_eq!(path, dir.path().join("out.GIF"));
             }

@@ -296,11 +296,18 @@ impl Config {
         validate_size(d)?;
         Ok(d)
     }
+    /// Checks the settings, and that they size a render of an input `input` pixels large, so
+    /// settings that cannot render it are refused when they are loaded or saved, not later.
+    pub fn validate_for(&self, input: (u32, u32)) -> Result<()> {
+        self.validate()?;
+        self.signal_size(input)?;
+        self.output_size(input)?;
+        Ok(())
+    }
     /// The same settings with the output canvas scaled down, keeping its aspect, so that its
     /// longer side is at most `max_side`. The signal, and so the look, stays as it is.
     pub fn with_max_output_side(&self, input: (u32, u32), max_side: Option<u32>) -> Result<Self> {
-        self.validate()?;
-        self.signal_size(input)?;
+        self.validate_for(input)?;
         let (w, h) = self.output_size(input)?;
         let scale = max_side.map_or(1., |m| (m as f64 / w.max(h) as f64).min(1.));
         let mut scaled = self.clone();
@@ -528,6 +535,26 @@ mod tests {
         assert!(dimensions("16384x16384").is_err());
         c.persistence[0] = 1.;
         assert!(c.validate().is_err());
+    }
+    #[test]
+    fn a_smaller_canvas_keeps_its_aspect_and_the_signal() {
+        let mut c = Config::general();
+        c.output = "4k".into();
+        let p = c.with_max_output_side((1216, 832), Some(1280)).unwrap();
+        assert_eq!(p.output_size((1216, 832)).unwrap(), (1280, 720));
+        assert_eq!(
+            p.signal_size((1216, 832)).unwrap(),
+            c.signal_size((1216, 832)).unwrap()
+        );
+        assert_eq!(c.output, "4k");
+        c.output = "600x1200".into();
+        assert_eq!(
+            c.with_max_output_side((1, 1), Some(800)).unwrap().output,
+            "400x800"
+        );
+        c.output = "0x100".into();
+        assert!(c.with_max_output_side((1, 1), Some(800)).is_err());
+        assert!(c.validate_for((1, 1)).is_err());
     }
     #[test]
     fn fit_and_reference_are_distinct() {

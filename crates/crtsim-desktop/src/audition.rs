@@ -93,7 +93,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         app.export(dir.path().join("out.png"));
         match work.try_recv() {
-            Ok(Job::Export { config, .. }) => assert_eq!(config, settings),
+            Ok(Job::Export {
+                export: worker::Export::Image { config, .. },
+                ..
+            }) => assert_eq!(config, settings),
             _ => panic!("expected an export"),
         }
     }

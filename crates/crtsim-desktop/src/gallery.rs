@@ -4,13 +4,6 @@ use std::path::{Path, PathBuf};
 
 use crate::theme::Theme;
 
-pub const DISCLAIMER: &str = "This project is what some would call \"vibe-coded slop\", built based on J. Kyle Pittman's public CRTSim. The original CRT simulation, shaders, textures and meshes are his work; this project's AI-assisted renderer port and interface are separate additions. This is an unofficial project, not made or endorsed by him.";
-pub const SUPPORT: &str = "Please support J. Kyle Pittman and Minor Key Games: buy and play their games on itch.io and Steam.";
-pub const ITCH: &str = "https://piratehearts.itch.io/";
-pub const STEAM: &str = "https://store.steampowered.com/developer/MinorKeyGames";
-pub const ARTICLE: &str =
-    "https://www.gamedeveloper.com/programming/crt-simulation-in-super-win-the-game";
-
 #[derive(Clone)]
 pub struct Entry {
     pub name: String,
@@ -167,6 +160,21 @@ pub fn builtins() -> Vec<Entry> {
     ]
 }
 
+/// Every preset the gallery lists: the included ones, then the personal ones in `store`, with a
+/// warning for each personal preset that could not be read.
+pub fn entries(store: Option<&Store>) -> (Vec<Entry>, Vec<String>) {
+    let mut entries = builtins();
+    let warnings = match store.map(Store::scan) {
+        Some(Ok((personal, warnings))) => {
+            entries.extend(personal);
+            warnings
+        }
+        Some(Err(e)) => vec![format!("{e:#}")],
+        None => vec![],
+    };
+    (entries, warnings)
+}
+
 /// Remembered tool window placements, keyed by window title.
 pub type Layout = std::collections::BTreeMap<String, crate::chrome::ToolWindow>;
 
@@ -197,14 +205,12 @@ impl Store {
     }
     pub fn acknowledge(&self) -> Result<()> {
         std::fs::create_dir_all(&self.root)?;
-        let path = self.root.join("welcome-v1.txt");
         // Atomic replacement of app-owned state. Personal preset files use no-clobber saves.
-        let mut file = tempfile::NamedTempFile::new_in(&self.root)?;
-        use std::io::Write;
-        file.write_all(b"acknowledged\n")?;
-        file.as_file_mut().sync_all()?;
-        file.persist(path).map_err(|e| e.error)?;
-        Ok(())
+        crate::files::save_atomic(&self.root.join("welcome-v1.txt"), |file| {
+            use std::io::Write;
+            file.write_all(b"acknowledged\n")?;
+            Ok(())
+        })
     }
     pub fn theme(&self) -> Result<Option<Theme>> {
         let path = self.root.join("theme-v1.txt");
@@ -264,12 +270,7 @@ impl Store {
             {
                 continue;
             }
-            let name = item
-                .path()
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned();
+            let name = crate::file_stem(&item.path());
             match crate::files::load_preset(&item.path(), (256, 224)) {
                 Ok(config) => entries.push(Entry {
                     name: name.clone(),
@@ -310,9 +311,7 @@ impl Store {
     }
     pub fn save(&self, name: &str, config: &Config, input: (u32, u32)) -> Result<()> {
         validate_name(name)?;
-        config.validate()?;
-        config.signal_size(input)?;
-        config.output_size(input)?;
+        config.validate_for(input)?;
         let dir = self.root.join("presets");
         std::fs::create_dir_all(&dir)?;
         // Case-insensitive collisions are refused on every OS for portable galleries.

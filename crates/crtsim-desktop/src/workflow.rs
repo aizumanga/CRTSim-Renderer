@@ -1,4 +1,4 @@
-use crate::{files, model, texture, worker, App, Dialog, Job, Work};
+use crate::{files, texture, worker, App, Dialog, Job};
 use anyhow::{ensure, Result};
 use crtsim_core::config::Config;
 use crtsim_media::Options;
@@ -284,11 +284,10 @@ impl App {
             return;
         };
         self.stop_playback();
-        let config = match model::preview_config(
-            &self.config,
-            self.input.dimensions(),
-            self.preview_limit,
-        ) {
+        let config = match self
+            .config
+            .with_max_output_side(self.input.dimensions(), self.preview_limit)
+        {
             Ok(c) => c,
             Err(e) => {
                 self.error = Some(format!("Cannot play: {e:#}"));
@@ -442,20 +441,14 @@ impl App {
         q.status = QueueStatus::Running;
         let q = q.clone();
         self.workflow.active = Some(index);
-        let cancel = Arc::new(AtomicBool::new(false));
-        self.work = Work::Exporting {
-            cancel: cancel.clone(),
-            progress: None,
-        };
-        self.status = format!("Batch export {}", q.source.display());
-        self.save_session();
-        self.send(Job::Batch {
+        let status = format!("Batch export {}", q.source.display());
+        let export = worker::Export::Batch {
             source: q.source,
-            path: q.output,
-            config: q.config,
             options: q.options,
-            cancel,
-        });
+            config: q.config,
+        };
+        self.start_export(export, q.output, status, None);
+        self.save_session();
     }
     fn batch_dialog(&mut self, ctx: &egui::Context) {
         self.stop_playback();
@@ -767,13 +760,16 @@ mod tests {
         app.workflow.queue_running = true;
         app.dispatch_queue();
         match receive.try_recv().unwrap() {
-            Job::Batch { config, .. } => assert_eq!(config, captured),
+            Job::Export {
+                export: crate::worker::Export::Batch { config, .. },
+                ..
+            } => assert_eq!(config, captured),
             _ => panic!("Expected batch export"),
         }
         app.queue_finished(&Err(Failure::Cancelled));
         assert!(!app.workflow.queue_running);
         assert_eq!(app.workflow.queue[0].status, QueueStatus::Cancelled);
-        app.work = Work::Idle;
+        app.work = crate::Work::Idle;
         app.workflow.queue[0].status = QueueStatus::Pending;
         std::fs::write(&app.workflow.queue[0].output, b"keep me").unwrap();
         app.workflow.queue_running = true;
@@ -812,13 +808,18 @@ mod tests {
         }
         app.workflow.queue_running = true;
         app.dispatch_queue();
-        let Ok(Job::Batch { path, cancel, .. }) = receive.try_recv() else {
+        let Ok(Job::Export {
+            export: crate::worker::Export::Batch { .. },
+            path,
+            cancel,
+        }) = receive.try_recv()
+        else {
             panic!("Expected batch export");
         };
         // Asked while the file was being saved, after the last point the job checks.
         cancel.store(true, Ordering::Relaxed);
         app.queue_finished(&Ok(path));
-        app.work = Work::Idle;
+        app.work = crate::Work::Idle;
         assert_eq!(app.workflow.queue[0].status, QueueStatus::Done);
         assert!(!app.workflow.queue_running);
         app.dispatch_queue();

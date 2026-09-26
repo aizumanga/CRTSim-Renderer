@@ -1,10 +1,4 @@
-use anyhow::Result;
 use crtsim_core::{config::Config, settings};
-
-/// Limit only the canvas, preserving its aspect and the logical signal.
-pub fn preview_config(c: &Config, input: (u32, u32), max_side: Option<u32>) -> Result<Config> {
-    c.with_max_output_side(input, max_side)
-}
 
 /// One setting that differs between two looks, written for a person to read.
 #[derive(Debug, PartialEq)]
@@ -152,25 +146,6 @@ mod tests {
             (lut.from.as_str(), lut.to.as_str()),
             ("None", "00 - NES SMPTE-2025")
         );
-    }
-    #[test]
-    fn preview_preserves_signal_and_canvas_aspect() {
-        let mut c = Config::general();
-        c.output = "4k".into();
-        let p = preview_config(&c, (1216, 832), Some(1280)).unwrap();
-        assert_eq!(p.output_size((1216, 832)).unwrap(), (1280, 720));
-        assert_eq!(
-            p.signal_size((1216, 832)).unwrap(),
-            c.signal_size((1216, 832)).unwrap()
-        );
-        assert_eq!(c.output, "4k");
-        c.output = "600x1200".into();
-        assert_eq!(
-            preview_config(&c, (1, 1), Some(800)).unwrap().output,
-            "400x800"
-        );
-        c.output = "0x100".into();
-        assert!(preview_config(&c, (1, 1), Some(800)).is_err());
     }
     #[test]
     fn undo_redo_and_new_edit_branch() {
