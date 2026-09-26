@@ -28,3 +28,7 @@ already overdue are skipped rather than shown late.
 **Preroll**: the frames playback waits for before its clock starts: three, or all the buffer
 holds when large frames make it smaller. When the renderer falls behind, the clock stops and
 playback prerolls again.
+
+**Batch queue**: exports that each render one file with the settings in use when they were
+added, one at a time and in order (`crates/crtsim-desktop/src/batch.rs`). Each output is named
+after its source and never replaces a file; cancelling a job pauses the queue.

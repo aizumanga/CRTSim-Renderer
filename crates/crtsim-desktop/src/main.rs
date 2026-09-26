@@ -1,4 +1,5 @@
 mod audition;
+mod batch;
 mod chrome;
 mod dialogs;
 mod events;
@@ -98,6 +99,11 @@ struct App {
     show_credits: bool,
     show_gallery: bool,
     show_lut_gallery: bool,
+    show_queue: bool,
+    /// The batch export queue.
+    queue: batch::Queue,
+    /// The file chooser for new batch jobs, while it is open.
+    batch_picking: Option<batch::Picking>,
     lut_gallery_search: String,
     gallery_entries: Vec<gallery::Entry>,
     /// A look previewed from a gallery without being applied; see `audition`.
@@ -252,6 +258,9 @@ impl App {
             show_credits: false,
             show_gallery,
             show_lut_gallery,
+            show_queue: false,
+            queue: Default::default(),
+            batch_picking: None,
             lut_gallery_search: String::new(),
             gallery_entries,
             audition: None,

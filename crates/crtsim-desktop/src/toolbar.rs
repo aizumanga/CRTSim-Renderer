@@ -77,7 +77,7 @@ impl App {
                     }
                     ui.separator();
                     if ui.button("Batch queue…").clicked() {
-                        self.workflow.show_queue = true;
+                        self.show_queue = true;
                         ui.close_menu();
                     }
                 });

@@ -1,4 +1,4 @@
-use crate::{files, worker, App, Dialog};
+use crate::{batch, files, App, Dialog};
 use anyhow::{ensure, Result};
 use crtsim_core::config::Config;
 use crtsim_media::Options;
@@ -7,14 +7,11 @@ use serde::{Deserialize, Serialize};
 use std::{
     io::Write,
     path::{Path, PathBuf},
-    sync::{atomic::Ordering, mpsc},
     time::{Duration, Instant},
 };
-use worker::Failure;
 
 const MAX_PROJECT: u64 = 64 * 1024 * 1024;
 pub const PROJECT_EXTENSION: &str = "crtsim";
-type BatchSelection = Option<(Vec<PathBuf>, PathBuf)>;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -24,26 +21,8 @@ pub struct Project {
     frame: u64,
     config: Config,
     options: Options,
-    queue: Vec<QueueItem>,
+    queue: Vec<batch::Item>,
 }
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct QueueItem {
-    source: PathBuf,
-    output: PathBuf,
-    config: Config,
-    options: Options,
-    status: QueueStatus,
-}
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-enum QueueStatus {
-    Pending,
-    Running,
-    Done,
-    Cancelled,
-    Failed(String),
-}
-
 fn read_project(path: &Path) -> Result<Project> {
     ensure!(
         std::fs::metadata(path)?.len() <= MAX_PROJECT,
@@ -53,24 +32,18 @@ fn read_project(path: &Path) -> Result<Project> {
     ensure!(p.version == 1, "Unsupported project version");
     p.config.validate()?;
     p.options.validate()?;
-    ensure!(p.queue.len() <= 256, "Queue exceeds 256 jobs");
+    ensure!(
+        p.queue.len() <= batch::MAX_JOBS,
+        "Queue exceeds {} jobs",
+        batch::MAX_JOBS
+    );
+    // Paths saved relative to the project are relative to where it is.
     let root = path.parent().unwrap_or_else(|| Path::new("."));
-    let resolve = |p: &mut PathBuf| {
-        if p.is_relative() {
-            *p = root.join(&*p);
-        }
-    };
-    if let Some(source) = p.source.as_mut() {
-        resolve(source);
+    if let Some(source) = p.source.as_mut().filter(|source| source.is_relative()) {
+        *source = root.join(&*source);
     }
     for item in &mut p.queue {
-        item.config.validate()?;
-        item.options.validate()?;
-        resolve(&mut item.source);
-        resolve(&mut item.output);
-        if item.status == QueueStatus::Running {
-            item.status = QueueStatus::Pending;
-        }
+        item.restore(root)?;
     }
     Ok(p)
 }
@@ -91,15 +64,9 @@ pub struct State {
     pub project_path: Option<PathBuf>,
     recovery: Option<Project>,
     recent: Vec<PathBuf>,
-    queue: Vec<QueueItem>,
-    queue_running: bool,
-    active: Option<usize>,
-    pub show_queue: bool,
     last_saved: Option<Project>,
     last_save: Instant,
     pub pending_project: Option<Project>,
-    batch: Option<mpsc::Receiver<BatchSelection>>,
-    batch_settings: Option<(Config, Options)>,
 }
 impl Default for State {
     fn default() -> Self {
@@ -111,16 +78,17 @@ impl Default for State {
             project_path: None,
             recovery: None,
             recent: vec![],
-            queue: vec![],
-            queue_running: false,
-            active: None,
-            show_queue: false,
             last_saved: None,
             last_save: Instant::now(),
             pending_project: None,
-            batch: None,
-            batch_settings: None,
         }
+    }
+}
+impl State {
+    /// Whether the last session is on offer to be recovered, which nothing else may run
+    /// before, since recovering replaces the batch queue.
+    pub fn recovery_offered(&self) -> bool {
+        self.recovery.is_some()
     }
 }
 
@@ -157,7 +125,7 @@ impl App {
             frame: self.video_frame,
             config: self.config.clone(),
             options: self.video_options.clone(),
-            queue: self.workflow.queue.clone(),
+            queue: self.queue.items().to_vec(),
         }
     }
     pub fn save_session(&mut self) {
@@ -246,147 +214,14 @@ impl App {
     }
     pub fn apply_project(&mut self, p: Project) {
         self.video_options = p.options;
-        self.workflow.queue = p.queue;
-        self.workflow.queue_running = false;
-        self.workflow.active = None;
+        self.queue.replace(p.queue);
         self.replace_config(p.config);
         self.status = "Project restored; queue paused".into();
-    }
-    pub fn queue_finished(&mut self, result: &worker::Outcome<PathBuf>) {
-        if let Some(index) = self.workflow.active.take() {
-            self.workflow.queue[index].status = match result {
-                Ok(_) => QueueStatus::Done,
-                Err(Failure::Cancelled) => QueueStatus::Cancelled,
-                Err(Failure::Failed(e)) => QueueStatus::Failed(e.clone()),
-            };
-            // Cancelling pauses the queue rather than moving on to the next job, also when the
-            // job was asked too late to stop and finished anyway.
-            let asked_to_stop = self
-                .work
-                .cancel()
-                .is_some_and(|cancel| cancel.load(Ordering::Relaxed));
-            if asked_to_stop || matches!(result, Err(Failure::Cancelled)) {
-                self.workflow.queue_running = false;
-            }
-            self.save_session();
-        }
-    }
-    fn dispatch_queue(&mut self) {
-        if !self.workflow.queue_running
-            || !self.can_start_work()
-            || self.schedule.rendering()
-            || self.workflow.recovery.is_some()
-            || self.playback.is_some()
-        {
-            return;
-        }
-        let Some(index) = self
-            .workflow
-            .queue
-            .iter()
-            .position(|q| q.status == QueueStatus::Pending)
-        else {
-            self.workflow.queue_running = false;
-            return;
-        };
-        let q = &mut self.workflow.queue[index];
-        if q.output.exists() {
-            q.status = QueueStatus::Failed(
-                "Destination already exists. Remove it or add a new job; \
-                batch exports never intentionally replace existing files."
-                    .into(),
-            );
-            return;
-        }
-        q.status = QueueStatus::Running;
-        let q = q.clone();
-        self.workflow.active = Some(index);
-        let status = format!("Batch export {}", q.source.display());
-        let export = worker::Export::Batch {
-            source: q.source,
-            options: q.options,
-            config: q.config,
-        };
-        self.start_export(export, q.output, status, None);
-        self.save_session();
-    }
-    fn batch_dialog(&mut self, ctx: &egui::Context) {
-        self.stop_playback();
-        self.dialog_open = true;
-        self.workflow.batch_settings = Some((self.config.clone(), self.video_options.clone()));
-        let (send, receive) = mpsc::channel();
-        self.workflow.batch = Some(receive);
-        let ctx = ctx.clone();
-        std::thread::spawn(move || {
-            let result = rfd::FileDialog::new()
-                .add_filter("Images and videos", &files::media_extensions())
-                .pick_files()
-                .and_then(|files| {
-                    rfd::FileDialog::new()
-                        .set_title("Batch export destination")
-                        .pick_folder()
-                        .map(|folder| (files, folder))
-                });
-            let _ = send.send(result);
-            ctx.request_repaint();
-        });
     }
     pub fn workflow_ui(&mut self, ctx: &egui::Context) {
         self.video_export_window(ctx);
         self.tick_playback(ctx);
-        if let Some(receive) = &self.workflow.batch {
-            match receive.try_recv() {
-                Ok(result) => {
-                    self.workflow.batch = None;
-                    self.dialog_open = false;
-                    let (config, options) = self.workflow.batch_settings.take().unwrap();
-                    if let Some((sources, folder)) = result {
-                        for source in sources {
-                            if self.workflow.queue.len() >= 256 {
-                                self.error = Some("Batch queue is limited to 256 jobs".into());
-                                break;
-                            }
-                            let stem = source.file_stem().unwrap_or_default().to_string_lossy();
-                            let ext = if crtsim_media::MediaKind::of(&source).batch_as_video() {
-                                "mkv"
-                            } else {
-                                "png"
-                            };
-                            let mut n = 0;
-                            let output = loop {
-                                let suffix = if n == 0 {
-                                    String::new()
-                                } else {
-                                    format!("-{n}")
-                                };
-                                let path = folder.join(format!("{stem}-crt{suffix}.{ext}"));
-                                if !path.exists()
-                                    && !self.workflow.queue.iter().any(|q| q.output == path)
-                                {
-                                    break path;
-                                }
-                                n += 1;
-                            };
-                            self.workflow.queue.push(QueueItem {
-                                source,
-                                output,
-                                config: config.clone(),
-                                options: options.clone(),
-                                status: QueueStatus::Pending,
-                            });
-                        }
-                        self.workflow.show_queue = true;
-                        self.save_session();
-                    }
-                }
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    self.workflow.batch = None;
-                    self.dialog_open = false;
-                    self.error = Some("File chooser closed unexpectedly".into());
-                }
-                Err(mpsc::TryRecvError::Empty) => {}
-            }
-        }
+        self.receive_batch_files();
         if self.workflow.recovery.is_some() && !self.show_welcome {
             let mut restore = false;
             let mut discard = false;
@@ -411,106 +246,7 @@ impl App {
                 self.save_session();
             }
         }
-        if self.workflow.show_queue {
-            let mut remove = None;
-            let mut move_up = None;
-            let mut window = self.window_state("Batch export queue");
-            let open = crate::chrome::tool_window(
-                ctx,
-                "Batch export queue",
-                [650., 560.],
-                &mut window,
-                |ui| {
-                    ui.label(
-                        "Each job keeps the settings used when it was added. Videos \
-                        use MKV to preserve more tracks.",
-                    );
-                    ui.horizontal(|ui| {
-                        if ui
-                            .add_enabled(!self.modal_open(), egui::Button::new("Add files…"))
-                            .clicked()
-                        {
-                            self.batch_dialog(ctx);
-                        }
-                        if ui
-                            .add_enabled(!self.modal_open(), egui::Button::new("Video settings…"))
-                            .clicked()
-                        {
-                            self.open_video_export(true);
-                        }
-                        if ui
-                            .button(if self.workflow.queue_running {
-                                "Pause after current"
-                            } else {
-                                "Start / resume"
-                            })
-                            .clicked()
-                        {
-                            self.stop_playback();
-                            self.workflow.queue_running = !self.workflow.queue_running;
-                        }
-                        if ui
-                            .add_enabled(
-                                self.workflow.active.is_some(),
-                                egui::Button::new("Cancel current"),
-                            )
-                            .clicked()
-                        {
-                            if let Some(cancel) = self.work.cancel() {
-                                cancel.store(true, Ordering::Relaxed);
-                            }
-                            self.workflow.queue_running = false;
-                        }
-                    });
-                    egui::ScrollArea::vertical()
-                        .max_height(400.)
-                        .show(ui, |ui| {
-                            for (i, q) in self.workflow.queue.iter_mut().enumerate() {
-                                ui.push_id(i, |ui| {
-                                    ui.group(|ui| {
-                                        ui.label(q.source.display().to_string());
-                                        ui.small(format!("→ {}", q.output.display()));
-                                        ui.horizontal_wrapped(|ui| {
-                                            ui.label(match &q.status {
-                                                QueueStatus::Pending => "Pending".into(),
-                                                QueueStatus::Running => "Exporting…".into(),
-                                                QueueStatus::Done => "Saved".into(),
-                                                QueueStatus::Cancelled => "Cancelled".into(),
-                                                QueueStatus::Failed(e) => format!("Failed: {e}"),
-                                            });
-                                            if q.status != QueueStatus::Running
-                                                && self.workflow.active.is_none()
-                                            {
-                                                if matches!(
-                                                    q.status,
-                                                    QueueStatus::Failed(_) | QueueStatus::Cancelled
-                                                ) && ui.small_button("Retry").clicked()
-                                                {
-                                                    q.status = QueueStatus::Pending;
-                                                }
-                                                if i > 0 && ui.small_button("Move up").clicked() {
-                                                    move_up = Some(i);
-                                                }
-                                                if ui.small_button("Remove").clicked() {
-                                                    remove = Some(i);
-                                                }
-                                            }
-                                        });
-                                    });
-                                });
-                            }
-                        });
-                },
-            );
-            self.store_window_state("Batch export queue", window);
-            if let Some(i) = remove {
-                self.workflow.queue.remove(i);
-            }
-            if let Some(i) = move_up {
-                self.workflow.queue.swap(i, i - 1);
-            }
-            self.workflow.show_queue = open;
-        }
+        self.queue_window(ctx);
         self.dispatch_queue();
         if self.workflow.last_save.elapsed() > Duration::from_secs(2) {
             self.workflow.last_save = Instant::now();
@@ -557,100 +293,6 @@ impl App {
 mod tests {
     use super::*;
     #[test]
-    fn batch_captures_settings_refuses_existing_outputs_and_pauses_on_cancel() {
-        let ctx = egui::Context::default();
-        let dir = tempfile::tempdir().unwrap();
-        let mut app = App::new(
-            &ctx,
-            crate::worker::Gpu::Own(wgpu::Backends::PRIMARY),
-            None,
-            Some(crate::Smoke::new("unused-smoke.png".into())),
-        );
-        app.show_welcome = false;
-        let (jobs, receive, _previews) = crate::worker::Jobs::capture();
-        app.jobs = jobs;
-        let item = QueueItem {
-            source: dir.path().join("source.png"),
-            output: dir.path().join("output.png"),
-            config: app.config.clone(),
-            options: Options::default(),
-            status: QueueStatus::Pending,
-        };
-        let captured = item.config.clone();
-        app.workflow.queue.push(item);
-        app.config.bloom = 0.;
-        app.workflow.queue_running = true;
-        app.dispatch_queue();
-        match receive.try_recv().unwrap() {
-            crate::Job::Export {
-                export: crate::worker::Export::Batch { config, .. },
-                ..
-            } => assert_eq!(config, captured),
-            _ => panic!("Expected batch export"),
-        }
-        app.queue_finished(&Err(Failure::Cancelled));
-        assert!(!app.workflow.queue_running);
-        assert_eq!(app.workflow.queue[0].status, QueueStatus::Cancelled);
-        app.work = crate::Work::Idle;
-        app.workflow.queue[0].status = QueueStatus::Pending;
-        std::fs::write(&app.workflow.queue[0].output, b"keep me").unwrap();
-        app.workflow.queue_running = true;
-        app.dispatch_queue();
-        assert!(matches!(
-            app.workflow.queue[0].status,
-            QueueStatus::Failed(_)
-        ));
-        assert!(receive.try_recv().is_err());
-        assert_eq!(
-            std::fs::read(&app.workflow.queue[0].output).unwrap(),
-            b"keep me"
-        );
-    }
-    #[test]
-    fn a_job_cancelled_too_late_to_stop_still_pauses_the_queue() {
-        let ctx = egui::Context::default();
-        let dir = tempfile::tempdir().unwrap();
-        let mut app = App::new(
-            &ctx,
-            crate::worker::Gpu::Own(wgpu::Backends::PRIMARY),
-            None,
-            Some(crate::Smoke::new("unused-smoke.png".into())),
-        );
-        app.show_welcome = false;
-        let (jobs, receive, _previews) = crate::worker::Jobs::capture();
-        app.jobs = jobs;
-        for name in ["first.png", "second.png"] {
-            app.workflow.queue.push(QueueItem {
-                source: dir.path().join("source.png"),
-                output: dir.path().join(name),
-                config: app.config.clone(),
-                options: Options::default(),
-                status: QueueStatus::Pending,
-            });
-        }
-        app.workflow.queue_running = true;
-        app.dispatch_queue();
-        let Ok(crate::Job::Export {
-            export: crate::worker::Export::Batch { .. },
-            path,
-            cancel,
-        }) = receive.try_recv()
-        else {
-            panic!("Expected batch export");
-        };
-        // Asked while the file was being saved, after the last point the job checks.
-        cancel.store(true, Ordering::Relaxed);
-        app.queue_finished(&Ok(path));
-        app.work = crate::Work::Idle;
-        assert_eq!(app.workflow.queue[0].status, QueueStatus::Done);
-        assert!(!app.workflow.queue_running);
-        app.dispatch_queue();
-        assert!(
-            receive.try_recv().is_err(),
-            "the second job waits to be resumed"
-        );
-    }
-    #[test]
     fn project_roundtrip_recovers_running_jobs_and_relative_paths() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("session.crtsim");
@@ -661,19 +303,25 @@ mod tests {
             frame: 7,
             config: c.clone(),
             options: Options::default(),
-            queue: vec![QueueItem {
+            queue: vec![batch::Item {
                 source: "input.png".into(),
                 output: "output.png".into(),
                 config: c,
                 options: Options::default(),
-                status: QueueStatus::Running,
+                status: batch::Status::Running,
             }],
         };
         save_project(&path, &p).unwrap();
+        // Projects and sessions saved before keep opening: a job is saved as it always was.
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            saved.contains(r#""output": "output.png""#) && saved.contains(r#""status": "Running""#)
+        );
         let read = read_project(&path).unwrap();
         assert_eq!(read.frame, 7);
         assert_eq!(read.source, Some(dir.path().join("input.png")));
-        assert_eq!(read.queue[0].status, QueueStatus::Pending);
+        assert_eq!(read.queue[0].status, batch::Status::Pending);
+        assert_eq!(read.queue[0].output, dir.path().join("output.png"));
         let mut bad = p;
         bad.version = 99;
         save_project(&path, &bad).unwrap();
