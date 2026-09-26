@@ -34,6 +34,10 @@ use std::{
 };
 use worker::{Event, Failure, Job, PreviewJob};
 
+/// How long settings stay unchanged before they are committed to the undo history and
+/// previewed, so a burst of edits, such as arrow-key steps, renders once.
+const SETTLE: Duration = Duration::from_millis(180);
+
 #[derive(Clone, Copy, PartialEq)]
 enum View {
     Crt,
@@ -662,9 +666,7 @@ impl eframe::App for App {
         self.lut_gallery_window(ctx);
         self.settle_audition();
         self.credits_window(ctx);
-        if self.dirty
-            && self.changed_at.elapsed() >= Duration::from_millis(180)
-            && !ctx.input(|i| i.pointer.any_down())
+        if self.dirty && self.changed_at.elapsed() >= SETTLE && !ctx.input(|i| i.pointer.any_down())
         {
             self.history.commit(&self.config);
             if (self.live || self.audition_pending) && !self.show_welcome {
@@ -672,9 +674,7 @@ impl eframe::App for App {
             }
         }
         if (self.dirty
-            && (self.live
-                || self.audition_pending
-                || self.changed_at.elapsed() < Duration::from_millis(180)))
+            && (self.live || self.audition_pending || self.changed_at.elapsed() < SETTLE))
             || self.rendering
             || !self.work.is_idle()
         {
