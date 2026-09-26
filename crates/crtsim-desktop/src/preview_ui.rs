@@ -9,10 +9,10 @@ impl App {
             ui.selectable_value(&mut self.view, View::Crt, "CRT");
             ui.selectable_value(&mut self.view, View::Compare, "Compare");
             ui.separator();
-            ui.checkbox(&mut self.live, "Live preview");
+            ui.checkbox(&mut self.schedule.live, "Live preview");
             if ui
                 .add_enabled(
-                    !self.rendering && !self.work.is_loading(),
+                    !self.schedule.rendering() && !self.work.is_loading(),
                     egui::Button::new("Refresh"),
                 )
                 .clicked()
@@ -65,7 +65,7 @@ impl App {
                 }
             }
         }
-        if self.rendering || !self.work.is_idle() {
+        if self.schedule.rendering() || !self.work.is_idle() {
             ui.horizontal(|ui| {
                 ui.spinner();
                 ui.label(match self.work {
@@ -84,7 +84,7 @@ impl App {
                 ),
             );
         }
-        if self.rendered.is_some() && self.rendered_revision != Some(self.revision) {
+        if self.rendered.is_some() && !self.schedule.is_current() {
             ui.colored_label(ui.visuals().warn_fg_color, "Preview is out of date.");
         }
         let controls_height = if self.video.is_some() { 136. } else { 0. };

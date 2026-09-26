@@ -36,12 +36,8 @@ impl App {
             return;
         }
         self.audition = offered;
-        // Like an edit, but without stopping playback or touching the settings: the preview
-        // is out of date and should be redrawn, whether or not live preview is on.
-        self.revision += 1;
-        self.dirty = true;
-        self.audition_pending = true;
-        self.changed_at = Instant::now();
+        // Like an edit, but without stopping playback or touching the settings.
+        self.schedule.changed(Change::Audition, Instant::now());
     }
 
     /// An included LUT, decoded once and then shared, so hovering back and forth does not
@@ -59,6 +55,12 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::schedule::Due;
+
+    /// Late enough for any change to have settled.
+    fn settled() -> Instant {
+        Instant::now() + Duration::from_secs(1)
+    }
 
     fn app() -> (App, mpsc::Receiver<Job>, mpsc::Receiver<PreviewJob>) {
         let ctx = egui::Context::default();
@@ -72,15 +74,19 @@ mod tests {
     #[test]
     fn an_audition_is_previewed_without_touching_the_settings() {
         let (mut app, work, previews) = app();
+        app.schedule.live = false;
         let settings = app.config.clone();
         let candidate = Config {
             bloom: 1.5,
             ..settings.clone()
         };
-        let revision = app.revision;
         app.offer_audition("preset “Bright”", candidate.clone());
         app.settle_audition();
-        assert!(app.revision > revision && app.dirty && app.audition_pending);
+        assert_eq!(
+            app.schedule.due(settled(), false),
+            Due::Preview,
+            "previewed even without live preview"
+        );
         app.request_preview();
         match previews.try_recv() {
             Ok(PreviewJob::Preview { config, .. }) => assert_eq!(config.bloom, 1.5),
@@ -89,7 +95,6 @@ mod tests {
         assert_eq!(app.config, settings);
         assert_eq!(app.history.undo(&app.config), None, "no undo step recorded");
         // Exports take the settings in use, never the look being pointed at.
-        app.rendering = false;
         let dir = tempfile::tempdir().unwrap();
         app.export(dir.path().join("out.png"));
         match work.try_recv() {
@@ -113,15 +118,20 @@ mod tests {
         };
         app.offer_audition("LUT “Gray”", candidate.clone());
         app.settle_audition();
+        app.request_preview();
+        let Ok(PreviewJob::Preview { revision, .. }) = previews.try_recv() else {
+            panic!("expected a preview of the auditioned look");
+        };
+        app.schedule.returned(revision);
         // Still pointed at on the next frame: nothing new to render.
-        let revision = app.revision;
         app.offer_audition("LUT “Gray”", candidate);
         app.settle_audition();
-        assert_eq!(app.revision, revision);
+        assert_eq!(app.schedule.due(settled(), false), Due::Nothing);
         // Nothing offered this frame: the pointer moved away.
         app.settle_audition();
-        assert!(app.audition.is_none() && app.revision > revision && app.audition_pending);
-        app.live = false;
+        app.schedule.live = false;
+        assert!(app.audition.is_none());
+        assert_eq!(app.schedule.due(settled(), false), Due::Preview);
         app.request_preview();
         match previews.try_recv() {
             Ok(PreviewJob::Preview { config, .. }) => assert_eq!(config.chroma, app.config.chroma),

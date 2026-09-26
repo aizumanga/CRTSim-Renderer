@@ -36,7 +36,7 @@ impl App {
     /// then takes the screenshot, saves it and closes the window. A run that never gets there
     /// fails after two minutes rather than hanging CI.
     pub(crate) fn advance_smoke(&mut self, ctx: &egui::Context) {
-        let ready = self.rendered_revision == Some(self.revision);
+        let ready = self.schedule.is_current();
         if ready && self.smoke.as_ref().is_some_and(|smoke| smoke.export) {
             if let Some(smoke) = &mut self.smoke {
                 smoke.export = false;

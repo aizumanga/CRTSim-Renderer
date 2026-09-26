@@ -315,7 +315,7 @@ impl App {
             ended: false,
             capacity,
         });
-        self.dirty = false;
+        self.schedule.drop_pending();
         self.status = "Buffering · warming CRT history…".into();
         self.send(Job::Playback {
             video,
@@ -368,7 +368,7 @@ impl App {
                     self.render_state.as_ref(),
                     Some(crate::Displayed::Uploaded(frame)),
                 );
-                self.rendered_revision = Some(self.revision);
+                self.schedule.show_current();
                 self.input = Arc::new(f.source);
                 if let Some(v) = &self.video {
                     self.video_frame = (f.time * v.fps).round() as u64;
@@ -414,7 +414,7 @@ impl App {
     fn dispatch_queue(&mut self) {
         if !self.workflow.queue_running
             || !self.can_start_work()
-            || self.rendering
+            || self.schedule.rendering()
             || self.workflow.recovery.is_some()
             || self.workflow.playback.is_some()
         {

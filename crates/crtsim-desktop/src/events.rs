@@ -56,8 +56,7 @@ impl App {
                     }
                 }
                 Event::Preview { revision, result } => {
-                    self.rendering = false;
-                    if revision != self.revision {
+                    if !self.schedule.returned(revision) {
                         continue;
                     }
                     match result {
@@ -65,7 +64,7 @@ impl App {
                             let (width, height) = previewed.image.dimensions();
                             let shown = self.displayed(ctx, previewed.image);
                             self.show_preview(shown);
-                            self.rendered_revision = Some(revision);
+                            self.schedule.show_current();
                             if !self.work.is_exporting() {
                                 self.status = format!(
                                     "Preview {width} × {height} · {:.2}s",

@@ -9,6 +9,7 @@ mod gallery_ui;
 mod lut_gallery;
 mod model;
 mod preview_ui;
+mod schedule;
 mod settings_ui;
 mod smoke;
 mod theme;
@@ -23,6 +24,7 @@ use crtsim_core::{settings, RenderProgress};
 use dialogs::Dialog;
 use eframe::egui::{self, TextureHandle};
 use image::RgbaImage;
+use schedule::{Change, Schedule};
 use smoke::Smoke;
 use std::{
     path::{Path, PathBuf},
@@ -33,10 +35,6 @@ use std::{
     time::{Duration, Instant},
 };
 use worker::{Event, Failure, Job, PreviewJob};
-
-/// How long settings stay unchanged before they are committed to the undo history and
-/// previewed, so a burst of edits, such as arrow-key steps, renders once.
-const SETTLE: Duration = Duration::from_millis(180);
 
 #[derive(Clone, Copy, PartialEq)]
 enum View {
@@ -101,8 +99,6 @@ struct App {
     audition: Option<audition::Audition>,
     /// What a gallery pointed at this frame, for `settle_audition`.
     offered: Option<audition::Audition>,
-    /// An audition started or ended, so the preview must be redrawn even with live preview off.
-    audition_pending: bool,
     included_luts: std::collections::HashMap<usize, Arc<crtsim_core::workflow::Lut>>,
     thumbnails: thumbnails::Thumbnails,
     gallery_warnings: Vec<String>,
@@ -118,16 +114,12 @@ struct App {
     rendered: Option<Displayed>,
     /// The interface's device, needed to register and release preview frames.
     render_state: Option<eframe::egui_wgpu::RenderState>,
-    rendered_revision: Option<u64>,
-    revision: u64,
+    /// Whether the preview is out of date, and when to render the next one.
+    schedule: Schedule,
     preview_limit: Option<u32>,
     view: View,
     zoom: f32,
     fit_preview: bool,
-    live: bool,
-    dirty: bool,
-    changed_at: Instant,
-    rendering: bool,
     dialog_open: bool,
     jobs: worker::Jobs,
     events: mpsc::Receiver<Event>,
@@ -257,7 +249,6 @@ impl App {
             gallery_entries,
             audition: None,
             offered: None,
-            audition_pending: false,
             included_luts: Default::default(),
             thumbnails: Default::default(),
             gallery_warnings,
@@ -272,16 +263,11 @@ impl App {
             original,
             rendered: None,
             render_state,
-            rendered_revision: None,
-            revision: 0,
+            schedule: Schedule::new(Instant::now()),
             preview_limit: Some(1280),
             view: View::Crt,
             zoom: 1.,
             fit_preview: true,
-            live: true,
-            dirty: true,
-            changed_at: Instant::now(),
-            rendering: false,
             dialog_open: false,
             jobs,
             events,
@@ -349,9 +335,7 @@ impl App {
 
     fn changed(&mut self) {
         self.stop_playback();
-        self.revision += 1;
-        self.dirty = true;
-        self.changed_at = Instant::now();
+        self.schedule.changed(Change::Edit, Instant::now());
     }
     fn replace_config(&mut self, config: Config) {
         self.history.commit(&self.config);
@@ -401,7 +385,6 @@ impl App {
         self.original = texture(&self.ui_context, "original", thumbnail, 2048);
         self.input = Arc::new(input);
         self.show_preview(None);
-        self.rendered_revision = None;
         self.changed();
     }
     fn show_test_card(&mut self) {
@@ -454,9 +437,8 @@ impl App {
     fn worker_stopped(&mut self) {
         self.error =
             Some("Render worker stopped. Save your preset and restart the application.".into());
-        self.rendering = false;
         self.work = Work::Idle;
-        self.dirty = false;
+        self.schedule.stop();
     }
     /// The image, or frame, on screen, exported as a PNG at full resolution.
     fn export(&mut self, path: PathBuf) {
@@ -502,25 +484,27 @@ impl App {
     /// Also while exporting: previews have their own worker, and the export works from the
     /// settings it captured, so the ones on screen are free to change.
     fn request_preview(&mut self) {
-        if self.rendering || self.work.is_loading() || self.workflow.playback.is_some() {
+        if self.work.is_loading() || self.workflow.playback.is_some() {
             return;
         }
+        let Some(revision) = self.schedule.take() else {
+            return;
+        };
         self.history.commit(&self.config);
-        self.dirty = false;
-        self.audition_pending = false;
         match self
             .shown_config()
             .with_max_output_side(self.input.dimensions(), self.preview_limit)
         {
-            Ok(config) => {
-                self.rendering = true;
-                self.send_preview(PreviewJob::Preview {
-                    revision: self.revision,
-                    input: self.input.clone(),
-                    config: Box::new(config),
-                });
+            Ok(config) => self.send_preview(PreviewJob::Preview {
+                revision,
+                input: self.input.clone(),
+                config: Box::new(config),
+            }),
+            Err(e) => {
+                // Nothing was sent, so nothing will come back.
+                self.schedule.returned(revision);
+                self.preview_error = Some(format!("Cannot preview: {e:#}"));
             }
-            Err(e) => self.preview_error = Some(format!("Cannot preview: {e:#}")),
         }
     }
     /// Remembered placement for one tool window. Copied out so the window's contents can
@@ -605,7 +589,7 @@ impl eframe::App for App {
             ui.horizontal(|ui| {
                 chrome::status_light(
                     ui,
-                    self.rendering || !self.work.is_idle(),
+                    self.schedule.rendering() || !self.work.is_idle(),
                     self.error.is_some() || self.preview_error.is_some(),
                 );
                 ui.label(&self.status);
@@ -666,18 +650,18 @@ impl eframe::App for App {
         self.lut_gallery_window(ctx);
         self.settle_audition();
         self.credits_window(ctx);
-        if self.dirty && self.changed_at.elapsed() >= SETTLE && !ctx.input(|i| i.pointer.any_down())
-        {
-            self.history.commit(&self.config);
-            if (self.live || self.audition_pending) && !self.show_welcome {
-                self.request_preview();
+        let now = Instant::now();
+        match self.schedule.due(now, ctx.input(|i| i.pointer.any_down())) {
+            schedule::Due::Nothing => {}
+            schedule::Due::Commit => self.history.commit(&self.config),
+            schedule::Due::Preview => {
+                self.history.commit(&self.config);
+                if !self.show_welcome {
+                    self.request_preview();
+                }
             }
         }
-        if (self.dirty
-            && (self.live || self.audition_pending || self.changed_at.elapsed() < SETTLE))
-            || self.rendering
-            || !self.work.is_idle()
-        {
+        if self.schedule.needs_frames(now) || !self.work.is_idle() {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
         self.advance_smoke(ctx);
@@ -833,11 +817,11 @@ mod tests {
         let mut app = App::new(&ctx, worker::Gpu::Own(wgpu::Backends::PRIMARY), None, None);
         let (send, receive) = mpsc::channel();
         app.events = receive;
-        app.rendering = true;
+        let asked = app.schedule.take().unwrap();
         app.config.bloom = 0.;
         app.changed();
         send.send(Event::Preview {
-            revision: 0,
+            revision: asked,
             result: Ok(worker::Previewed {
                 image: worker::Preview::Pixels(config::test_card()),
                 seconds: 0.1,
@@ -846,14 +830,19 @@ mod tests {
         .unwrap();
         app.receive(&ctx);
         assert!(app.rendered.is_none());
-        assert!(!app.rendering);
-        assert!(app.dirty);
+        assert!(!app.schedule.rendering());
+        let settled = Instant::now() + Duration::from_secs(1);
+        assert_eq!(
+            app.schedule.due(settled, false),
+            schedule::Due::Preview,
+            "the change is still to be previewed"
+        );
         send.send(Event::Loaded(Err(Failure::Failed(
             "Cannot decode selected file".into(),
         ))))
         .unwrap();
         send.send(Event::Preview {
-            revision: app.revision,
+            revision: app.schedule.take().unwrap(),
             result: Ok(worker::Previewed {
                 image: worker::Preview::Pixels(config::test_card()),
                 seconds: 0.1,
@@ -861,7 +850,7 @@ mod tests {
         })
         .unwrap();
         app.receive(&ctx);
-        assert_eq!(app.rendered_revision, Some(app.revision));
+        assert!(app.schedule.is_current());
         assert_eq!(app.error.as_deref(), Some("Cannot decode selected file"));
     }
 
@@ -881,7 +870,7 @@ mod tests {
             Ok(PreviewJob::Preview { config, .. }) => assert_eq!(config.bloom, 0.),
             _ => panic!("expected a preview while exporting"),
         }
-        assert!(app.work.is_exporting() && app.rendering);
+        assert!(app.work.is_exporting() && app.schedule.rendering());
     }
 
     #[test]
