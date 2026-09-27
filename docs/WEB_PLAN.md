@@ -61,3 +61,12 @@ These help both hosts, so they are worth doing before or during steps 4 to 6:
 
 The web app lives at `aizumanga.neocities.org/crtsim/`. The downloads dialog behind the site's
 **CRTSim** button offers **Open in your browser** first, above the platform downloads.
+
+## Home page showcase
+
+With the next release, the site's home page gains a small `CRTSim_Renderer.exe` window below
+**Welcome to my corner!**: a before/after slider over one sample at a time, with thumbnails to
+switch between an image and a video sample, and a **Download** button that opens the existing
+downloads dialog. **Open in your browser** joins it once the web app ships. The samples are the
+maintainer's own source and CRT pairs at matching sizes; the page gets smaller display copies,
+and videos load only when the window scrolls into view.
