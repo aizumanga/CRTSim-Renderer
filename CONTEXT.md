@@ -60,3 +60,7 @@ session (`crates/crtsim-desktop/src/app_data.rs`). Only that module knows the fi
 they can write, and how to install them (`crates/crtsim-desktop/src/ffmpeg_setup.rs`). The
 programs are found, never downloaded (`crates/crtsim-media/src/tools.rs`); see
 [the decision](docs/adr/0001-find-ffmpeg-never-download-it.md).
+
+**Web app**: the whole app, with editing, the galleries, playback and exports, running in a
+browser from the author's Neocities site. It is not a cut-down demo: what the desktop app does
+with a look, the web app does too, within what a browser allows.
