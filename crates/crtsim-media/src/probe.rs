@@ -25,6 +25,24 @@ pub struct Video {
     /// Container-provided decoded-frame count. Missing for many streaming/Matroska sources.
     pub frames: Option<u64>,
     pub source: Source,
+    /// The file's bytes, when a browser handed them over rather than a path to read.
+    pub contents: Option<Contents>,
+}
+
+/// A file's bytes, shared rather than copied.
+#[derive(Clone)]
+pub struct Contents(pub Arc<[u8]>);
+
+impl AsRef<[u8]> for Contents {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for Contents {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Contents({} bytes)", self.0.len())
+    }
 }
 
 /// What decodes a video's frames.
@@ -248,6 +266,7 @@ fn parse_probe(path: PathBuf, root: &Value) -> Result<Video> {
         stream: v["index"].as_u64().context("Missing video stream index")?,
         frames: positive_integer(&v["nb_frames"]),
         source: Source::Ffmpeg,
+        contents: None,
     })
 }
 

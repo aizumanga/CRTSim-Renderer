@@ -75,6 +75,7 @@ mod tests {
             stream: 0,
             frames: None,
             source: crtsim_media::Source::Ffmpeg,
+            contents: None,
         }
     }
 

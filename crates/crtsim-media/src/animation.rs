@@ -215,7 +215,7 @@ impl<'a> AnimationPlan<'a> {
         })
     }
 
-    fn frame_count(&self) -> u64 {
+    pub(crate) fn frame_count(&self) -> u64 {
         (self.frames().length() * self.rate.fps - 1e-6)
             .ceil()
             .max(1.) as u64
@@ -383,6 +383,7 @@ mod tests {
             stream: 0,
             frames: None,
             source: Source::Ffmpeg,
+            contents: None,
         }
     }
 

@@ -365,6 +365,14 @@ impl Export {
                 video,
                 options,
                 config,
+            } if video.contents.is_some() => {
+                export_animation_here(graphics, video, config, options, path, cancel, progress)
+                    .await
+            }
+            Self::Animation {
+                video,
+                options,
+                config,
             } => {
                 let renderer = graphics.renderer(|| {}).await?;
                 crtsim_media::export_animation(
@@ -663,11 +671,9 @@ async fn work_lane(ctx: egui::Context, gpu: Gpu, jobs: Inbox<Job>, events: mpsc:
             }
             // Loading an image cannot be cancelled.
             Job::Load(path) => Event::Loaded(load_image(path).map_err(Failure::Failed)),
-            Job::LoadBytes { name, bytes } => Event::Loaded(
-                crtsim_core::input::decode_image(&bytes)
-                    .map(|image| loaded(PathBuf::from(&name), name, image))
-                    .map_err(Failure::Failed),
-            ),
+            Job::LoadBytes { name, bytes } => {
+                Event::Loaded(load_bytes(name, bytes).map_err(Failure::Failed))
+            }
             Job::LoadVideo {
                 path,
                 frame,
@@ -727,6 +733,22 @@ fn loaded(path: PathBuf, name: String, image: RgbaImage) -> Loaded {
     }
 }
 
+/// A file a browser handed over: an animation opens with its frames, anything else as an
+/// image.
+fn load_bytes(name: String, bytes: Vec<u8>) -> Result<Loaded> {
+    let path = PathBuf::from(&name);
+    let contents = crtsim_media::Contents(bytes.into());
+    if let Some(format) = crtsim_media::detect_bytes(&path, &contents) {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let video = crtsim_media::probe_bytes(path, contents, format, &cancel)?;
+        let frames = video.frames.unwrap_or(1);
+        let image = crtsim_media::page::frame(&video, 0)?;
+        return Ok(opened(video, 0, frames, image));
+    }
+    let image = crtsim_core::input::decode_image(contents.as_ref())?;
+    Ok(loaded(path, name, image))
+}
+
 fn load_video(
     path: &Path,
     frame: u64,
@@ -742,17 +764,27 @@ fn load_video(
         }
     };
     ensure!(frame < frames, "Frame is outside the video");
-    let image = crtsim_media::preview_frame(&video, frame, cancel)?;
+    // A video handed over as bytes is decoded here; one found by its path, by FFmpeg.
+    let image = if video.contents.is_some() {
+        crtsim_media::page::frame(&video, frame)?
+    } else {
+        crtsim_media::preview_frame(&video, frame, cancel)?
+    };
+    Ok(opened(video, frame, frames, image))
+}
+
+/// Frame `frame` of `video`, of `frames`, opened for editing with its timeline.
+fn opened(video: Video, frame: u64, frames: u64, image: RgbaImage) -> Loaded {
     let thumbnail = image::DynamicImage::ImageRgba8(image.clone())
         .thumbnail(2048, 2048)
         .to_rgba8();
-    Ok(Loaded {
+    Loaded {
         path: video.path.clone(),
         name: file_name(&video.path),
         image,
         thumbnail,
         timeline: Some(Timeline::new(video, frame, frames)),
-    })
+    }
 }
 
 fn import_preset(
@@ -866,6 +898,70 @@ async fn export_image(
     );
 }
 
+/// An animation of a video handed over as bytes, made here without FFmpeg and saved, which in
+/// a browser is a download.
+async fn export_animation_here(
+    graphics: &mut Graphics,
+    video: &Video,
+    config: &Config,
+    options: &crtsim_media::AnimationOptions,
+    path: &Path,
+    cancel: &AtomicBool,
+    progress: &dyn Fn(Progress),
+) -> Result<()> {
+    use crtsim_media::page;
+    let format = crtsim_media::AnimationFormat::of(path)
+        .ok_or_else(|| anyhow::anyhow!("Choose a GIF or WebP filename"))?;
+    let renderer = graphics.renderer(|| {}).await?;
+    let bytes = page::export_animation(
+        video,
+        format,
+        config,
+        options,
+        async |span| page::decoded(video, span),
+        async |sequence, frame, config| {
+            renderer
+                .frame(sequence, frame, config, Some(cancel), |_| {})
+                .await?;
+            renderer.read(sequence).await
+        },
+        async |frame, quality| lossy_webp(frame, quality).await,
+        cancel,
+        progress,
+    )
+    .await?;
+    ensure!(!cancel.load(Ordering::Relaxed), "Render cancelled");
+    let mime = match format {
+        crtsim_media::AnimationFormat::Gif => "image/gif",
+        crtsim_media::AnimationFormat::Webp => "image/webp",
+    };
+    save(path, &bytes, mime)
+}
+
+/// A frame as a lossy still WebP, which only a browser's own encoder writes here.
+async fn lossy_webp(frame: &RgbaImage, quality: u8) -> Result<Vec<u8>> {
+    #[cfg(target_arch = "wasm32")]
+    return crate::web::lossy_webp(frame, quality).await;
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (frame, quality);
+        anyhow::bail!("Lossy WebP is written by FFmpeg on the desktop")
+    }
+}
+
+/// Saves a finished file: written to `path`, or in a browser downloaded under its name.
+fn save(path: &Path, bytes: &[u8], mime: &str) -> Result<()> {
+    #[cfg(target_arch = "wasm32")]
+    return crate::web::download(&file_name(path), bytes, mime);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = mime;
+        let partial = path.with_extension("partial");
+        std::fs::write(&partial, bytes)?;
+        Ok(std::fs::rename(partial, path)?)
+    }
+}
+
 /// A whole video rendered and encoded, with its audio and other tracks.
 async fn export_video(
     graphics: &mut Graphics,
@@ -876,6 +972,10 @@ async fn export_video(
     cancel: &Arc<AtomicBool>,
     progress: &dyn Fn(Progress),
 ) -> Result<()> {
+    ensure!(
+        video.contents.is_none(),
+        "Video export arrives in the web app in a later version"
+    );
     let renderer = graphics.renderer(|| {}).await?;
     crtsim_media::export(video, path, config, options, renderer, cancel, progress)
 }
@@ -898,6 +998,31 @@ async fn play(
     let played = graphics
         .guard("Playback graphics driver failed", async |g| {
             let renderer = g.renderer(|| {}).await?;
+            // A video handed over as bytes is decoded and paced here, awaiting room in the
+            // feed so a browser page keeps drawing; one found by its path, by FFmpeg.
+            if video.contents.is_some() {
+                use crtsim_media::page;
+                return page::playback(
+                    video,
+                    *start,
+                    config,
+                    options,
+                    renderer,
+                    async |span| page::decoded(video, span),
+                    cancel,
+                    async |time, source, crt| {
+                        let mut item = Ok(PlaybackFrame { time, source, crt });
+                        loop {
+                            match offer(frames, item, cancel, ctx)? {
+                                None => return Ok(()),
+                                Some(back) => item = back,
+                            }
+                            pause().await;
+                        }
+                    },
+                )
+                .await;
+            }
             crtsim_media::playback(
                 video,
                 *start,
@@ -908,20 +1033,11 @@ async fn play(
                 |time, source, crt| {
                     let mut item = Ok(PlaybackFrame { time, source, crt });
                     loop {
-                        ensure!(!cancel.load(Ordering::Relaxed), "Playback cancelled");
-                        match frames.try_send(item) {
-                            Ok(()) => {
-                                ctx.request_repaint();
-                                return Ok(());
-                            }
-                            Err(mpsc::TrySendError::Full(back)) => {
-                                item = back;
-                                std::thread::sleep(Duration::from_millis(5));
-                            }
-                            Err(mpsc::TrySendError::Disconnected(_)) => {
-                                anyhow::bail!("Playback stopped")
-                            }
+                        match offer(frames, item, cancel, ctx)? {
+                            None => return Ok(()),
+                            Some(back) => item = back,
                         }
+                        std::thread::sleep(Duration::from_millis(5));
                     }
                 },
             )
@@ -930,14 +1046,44 @@ async fn play(
     if let Err(error) = played {
         let error = format!("{error:#}");
         // Keep the terminal error behind already buffered frames without blocking shutdown.
+        let mut item = Err(error);
         while !cancel.load(Ordering::Relaxed) {
-            match frames.try_send(Err(error.clone())) {
-                Err(mpsc::TrySendError::Full(_)) => std::thread::sleep(Duration::from_millis(5)),
+            match frames.try_send(item) {
+                Err(mpsc::TrySendError::Full(back)) => {
+                    item = back;
+                    pause().await;
+                }
                 _ => break,
             }
         }
     }
     ctx.request_repaint();
+}
+
+/// Offers a frame to the feed: `None` once it is taken, or the frame back when the feed is full.
+fn offer(
+    frames: &mpsc::SyncSender<Result<PlaybackFrame, String>>,
+    item: Result<PlaybackFrame, String>,
+    cancel: &AtomicBool,
+    ctx: &egui::Context,
+) -> Result<Option<Result<PlaybackFrame, String>>> {
+    ensure!(!cancel.load(Ordering::Relaxed), "Playback cancelled");
+    match frames.try_send(item) {
+        Ok(()) => {
+            ctx.request_repaint();
+            Ok(None)
+        }
+        Err(mpsc::TrySendError::Full(back)) => Ok(Some(back)),
+        Err(mpsc::TrySendError::Disconnected(_)) => anyhow::bail!("Playback stopped"),
+    }
+}
+
+/// A short wait before trying the feed again: a sleep on a thread, a timer in a browser.
+async fn pause() {
+    #[cfg(target_arch = "wasm32")]
+    crate::web::sleep(5).await;
+    #[cfg(not(target_arch = "wasm32"))]
+    std::thread::sleep(Duration::from_millis(5));
 }
 
 #[cfg(test)]
@@ -1107,6 +1253,110 @@ mod tests {
             );
             stop(worker);
         }
+    }
+
+    /// An animated GIF of `frames` 8x6 frames of 100 ms, frame `i` gray level `i * 40`.
+    fn animated_gif(frames: u8) -> Vec<u8> {
+        use image::{codecs::gif::GifEncoder, Delay, Frame, Rgba};
+        let mut bytes = vec![];
+        let mut encoder = GifEncoder::new(&mut bytes);
+        for i in 0..frames {
+            let image = RgbaImage::from_pixel(8, 6, Rgba([i * 40, i * 40, i * 40, 255]));
+            let delay = Delay::from_numer_denom_ms(100, 1);
+            encoder
+                .encode_frame(Frame::from_parts(image, 0, 0, delay))
+                .unwrap();
+        }
+        drop(encoder);
+        bytes
+    }
+
+    #[test]
+    fn an_animation_handed_over_as_bytes_opens_with_its_frames_on_either_runtime() {
+        for (runtime, worker, next) in workers() {
+            let job = Job::LoadBytes {
+                name: "clip.gif".into(),
+                bytes: animated_gif(4),
+            };
+            worker.jobs.send(job).unwrap();
+            let Event::Loaded(Ok(loaded)) = next(&worker) else {
+                panic!("{runtime}: expected the animation");
+            };
+            let timeline = loaded.timeline.expect("an animation has a timeline");
+            assert_eq!((timeline.frames, loaded.image.dimensions()), (4, (8, 6)));
+            // Another frame of the one already open, decoded here from its bytes.
+            worker
+                .jobs
+                .send(Job::LoadVideo {
+                    path: "clip.gif".into(),
+                    frame: 2,
+                    cached: Some((timeline.video.clone(), timeline.frames)),
+                    cancel: Arc::new(AtomicBool::new(false)),
+                })
+                .unwrap();
+            let Event::Loaded(Ok(loaded)) = next(&worker) else {
+                panic!("{runtime}: expected frame 3");
+            };
+            assert_eq!(loaded.image.get_pixel(0, 0)[0], 80, "{runtime}");
+            stop(worker);
+        }
+    }
+
+    /// Animations of a video handed over as bytes are written here, as a browser writes them.
+    #[test]
+    #[ignore = "requires a Vulkan adapter"]
+    fn an_animation_handed_over_as_bytes_exports_without_ffmpeg() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, worker, next) = workers().remove(1);
+        worker
+            .jobs
+            .send(Job::LoadBytes {
+                name: "clip.gif".into(),
+                bytes: animated_gif(3),
+            })
+            .unwrap();
+        let Event::Loaded(Ok(loaded)) = next(&worker) else {
+            panic!("expected the animation");
+        };
+        let video = loaded.timeline.unwrap().video;
+        for (name, lossless) in [("crt.gif", false), ("crt.webp", true)] {
+            let options = crtsim_media::AnimationOptions {
+                max_side: 96,
+                fps: 10,
+                lossless,
+                ..Default::default()
+            };
+            let path = dir.path().join(name);
+            worker
+                .jobs
+                .send(Job::Export {
+                    export: Export::Animation {
+                        video: video.clone(),
+                        options,
+                        config: Config::default(),
+                    },
+                    path: path.clone(),
+                    cancel: Arc::new(AtomicBool::new(false)),
+                })
+                .unwrap();
+            loop {
+                match next(&worker) {
+                    Event::Progress(_) => continue,
+                    Event::Exported(result) => {
+                        assert!(result.is_ok(), "{name}: {:?}", result.err());
+                        break;
+                    }
+                    _ => panic!("{name}: unexpected event"),
+                }
+            }
+            let bytes = std::fs::read(&path).unwrap();
+            let size = image::load_from_memory(&bytes)
+                .unwrap()
+                .to_rgba8()
+                .dimensions();
+            assert_eq!(size.0.max(size.1), 96, "{name}");
+        }
+        stop(worker);
     }
 
     /// The point of the second lane: a preview finishes while an export is still running,

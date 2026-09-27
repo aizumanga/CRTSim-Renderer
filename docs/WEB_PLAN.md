@@ -87,6 +87,41 @@ order; the polish track can run alongside.
 - **Still to do for the web:** the module is 20 MB, 7 MB of it the embedded NES LUTs, which
   could be fetched when first used.
 
+## Video in the browser (step 7)
+
+Every video path on the desktop runs through FFmpeg processes, so the browser needs its own
+way in as well as out: exporting needs a video to export. Step 7 is three parts, each shipped
+on its own.
+
+1. **Animations out (done).** GIF and animated WebP are written in Rust (`crtsim-media`'s
+   `gif_writer` and `webp_writer`), from sources the browser can already open: animated GIF
+   and WebP are decoded in Rust, from the bytes the page was handed (`Video::contents`).
+   - `crtsim_media::page` runs a video the way a page must: one frame at a time, each step
+     awaited, the file made in memory and downloaded. Its frames come through `FrameSource`,
+     which animations fill now and WebCodecs will fill next. Playback and the timeline's
+     frames use it too. The worker takes this path for any video that came as bytes, so the
+     native tests exercise it; the desktop's FFmpeg paths are unchanged.
+   - A GIF gets 255 colors for the whole animation, by median cut over every frame's
+     colors, and the desktop's three dithers (FFmpeg's Bayer at scale 3, Sierra-2-4A
+     diffusion, none). Choosing colors first means its frames are rendered twice. Each frame
+     stores only the rectangle that changed, unchanged pixels in it transparent, and a frame
+     that changes nothing lengthens the one before.
+   - Animated WebP frames are lossless from `image-webp`, or lossy from the browser's own
+     still-WebP encoder (`OffscreenCanvas.convertToBlob`), since no lossy encoder is written
+     in Rust. A browser that cannot write WebP (Safari) is told to choose Lossless or GIF.
+     Only the changed rectangle is stored.
+   - The export window offers the formats the host writes; in a browser, GIF and WebP
+     for now.
+   - Checked in headless Chromium: an animated GIF picked with Ctrl+O opens with its
+     timeline, plays, and exports as a GIF and as a lossy WebP; Chromium's `ImageDecoder`
+     reads both back with every frame and the full two seconds. An animated WebP opens and
+     plays. (FFmpeg reads the GIF; it has no decoder for animated WebP.)
+2. **Video in.** MP4 and WebM demuxed in Rust, decoded by WebCodecs, drawn to RGBA through an
+   `OffscreenCanvas`; a `FrameSource` that seeks from the keyframe before a frame.
+3. **Video out.** WebCodecs encodes H.264 for MP4 and VP9 for WebM, muxed in Rust. Sound is
+   copied when the container takes its codec, and otherwise re-encoded as Opus. The window
+   offers only what `VideoEncoder.isConfigSupported` accepts.
+
 ## Polish track
 
 These help both hosts, so they are worth doing before or during steps 4 to 6:

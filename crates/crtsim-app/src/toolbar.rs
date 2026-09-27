@@ -87,6 +87,8 @@ impl App {
                         self.show_queue = true;
                         ui.close();
                     }
+                    // A browser page uses its own codecs, not FFmpeg.
+                    #[cfg(not(target_arch = "wasm32"))]
                     if ui.button("FFmpeg setup…").clicked() {
                         self.show_ffmpeg_setup();
                         ui.close();

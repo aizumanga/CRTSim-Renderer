@@ -152,6 +152,49 @@ pub async fn pick(extensions: &[&str]) -> Result<Option<(String, Vec<u8>)>> {
     )))
 }
 
+/// `image` as a lossy still WebP at `quality` (0–100), from the browser's own encoder. A
+/// browser without one gives another format, which the caller refuses.
+pub async fn lossy_webp(image: &image::RgbaImage, quality: u8) -> Result<Vec<u8>> {
+    let (width, height) = image.dimensions();
+    let canvas = web_sys::OffscreenCanvas::new(width, height).map_err(failed)?;
+    let context: web_sys::OffscreenCanvasRenderingContext2d = canvas
+        .get_context("2d")
+        .map_err(failed)?
+        .context("The browser gave no canvas to encode on")?
+        .unchecked_into();
+    let pixels = web_sys::ImageData::new_with_u8_clamped_array_and_sh(
+        wasm_bindgen::Clamped(image.as_raw()),
+        width,
+        height,
+    )
+    .map_err(failed)?;
+    context.put_image_data(&pixels, 0., 0.).map_err(failed)?;
+    let options = web_sys::ImageEncodeOptions::new();
+    options.set_type("image/webp");
+    options.set_quality(f64::from(quality) / 100.);
+    let blob: web_sys::Blob = JsFuture::from(
+        canvas
+            .convert_to_blob_with_options(&options)
+            .map_err(failed)?,
+    )
+    .await
+    .map_err(failed)?
+    .unchecked_into();
+    let bytes = JsFuture::from(blob.array_buffer()).await.map_err(failed)?;
+    Ok(js_sys::Uint8Array::new(&bytes).to_vec())
+}
+
+/// Waits `milliseconds`, letting the page draw meanwhile.
+pub async fn sleep(milliseconds: i32) {
+    let waited = js_sys::Promise::new(&mut |resolve, _| {
+        if let Some(window) = web_sys::window() {
+            let _ = window
+                .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, milliseconds);
+        }
+    });
+    let _ = JsFuture::from(waited).await;
+}
+
 fn failed(error: JsValue) -> anyhow::Error {
     anyhow!("{error:?}")
 }

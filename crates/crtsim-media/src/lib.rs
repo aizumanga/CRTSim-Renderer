@@ -3,18 +3,21 @@ mod animated;
 mod animation;
 mod decode;
 mod export;
+mod gif_writer;
+pub mod page;
 mod plan;
 mod probe;
 mod process;
 mod tools;
+mod webp_writer;
 
-pub use animated::AnimationFormat;
+pub use animated::{detect_bytes, probe_bytes, AnimationFormat};
 pub use animation::{AnimationOptions, AnimationSummary, Dither};
 pub use crtsim_core::Timing;
 pub use decode::{playback, preview, preview_frame};
 pub(crate) use export::Rate;
 pub use export::{export, export_animation, export_animation_with, export_with, Progress};
-pub use probe::{frame_count, probe, Source, Track, TrackKind, Video};
+pub use probe::{frame_count, probe, Contents, Source, Track, TrackKind, Video};
 pub use tools::{Found, Tool, ToolCheck};
 
 use anyhow::{ensure, Context, Result};

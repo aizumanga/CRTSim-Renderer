@@ -12,7 +12,11 @@ serde_json.workspace = true
 serde.workspace = true
 tempfile = "3"
 image-webp = "0.2"
+# GIFs written without FFmpeg, as a browser page writes them.
+gif = "0.13"
 pollster = "0.3"
+# A clock that works in a browser, where std's panics; std's elsewhere.
+web-time = "1"
 
 [dev-dependencies]
 wgpu.workspace = true

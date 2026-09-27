@@ -14,7 +14,9 @@ JavaScript. It is served from the author's Neocities supporter site, as `.wasm`.
   work; CPU-heavy steps are handed to the browser (`createImageBitmap` to decode,
   `OffscreenCanvas.convertToBlob` for PNGs, WebCodecs for video), which runs them off the page.
 - **No FFmpeg.** Video is decoded and encoded with WebCodecs and a small muxer. GIF and animated
-  WebP are encoded in Rust. The formats offered are those the browser can write.
+  WebP are written in Rust; a lossy WebP's frames come from the browser's own still-WebP
+  encoder, as no lossy encoder is written in Rust. The formats offered are those the browser
+  can write.
 - **Files in, downloads out.** People open files by picking or dropping them. Every save,
   batch outputs included, is a download. App data lives in IndexedDB.
 

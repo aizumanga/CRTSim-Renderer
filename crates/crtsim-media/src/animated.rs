@@ -5,7 +5,7 @@
 use crate::{
     check_cancel,
     decode::Request,
-    probe::{Source, Track, TrackKind, Video},
+    probe::{Contents, Source, Track, TrackKind, Video},
 };
 use anyhow::{ensure, Context, Result};
 use crtsim_core::config;
@@ -13,7 +13,7 @@ use image::{codecs::gif::GifDecoder, AnimationDecoder, ImageDecoder, RgbaImage};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::File,
-    io::{BufReader, Read},
+    io::{BufRead, BufReader, Cursor, Read, Seek},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -54,11 +54,49 @@ impl AnimationFormat {
     }
 }
 
+/// Where an animation's bytes are read from: its file, or the bytes a browser handed over.
+#[derive(Clone, Debug)]
+pub(crate) enum Origin {
+    Path(PathBuf),
+    Bytes(Contents),
+}
+
+/// What the decoders read from.
+trait Reader: BufRead + Seek + Send {}
+impl<T: BufRead + Seek + Send> Reader for T {}
+
+impl Origin {
+    /// Where `video`'s frames are read from.
+    pub(crate) fn of(video: &Video) -> Self {
+        match &video.contents {
+            Some(contents) => Self::Bytes(contents.clone()),
+            None => Self::Path(video.path.clone()),
+        }
+    }
+
+    fn reader(&self) -> Result<Box<dyn Reader>> {
+        Ok(match self {
+            Self::Path(path) => Box::new(BufReader::new(
+                File::open(path).context("Cannot open animation")?,
+            )),
+            Self::Bytes(contents) => Box::new(Cursor::new(contents.clone())),
+        })
+    }
+}
+
 /// The format of `path` if it is a GIF or WebP with more than one frame. Reads the header, and
 /// for a GIF at most two frames.
 pub(crate) fn detect(path: &Path) -> Option<AnimationFormat> {
-    let format = AnimationFormat::of(path)?;
-    let file = BufReader::new(File::open(path).ok()?);
+    detect_in(&Origin::Path(path.to_owned()), AnimationFormat::of(path)?)
+}
+
+/// The format of the file called `name` with these `contents`, if it is an animation.
+pub fn detect_bytes(name: &Path, contents: &Contents) -> Option<AnimationFormat> {
+    detect_in(&Origin::Bytes(contents.clone()), AnimationFormat::of(name)?)
+}
+
+fn detect_in(origin: &Origin, format: AnimationFormat) -> Option<AnimationFormat> {
+    let file = origin.reader().ok()?;
     let animated = match format {
         AnimationFormat::Gif => {
             let frames = GifDecoder::new(file).ok()?.into_frames();
@@ -84,16 +122,16 @@ fn shown_ms(delay: u32) -> u32 {
 enum Frames {
     Gif(image::Frames<'static>),
     Webp {
-        decoder: Box<image_webp::WebPDecoder<BufReader<File>>>,
+        decoder: Box<image_webp::WebPDecoder<Box<dyn Reader>>>,
         /// One frame as the decoder writes it: RGB, or RGBA when the file has alpha.
         buffer: Vec<u8>,
     },
 }
 
 impl Frames {
-    /// Opens `path`, returning its canvas size and its frames.
-    fn open(path: &Path, format: AnimationFormat) -> Result<((u32, u32), Self)> {
-        let file = BufReader::new(File::open(path).context("Cannot open animation")?);
+    /// Opens the animation, returning its canvas size and its frames.
+    fn open(origin: &Origin, format: AnimationFormat) -> Result<((u32, u32), Self)> {
+        let file = origin.reader()?;
         match format {
             AnimationFormat::Gif => {
                 let mut decoder = GifDecoder::new(file).context("Cannot read GIF")?;
@@ -163,7 +201,27 @@ pub(crate) fn probe(
     format: AnimationFormat,
     cancel: &Arc<AtomicBool>,
 ) -> Result<Video> {
-    let (size, frames) = Frames::open(&path, format)?;
+    probe_in(Origin::Path(path.clone()), path, format, cancel)
+}
+
+/// Reads the size and frame timing of the animation called `name`, from the `contents` a
+/// browser handed over. The video keeps them, to decode its frames from.
+pub fn probe_bytes(
+    name: PathBuf,
+    contents: Contents,
+    format: AnimationFormat,
+    cancel: &Arc<AtomicBool>,
+) -> Result<Video> {
+    probe_in(Origin::Bytes(contents), name, format, cancel)
+}
+
+fn probe_in(
+    origin: Origin,
+    path: PathBuf,
+    format: AnimationFormat,
+    cancel: &Arc<AtomicBool>,
+) -> Result<Video> {
+    let (size, frames) = Frames::open(&origin, format)?;
     config::validate_size(size)?;
     let mut delays = vec![];
     for frame in frames {
@@ -201,6 +259,10 @@ pub(crate) fn probe(
         source: Source::Animated {
             format,
             delays: delays.into(),
+        },
+        contents: match origin {
+            Origin::Bytes(contents) => Some(contents),
+            Origin::Path(_) => None,
         },
     })
 }
@@ -270,6 +332,49 @@ pub(crate) fn schedule(delays: &[u32], request: &Request) -> Result<Vec<usize>> 
         .collect())
 }
 
+/// The frames a plan lists, decoded in order on the calling thread: how a browser page, which
+/// has no other thread, reads an animation.
+pub(crate) struct Planned {
+    frames: Frames,
+    plan: Vec<usize>,
+    /// The plan's next entry.
+    next: usize,
+    /// How many frames have been decoded; the last of them is `current`.
+    decoded: usize,
+    current: RgbaImage,
+}
+
+impl Planned {
+    pub(crate) fn open(origin: &Origin, format: AnimationFormat, plan: Vec<usize>) -> Result<Self> {
+        let (_, frames) = Frames::open(origin, format)?;
+        Ok(Self {
+            frames,
+            plan,
+            next: 0,
+            decoded: 0,
+            current: RgbaImage::new(0, 0),
+        })
+    }
+}
+
+impl Iterator for Planned {
+    type Item = Result<RgbaImage>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let wanted = *self.plan.get(self.next)?;
+        while self.decoded <= wanted {
+            match self.frames.next() {
+                Some(Ok((frame, _))) => self.current = frame,
+                Some(Err(error)) => return Some(Err(error)),
+                None => return Some(Err(anyhow::anyhow!("The animation ended early"))),
+            }
+            self.decoded += 1;
+        }
+        self.next += 1;
+        Some(Ok(self.current.clone()))
+    }
+}
+
 /// A decode running on its own thread, where the frames are decoded: GIF frames cannot move
 /// between threads. It stops when asked, when cancelled or when its reader is dropped.
 pub(crate) struct Decoding {
@@ -281,7 +386,7 @@ impl Decoding {
     /// Starts decoding the frames `plan` lists and returns the decode with a reader of them,
     /// as packed RGBA at the canvas size. At most `queued` frames wait to be read.
     pub(crate) fn start(
-        path: &Path,
+        origin: Origin,
         format: AnimationFormat,
         plan: Vec<usize>,
         queued: usize,
@@ -289,25 +394,18 @@ impl Decoding {
     ) -> (Self, impl Read + Send) {
         let (send, frames) = mpsc::sync_channel::<Vec<u8>>(queued);
         let stop = Arc::new(AtomicBool::new(false));
-        let (path, cancel, stopped) = (path.to_owned(), cancel.clone(), stop.clone());
+        let (cancel, stopped) = (cancel.clone(), stop.clone());
         let thread = std::thread::spawn(move || -> Result<()> {
-            let (_, frames) = Frames::open(&path, format)?;
-            let mut next = 0;
-            for (index, frame) in frames.enumerate() {
-                if next == plan.len() || stopped.load(Ordering::Relaxed) {
+            for frame in Planned::open(&origin, format, plan)? {
+                if stopped.load(Ordering::Relaxed) {
                     return Ok(());
                 }
                 check_cancel(&cancel)?;
-                let (frame, _) = frame?;
-                while plan.get(next) == Some(&index) {
-                    if send.send(frame.as_raw().clone()).is_err() {
-                        // The reader is gone: nothing wants the rest.
-                        return Ok(());
-                    }
-                    next += 1;
+                if send.send(frame?.into_raw()).is_err() {
+                    // The reader is gone: nothing wants the rest.
+                    return Ok(());
                 }
             }
-            ensure!(next == plan.len(), "The animation ended early");
             Ok(())
         });
         let reader = Received {
@@ -472,8 +570,13 @@ mod tests {
         let ten = rate(10);
         let plan = schedule(delays, &request(Some(&ten), 0., None)).unwrap();
         assert_eq!(plan, vec![0, 1, 2, 2, 3]);
-        let (mut decoding, mut frames) =
-            Decoding::start(&path, AnimationFormat::Gif, plan, 2, &cancel);
+        let (mut decoding, mut frames) = Decoding::start(
+            Origin::Path(path.clone()),
+            AnimationFormat::Gif,
+            plan,
+            2,
+            &cancel,
+        );
         let mut bytes = vec![];
         frames.read_to_end(&mut bytes).unwrap();
         decoding.wait().unwrap();
@@ -498,8 +601,13 @@ mod tests {
         assert!((video.duration - 0.4).abs() < 1e-9);
         assert_eq!(video.rate, "10/1");
         let plan = schedule(&[100; 4], &request(None, 0., Some(2))).unwrap();
-        let (mut decoding, mut frames) =
-            Decoding::start(&path, AnimationFormat::Webp, plan, 2, &cancel);
+        let (mut decoding, mut frames) = Decoding::start(
+            Origin::Path(path.clone()),
+            AnimationFormat::Webp,
+            plan,
+            2,
+            &cancel,
+        );
         let mut bytes = vec![];
         frames.read_to_end(&mut bytes).unwrap();
         decoding.wait().unwrap();
@@ -550,13 +658,23 @@ mod tests {
         let path = dir.path().join("long.gif");
         write_gif(&path, &[20; 50]);
         let cancel = Arc::new(AtomicBool::new(false));
-        let (mut decoding, frames) =
-            Decoding::start(&path, AnimationFormat::Gif, (0..50).collect(), 1, &cancel);
+        let (mut decoding, frames) = Decoding::start(
+            Origin::Path(path.clone()),
+            AnimationFormat::Gif,
+            (0..50).collect(),
+            1,
+            &cancel,
+        );
         drop(frames);
         assert!(decoding.wait().is_ok());
         cancel.store(true, Ordering::Relaxed);
-        let (mut decoding, mut frames) =
-            Decoding::start(&path, AnimationFormat::Gif, (0..50).collect(), 1, &cancel);
+        let (mut decoding, mut frames) = Decoding::start(
+            Origin::Path(path.clone()),
+            AnimationFormat::Gif,
+            (0..50).collect(),
+            1,
+            &cancel,
+        );
         let _ = frames.read_to_end(&mut vec![]);
         assert!(decoding.wait().unwrap_err().to_string().contains("cancel"));
     }

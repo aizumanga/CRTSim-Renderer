@@ -54,8 +54,9 @@ impl Decoder {
             }
             Source::Animated { format, delays } => {
                 let plan = animated::schedule(delays, request)?;
+                let origin = animated::Origin::of(video);
                 let (decoding, frames) =
-                    animated::Decoding::start(&video.path, *format, plan, QUEUED_FRAMES, cancel);
+                    animated::Decoding::start(origin, *format, plan, QUEUED_FRAMES, cancel);
                 Self {
                     frames: Some(Box::new(frames)),
                     work: Work::Animated(decoding),

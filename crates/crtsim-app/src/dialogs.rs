@@ -304,14 +304,16 @@ impl App {
         let chooser = kind.chooser(self.export_format);
         match kind {
             Dialog::OpenProject | Dialog::SaveProject => return self.not_yet("Projects"),
-            Dialog::ExportVideo => return self.not_yet("Video export"),
+            Dialog::ExportVideo if matches!(self.export_format, ExportFormat::Video(_)) => {
+                return self.not_yet("Video export")
+            }
             _ => {}
         }
         if let Some(name) = chooser.save_as {
             let file = format!("{name}.{}", chooser.extensions[0]);
             return self.chosen(kind, PathBuf::from(file));
         }
-        // Only images open here until the browser can decode video.
+        // Images and animations open here until the browser can decode video.
         let extensions = match kind {
             Dialog::File | Dialog::ImportPreset => crtsim_core::input::IMAGE_EXTENSIONS.to_vec(),
             _ => chooser.extensions,
@@ -357,7 +359,8 @@ impl App {
         let input = self.input.dimensions();
         match kind {
             Dialog::File => {
-                if crtsim_media::MediaKind::of(Path::new(&name)).is_moving() {
+                // Animated GIF and WebP open with their frames; the worker tells them apart.
+                if crtsim_media::MediaKind::of(Path::new(&name)) == crtsim_media::MediaKind::Video {
                     return self.not_yet("Video");
                 }
                 self.stop_playback();

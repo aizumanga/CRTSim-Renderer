@@ -405,6 +405,7 @@ mod tests {
             stream: 0,
             frames: None,
             source: Source::Ffmpeg,
+            contents: None,
         }
     }
 

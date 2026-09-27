@@ -773,12 +773,14 @@ version = "0.6.0"
 dependencies = [
  "anyhow",
  "crtsim-core",
+ "gif",
  "image 0.24.9",
  "image-webp",
  "pollster 0.3.0",
  "serde",
  "serde_json",
  "tempfile",
+ "web-time",
  "wgpu",
 ]
 

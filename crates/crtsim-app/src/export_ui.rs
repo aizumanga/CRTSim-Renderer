@@ -22,6 +22,20 @@ impl Default for ExportFormat {
 }
 
 impl ExportFormat {
+    /// The formats this host writes: all of them on the desktop, with FFmpeg; in a browser,
+    /// the animations, until it encodes video too.
+    fn offered() -> Vec<Self> {
+        let animations = AnimationFormat::ALL.map(Self::Animation);
+        #[cfg(target_arch = "wasm32")]
+        return animations.to_vec();
+        #[cfg(not(target_arch = "wasm32"))]
+        Container::ALL
+            .map(Self::Video)
+            .into_iter()
+            .chain(animations)
+            .collect()
+    }
+
     pub fn extension(self) -> &'static str {
         match self {
             Self::Video(container) => container.extension(),
@@ -111,8 +125,10 @@ impl App {
             animation: self.animation_options.clone(),
             format: if batch {
                 ExportFormat::Video(Container::Mkv)
-            } else {
+            } else if ExportFormat::offered().contains(&self.export_format) {
                 self.export_format
+            } else {
+                ExportFormat::offered()[0]
             },
             batch,
             from_current_frame: false,
@@ -154,11 +170,7 @@ impl App {
                     if draft.batch {
                         ui.label(draft.format.label());
                     } else {
-                        let formats = Container::ALL
-                            .map(ExportFormat::Video)
-                            .into_iter()
-                            .chain(AnimationFormat::ALL.map(ExportFormat::Animation));
-                        for format in formats {
+                        for format in ExportFormat::offered() {
                             if ui
                                 .radio_value(&mut draft.format, format, format.label())
                                 .changed()
