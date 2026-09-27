@@ -38,7 +38,7 @@ impl App {
                 Event::Loaded(result) => {
                     self.work = Work::Idle;
                     // Opening a project loads its source first, then restores the rest.
-                    let project = self.workflow.pending_project.take();
+                    let project = self.session.source_loaded();
                     match result {
                         Ok(loaded) => {
                             self.show_loaded(loaded);

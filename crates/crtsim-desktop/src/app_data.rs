@@ -39,6 +39,14 @@ pub struct Store {
 }
 
 impl Store {
+    /// A store in `root`, for tests.
+    #[cfg(test)]
+    pub fn in_folder(root: &Path) -> Self {
+        Self {
+            root: root.to_path_buf(),
+        }
+    }
+
     /// The folder `CRTSIM_DATA_DIR` names, or the platform's app data folder.
     pub fn discover() -> Result<Self> {
         if let Some(path) = std::env::var_os("CRTSIM_DATA_DIR") {
@@ -244,9 +252,7 @@ mod tests {
     use super::*;
 
     fn store(root: &Path) -> Store {
-        Store {
-            root: root.to_path_buf(),
-        }
+        Store::in_folder(root)
     }
 
     #[test]

@@ -37,7 +37,9 @@ after its source and never replaces a file; cancelling a job pauses the queue.
 later (`crates/crtsim-desktop/src/project.rs`).
 
 **Session**: the project the app saves to its app data every two seconds, and offers to
-recover on the next start.
+recover on the next start (`crates/crtsim-desktop/src/session.rs`, which also keeps the project
+file open and the recent ones). It is never saved over a session still on offer, nor while a
+load or a project being restored leaves the settings half applied.
 
 **App data**: the folder holding everything the app remembers between runs: the welcome
 acknowledged, the theme, tool window placement, personal presets, recent projects and the

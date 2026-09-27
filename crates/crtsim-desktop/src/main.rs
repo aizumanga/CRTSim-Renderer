@@ -14,6 +14,7 @@ mod playback;
 mod preview_ui;
 mod project;
 mod schedule;
+mod session;
 mod settings_ui;
 mod smoke;
 mod theme;
@@ -21,7 +22,6 @@ mod thumbnails;
 mod toolbar;
 mod widgets;
 mod worker;
-mod workflow;
 
 use crtsim_core::config::{self, ColorMode, Config, Filter, Fit, MaskRepeats, Phase};
 use crtsim_core::{settings, RenderProgress};
@@ -81,7 +81,8 @@ impl Work {
 }
 
 struct App {
-    workflow: workflow::State,
+    /// The session saved to recover, and the project files opened in it.
+    session: session::Session,
     ui_context: egui::Context,
     video: Option<crtsim_media::Video>,
     video_frame: u64,
@@ -121,6 +122,8 @@ struct App {
     history: model::History,
     input: Arc<RgbaImage>,
     source_name: String,
+    /// Where the source is on disk; none for the test card.
+    source_path: Option<PathBuf>,
     original: TextureHandle,
     rendered: Option<Displayed>,
     /// The interface's device, needed to register and release preview frames.
@@ -129,6 +132,12 @@ struct App {
     schedule: Schedule,
     preview_limit: Option<u32>,
     view: View,
+    /// Where the Compare view divides the original from the CRT, from 0 to 1 across.
+    comparison: f32,
+    /// The video export window, while it is open.
+    export_dialog: Option<export_ui::ExportDialog>,
+    /// What the last video export was saved as, which the next one starts from.
+    export_format: export_ui::ExportFormat,
     zoom: f32,
     fit_preview: bool,
     dialog_open: bool,
@@ -240,7 +249,7 @@ impl App {
             .map_or((false, false), |smoke| (smoke.gallery, smoke.lut_gallery));
         let (gallery_entries, gallery_warnings) = gallery::entries(store.as_ref());
         let mut app = Self {
-            workflow: workflow::State::default(),
+            session: Default::default(),
             ui_context: ctx.clone(),
             video: None,
             video_frame: 0,
@@ -275,12 +284,16 @@ impl App {
             config,
             input,
             source_name: "Built-in test card".into(),
+            source_path: None,
             original,
             rendered: None,
             render_state,
             schedule: Schedule::new(Instant::now()),
             preview_limit: Some(1280),
             view: View::Crt,
+            comparison: 0.5,
+            export_dialog: None,
+            export_format: Default::default(),
             zoom: 1.,
             fit_preview: true,
             dialog_open: false,
@@ -293,7 +306,7 @@ impl App {
             preview_error: None,
             smoke,
         };
-        app.init_workflow(input_path.is_some());
+        app.load_session(input_path.is_some());
         if let Some(path) = input_path {
             app.load(path);
         }
@@ -363,7 +376,7 @@ impl App {
     /// A window that takes over the interface is open: a native file dialog, the video export
     /// settings or the welcome.
     fn modal_open(&self) -> bool {
-        self.dialog_open || self.workflow.export_dialog.is_some() || self.show_welcome
+        self.dialog_open || self.export_dialog.is_some() || self.show_welcome
     }
     /// Whether a file can be opened or an export started: nothing modal is open and the work
     /// thread is free.
@@ -384,7 +397,7 @@ impl App {
         input: RgbaImage,
         thumbnail: &RgbaImage,
     ) {
-        self.workflow.source = path;
+        self.source_path = path;
         self.source_name = name;
         self.video = video;
         self.original = texture(&self.ui_context, "original", thumbnail, 2048);
@@ -543,7 +556,13 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.workflow_ui(ctx);
+        self.video_export_window(ctx);
+        self.tick_playback(ctx);
+        self.recovery_window(ctx);
+        self.queue_window(ctx);
+        self.dispatch_queue();
+        self.autosave();
+        ctx.request_repaint_after(Duration::from_secs(2));
         self.receive(ctx);
         if !self.modal_open() && !ctx.wants_keyboard_input() {
             let mut ctrl_shift = egui::Modifiers::CTRL;

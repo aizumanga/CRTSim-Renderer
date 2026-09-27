@@ -254,7 +254,7 @@ impl App {
     pub(crate) fn dispatch_queue(&mut self) {
         if !self.can_start_work()
             || self.schedule.rendering()
-            || self.workflow.recovery_offered()
+            || self.session.recovery_offered()
             || self.playback.is_some()
         {
             return;

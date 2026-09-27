@@ -146,7 +146,7 @@ impl App {
         self.dialog_open = true;
         let send = self.dialog_send.clone();
         let ctx = ctx.clone();
-        let export = self.workflow.export_format;
+        let export = self.export_format;
         std::thread::spawn(move || {
             // A dialog that fails must still answer, or the interface stays frozen.
             let answer = std::panic::catch_unwind(AssertUnwindSafe(|| request.ask(export)))
@@ -239,7 +239,7 @@ impl App {
 
     /// The video on screen, exported as the export dialog chose, to `path`.
     fn export_video(&mut self, path: PathBuf) {
-        let format = self.workflow.export_format;
+        let format = self.export_format;
         let extension = format.extension();
         if !path
             .extension()

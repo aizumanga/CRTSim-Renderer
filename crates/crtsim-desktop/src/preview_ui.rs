@@ -105,7 +105,7 @@ impl App {
                             available,
                             self.fit_preview,
                             self.zoom,
-                            &mut self.workflow.comparison,
+                            &mut self.comparison,
                         );
                     }
                 } else if self.view == View::Original {
