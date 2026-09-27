@@ -17,6 +17,26 @@ order; the polish track can run alongside.
 | 7 | Web encoders: WebCodecs for MP4 and WebM with a muxer, and Rust encoders for GIF and animated WebP. | Each format opens in the browser that wrote it. |
 | 8 | Release and site workflows (below). | A published release reaches the site through a pull request. |
 
+## The frame interface (step 3)
+
+- **A sequence owns its timing.** It is made as a still, or as a video with a timing (stable,
+  NTSC 60 or no persistence) and a frame rate. `render_config` moves from crtsim-media into core
+  and stops being something every caller must remember to apply.
+- **A still is a sequence of one frame**, after warm-up. It replaces `render`, `render_frame`
+  on a fresh sequence, and `render_preview`.
+- **The renderer keeps the output.** A frame can be shown where it is, on a shared device, or read
+  back asynchronously. Drawing into a caller's own target waits until a game or OBS host needs it.
+- **One uniform buffer per sequence**, with a slot per tick in a batch reached by dynamic offset,
+  and bind groups cached with the workspace. A single slot would not do: `write_buffer` lands at
+  submit, so every tick in a batch would see the last tick's settings.
+- **Frames are `async`.** Between batches of 8 ticks a frame awaits the submitted work, reports
+  progress and checks for cancelling. The desktop's worker thread blocks on it; the browser
+  awaits it. Read back is `async` too.
+- **Core reports typed progress stages**, and the app words them.
+- **The CLI asks for the signal and clean images only with `--debug-dir`.**
+- **The web app declines an image larger than the GPU allows**, with a notice naming the limit.
+  The desktop keeps preparing such images on the CPU, which one browser thread cannot afford.
+
 ## Polish track
 
 These help both hosts, so they are worth doing before or during steps 4 to 6:
@@ -38,3 +58,6 @@ These help both hosts, so they are worth doing before or during steps 4 to 6:
    `scripts/crtsim-downloads.js` to match, and opens a pull request.
 4. Merging the pull request runs the site's existing **Deploy to Neocities**, which uploads the
    changed files. The downloads dialog and the web app then name the same release.
+
+The web app lives at `aizumanga.neocities.org/crtsim/`. The downloads dialog behind the site's
+**CRTSim** button offers **Open in your browser** first, above the platform downloads.

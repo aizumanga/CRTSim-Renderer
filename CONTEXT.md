@@ -6,6 +6,14 @@ Terms the desktop's code and its reviews use, so a module is named after the con
 unless that is Export resolution. It never stands in for an export, which renders again at full
 resolution from the settings captured when it was asked for.
 
+**Sequence**: frames rendered one after another that share the CRT's history, so the glow of
+one frame persists into the next. A video is a sequence with a timing and a frame rate.
+
+**Still**: a sequence of one frame, rendered after warm-up.
+
+**Warm-up**: the ticks a new sequence runs before the frame it keeps, so a still or a video's
+first frame already has the glow of a picture that has been on screen.
+
 **Preview schedule**: decides whether the preview on screen is out of date and when to render
 the next one (`crates/crtsim-desktop/src/schedule.rs`). One preview renders at a time.
 
