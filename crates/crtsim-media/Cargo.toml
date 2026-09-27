@@ -12,7 +12,7 @@ serde_json.workspace = true
 serde.workspace = true
 tempfile = "3"
 image-webp = "0.2"
+pollster = "0.3"
 
 [dev-dependencies]
-pollster = "0.3"
 wgpu.workspace = true

@@ -7,7 +7,6 @@
 //! WebP is encoded directly.
 use crate::{
     export::{Encoding, Frames, Step, Work},
-    render_config,
     tools::require_encoder,
     AnimationFormat, Rate, Timing, Tool, Video,
 };
@@ -182,6 +181,7 @@ pub(crate) struct AnimationPlan<'a> {
     video: &'a Video,
     options: &'a AnimationOptions,
     format: AnimationFormat,
+    /// The canvas settings each frame is rendered with, before the timing adjusts them.
     render: Config,
     size: (u32, u32),
     rate: Rate,
@@ -209,7 +209,7 @@ impl<'a> AnimationPlan<'a> {
             video,
             options,
             format,
-            render: render_config(&canvas, options.timing, rate.fps),
+            render: canvas,
             size,
             rate,
         })
@@ -245,6 +245,7 @@ impl Encoding for AnimationPlan<'_> {
         Frames {
             video: self.video,
             render: &self.render,
+            timing: self.options.timing,
             size: self.size,
             rate: &self.rate,
             start: self.options.start,

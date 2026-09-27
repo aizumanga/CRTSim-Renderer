@@ -429,7 +429,13 @@ impl Pipelines {
         };
 
         if c.edits_source() {
-            gpu::fullscreen(encoder, signal, &self.edit, &bind(source, &self.no_kernel));
+            gpu::fullscreen(
+                encoder,
+                signal,
+                &self.edit,
+                &bind(source, &self.no_kernel),
+                &[],
+            );
             return;
         }
         let key = (size, signal_size, c.filter);
@@ -464,12 +470,14 @@ impl Pipelines {
             &resample.between,
             &self.rows,
             &bind(source, &resample.rows),
+            &[],
         );
         gpu::fullscreen(
             encoder,
             signal,
             &self.columns,
             &bind(&resample.between, &resample.columns),
+            &[],
         );
     }
 }

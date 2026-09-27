@@ -1,7 +1,7 @@
 use crate::{file_name, files, timeline::Timeline};
 use anyhow::{ensure, Result};
-use crtsim_core::{config::Config, nes_luts, RenderProgress, Renderer, Sequence};
-use crtsim_media::{Options, Video};
+use crtsim_core::{config::Config, nes_luts, RenderProgress, Renderer, Sequence, Stage};
+use crtsim_media::{Options, Progress, Video};
 use eframe::egui;
 use image::RgbaImage;
 use std::{
@@ -217,7 +217,7 @@ impl Export {
         graphics: &mut Graphics,
         path: &Path,
         cancel: &Arc<AtomicBool>,
-        progress: &dyn Fn(RenderProgress),
+        progress: &dyn Fn(Progress),
     ) -> Result<()> {
         match self {
             Self::Image { input, config } => {
@@ -339,7 +339,7 @@ pub struct Previewed {
 }
 
 pub enum Event {
-    Progress(RenderProgress),
+    Progress(Progress),
     Loaded(Outcome<Loaded>),
     PresetImported(Outcome<ImportedPreset>),
     Preview {
@@ -481,7 +481,7 @@ fn next_job(backlog: &mut VecDeque<PreviewJob>) -> Option<PreviewJob> {
 /// Everything but previews: loading, exports, batches and playback, one at a time.
 fn work(ctx: egui::Context, gpu: Gpu, jobs: mpsc::Receiver<Job>, events: mpsc::Sender<Event>) {
     let mut graphics = Graphics::new(gpu);
-    let progress = |progress: RenderProgress| {
+    let progress = |progress: Progress| {
         let _ = events.send(Event::Progress(progress));
         ctx.request_repaint();
     };
@@ -606,21 +606,35 @@ fn import_preset(
     }
 }
 
+/// A render's progress in the words the status bar shows.
+fn worded(progress: RenderProgress) -> Progress {
+    let stage = match progress.stage {
+        Stage::Preparing => "Preparing image".into(),
+        Stage::Simulating { done, of } => format!("Simulation {done}/{of}"),
+        Stage::Reading => "Glass, lighting and bloom complete; reading pixels".into(),
+        Stage::Done => "Render complete".into(),
+    };
+    Progress {
+        fraction: progress.fraction,
+        stage,
+    }
+}
+
 /// A still from fresh history on this thread's renderer.
 fn still(
     graphics: &mut Graphics,
     input: &RgbaImage,
     c: &Config,
     cancel: Option<&AtomicBool>,
-    mut progress: impl FnMut(RenderProgress),
+    mut progress: impl FnMut(Progress),
 ) -> Result<RgbaImage> {
     let renderer = graphics.renderer(|| {
-        progress(RenderProgress {
+        progress(Progress {
             fraction: 0.,
             stage: "Initializing graphics device".into(),
         })
     })?;
-    renderer.render_frame(input, c, &mut Sequence::default(), cancel, progress)
+    pollster::block_on(renderer.still(input, c, cancel, |p| progress(worded(p))))
 }
 
 /// A frame for the screen. On the interface's own device it is left there; otherwise it is
@@ -630,9 +644,10 @@ fn preview(graphics: &mut Graphics, input: &RgbaImage, c: &Config) -> Result<Pre
         if g.gpu.render_state().is_none() {
             return still(g, input, c, None, |_| {}).map(Preview::Pixels);
         }
-        g.renderer(|| {})?
-            .render_preview(input, c)
-            .map(Preview::Frame)
+        let renderer = g.renderer(|| {})?;
+        let mut sequence = Sequence::still();
+        pollster::block_on(renderer.frame(&mut sequence, input, c, None, |_| {}))?;
+        renderer.show(&sequence).map(Preview::Frame)
     })
 }
 
@@ -643,14 +658,14 @@ fn export_image(
     config: &Config,
     path: &Path,
     cancel: &AtomicBool,
-    progress: &dyn Fn(RenderProgress),
+    progress: &dyn Fn(Progress),
 ) -> Result<()> {
     let image = still(graphics, input, config, Some(cancel), |mut stage| {
         stage.fraction *= 0.9;
         progress(stage);
     })?;
     ensure!(!cancel.load(Ordering::Relaxed), "Render cancelled");
-    progress(RenderProgress {
+    progress(Progress {
         fraction: 0.95,
         stage: "Encoding and saving PNG".into(),
     });
@@ -665,7 +680,7 @@ fn export_video(
     options: &Options,
     path: &Path,
     cancel: &Arc<AtomicBool>,
-    progress: &dyn Fn(RenderProgress),
+    progress: &dyn Fn(Progress),
 ) -> Result<()> {
     let renderer = graphics.renderer(|| {})?;
     crtsim_media::export(video, path, config, options, renderer, cancel, progress)

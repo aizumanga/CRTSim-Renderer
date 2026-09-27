@@ -9,10 +9,7 @@ use crate::{
     AnimationFormat, AnimationOptions, Options, Timing, Video,
 };
 use anyhow::{ensure, Context, Result};
-use crtsim_core::{
-    config::{Config, Phase},
-    RenderProgress, Renderer, Sequence,
-};
+use crtsim_core::{config::Config, Renderer, Sequence};
 use image::RgbaImage;
 use std::{
     io::{Read, Write},
@@ -22,24 +19,12 @@ use std::{
     time::Instant,
 };
 
-/// The settings frames are rendered with at `fps` frames per second under `timing`.
-pub fn render_config(config: &Config, timing: Timing, fps: f64) -> Config {
-    let mut c = config.clone();
-    match timing {
-        Timing::Stable => {
-            c.phase = Phase::Stable;
-            for weight in &mut c.persistence {
-                *weight = weight.powf((60. / fps) as f32);
-            }
-        }
-        Timing::Ntsc60 => c.phase = Phase::Alternating,
-        Timing::Disabled => {
-            c.phase = Phase::Stable;
-            c.persistence = [0.; 3];
-            c.warmup = 0;
-        }
-    }
-    c
+/// How far an export has got, in words for the person waiting on it.
+#[derive(Clone, Debug)]
+pub struct Progress {
+    /// Completed, weighted stages; not an estimate of elapsed time.
+    pub fraction: f32,
+    pub stage: String,
 }
 
 /// The rate frames are rendered and encoded at.
@@ -87,8 +72,9 @@ pub(crate) trait Encoding {
 /// The frames an export renders.
 pub(crate) struct Frames<'p> {
     pub video: &'p Video,
-    /// The settings each frame is rendered with.
+    /// The settings each frame is rendered with, before the timing adjusts them.
     pub render: &'p Config,
+    pub timing: Timing,
     /// The rendered size.
     pub size: (u32, u32),
     pub rate: &'p Rate,
@@ -99,6 +85,11 @@ pub(crate) struct Frames<'p> {
 }
 
 impl Frames<'_> {
+    /// The sequence the frames are rendered in, following the export's timing at its rate.
+    pub fn sequence(&self) -> Sequence {
+        Sequence::video(self.timing, self.rate.fps)
+    }
+
     /// How long `count` frames last.
     pub fn duration(&self, count: u64) -> f64 {
         count as f64 / self.rate.fps
@@ -168,8 +159,8 @@ pub fn export_with(
     config: &Config,
     options: &Options,
     cancel: &Arc<AtomicBool>,
-    render: impl FnMut(&RgbaImage, &Config) -> Result<RgbaImage>,
-    progress: impl FnMut(RenderProgress),
+    render: impl FnMut(&mut Sequence, &RgbaImage, &Config) -> Result<RgbaImage>,
+    progress: impl FnMut(Progress),
 ) -> Result<()> {
     check_cancel(cancel)?;
     let plan = ExportPlan::new(video, output, config, options)?;
@@ -183,8 +174,8 @@ pub fn export_animation_with(
     config: &Config,
     options: &AnimationOptions,
     cancel: &Arc<AtomicBool>,
-    render: impl FnMut(&RgbaImage, &Config) -> Result<RgbaImage>,
-    progress: impl FnMut(RenderProgress),
+    render: impl FnMut(&mut Sequence, &RgbaImage, &Config) -> Result<RgbaImage>,
+    progress: impl FnMut(Progress),
 ) -> Result<()> {
     check_cancel(cancel)?;
     let format = AnimationFormat::of(output).context("Choose a GIF or WebP filename")?;
@@ -197,8 +188,8 @@ fn run(
     plan: &impl Encoding,
     output: &Path,
     cancel: &Arc<AtomicBool>,
-    mut render: impl FnMut(&RgbaImage, &Config) -> Result<RgbaImage>,
-    mut progress: impl FnMut(RenderProgress),
+    mut render: impl FnMut(&mut Sequence, &RgbaImage, &Config) -> Result<RgbaImage>,
+    mut progress: impl FnMut(Progress),
 ) -> Result<()> {
     plan.check(cancel)?;
     let frames = plan.frames();
@@ -234,7 +225,8 @@ fn run(
     };
     let mut decoder = Decoder::open(video, &request, cancel)?;
     let decoded = decoder.frames();
-    progress(RenderProgress {
+    let mut sequence = frames.sequence();
+    progress(Progress {
         fraction: 0.,
         stage: "Decoding and rendering video".into(),
     });
@@ -244,7 +236,7 @@ fn run(
         video.size,
         cancel,
         |frame, count, started| {
-            let result = render(frame, frames.render)?;
+            let result = render(&mut sequence, frame, frames.render)?;
             ensure!(
                 result.dimensions() == frames.size,
                 "Renderer returned the wrong video dimensions"
@@ -255,7 +247,7 @@ fn run(
             } else {
                 0.
             };
-            progress(RenderProgress {
+            progress(Progress {
                 fraction: (fraction * 0.9) as f32,
                 stage: format!(
                     "Frame {count} · {:.1} FPS · approximately {:.0}s remaining",
@@ -280,7 +272,7 @@ fn run(
     };
     decoder.wait()?;
     ensure!(count > 0, "No frames decoded");
-    progress(RenderProgress {
+    progress(Progress {
         fraction: 0.91,
         stage: "Finishing encoding".into(),
     });
@@ -295,7 +287,7 @@ fn run(
     let mut steps = plan.finishing(&work, count);
     let total = steps.len();
     for (index, step) in steps.iter_mut().enumerate() {
-        progress(RenderProgress {
+        progress(Progress {
             fraction: 0.95 + 0.05 * index as f32 / total as f32,
             stage: step.stage.into(),
         });
@@ -306,7 +298,7 @@ fn run(
     final_file
         .persist(output)
         .map_err(|e| anyhow::anyhow!("Cannot publish output: {}", e.error))?;
-    progress(RenderProgress {
+    progress(Progress {
         fraction: 1.,
         stage: format!(
             "Saved {count} frames with {:.3}s duration",
@@ -408,18 +400,33 @@ pub fn export(
     options: &Options,
     renderer: &Renderer,
     cancel: &Arc<AtomicBool>,
-    progress: impl FnMut(RenderProgress),
+    progress: impl FnMut(Progress),
 ) -> Result<()> {
-    let mut sequence = Sequence::default();
     export_with(
         video,
         output,
         config,
         options,
         cancel,
-        |frame, config| renderer.render_frame(frame, config, &mut sequence, Some(cancel), |_| {}),
+        |sequence, frame, config| render_frame(renderer, sequence, frame, config, cancel),
         progress,
     )
+}
+
+/// `sequence`'s next frame of `input`, read back.
+pub(crate) fn render_frame(
+    renderer: &Renderer,
+    sequence: &mut Sequence,
+    input: &RgbaImage,
+    config: &Config,
+    cancel: &AtomicBool,
+) -> Result<RgbaImage> {
+    pollster::block_on(async {
+        renderer
+            .frame(sequence, input, config, Some(cancel), |_| {})
+            .await?;
+        renderer.read(sequence).await
+    })
 }
 
 /// An animated GIF or WebP, as `output`'s extension asks, rendered on `renderer`.
@@ -430,16 +437,15 @@ pub fn export_animation(
     options: &AnimationOptions,
     renderer: &Renderer,
     cancel: &Arc<AtomicBool>,
-    progress: impl FnMut(RenderProgress),
+    progress: impl FnMut(Progress),
 ) -> Result<()> {
-    let mut sequence = Sequence::default();
     export_animation_with(
         video,
         output,
         config,
         options,
         cancel,
-        |frame, config| renderer.render_frame(frame, config, &mut sequence, Some(cancel), |_| {}),
+        |sequence, frame, config| render_frame(renderer, sequence, frame, config, cancel),
         progress,
     )
 }
@@ -539,15 +545,5 @@ mod tests {
             Err(Failure::Other(error)) => assert!(error.to_string().contains("cancel")),
             _ => panic!("cancellation must stop the pipeline"),
         }
-    }
-
-    #[test]
-    fn persistence_uses_media_time() {
-        let config = Config::default();
-        let at30 = render_config(&config, Timing::Stable, 30.);
-        let at60 = render_config(&config, Timing::Stable, 60.);
-        assert!((at30.persistence[0] - at60.persistence[0].powi(2)).abs() < 0.00001);
-        let disabled = render_config(&config, Timing::Disabled, 30.);
-        assert_eq!(disabled.persistence, [0.; 3]);
     }
 }

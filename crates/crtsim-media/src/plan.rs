@@ -3,7 +3,6 @@
 use crate::{
     export::{Encoding, Frames, Step, Work},
     process::Process,
-    render_config,
     tools::require_encoder,
     Audio, Container, Encoder, EncodingSpeed, Options, Preset, Quality, Rate, Source, Tool,
     TrackKind, Video, PRESET_PREFIX,
@@ -24,8 +23,6 @@ pub(crate) struct ExportPlan<'a> {
     pub options: &'a Options,
     /// The settings as chosen, which the file records.
     pub config: &'a Config,
-    /// The same settings adjusted for the timing, which frames are rendered with.
-    pub render: Config,
     pub container: Container,
     pub codec: &'static str,
     pub size: (u32, u32),
@@ -55,7 +52,6 @@ impl<'a> ExportPlan<'a> {
             video,
             options,
             config,
-            render: render_config(config, options.timing, rate.fps),
             container,
             codec,
             size,
@@ -297,7 +293,8 @@ impl Encoding for ExportPlan<'_> {
     fn frames(&self) -> Frames<'_> {
         Frames {
             video: self.video,
-            render: &self.render,
+            render: self.config,
+            timing: self.options.timing,
             size: self.size,
             rate: &self.rate,
             start: 0.,
@@ -670,7 +667,8 @@ mod tests {
             ["30000/1001"]
         );
         // Rendering uses decay adjusted to the rate; the file records the settings chosen.
-        assert_ne!(plan.render.persistence, config.persistence);
+        let rendered = plan.frames().sequence().timed(&config);
+        assert_ne!(rendered.persistence, config.persistence);
         let metadata = plan.metadata().unwrap();
         let comment = metadata.lines().last().unwrap().strip_prefix("comment=");
         let tags = serde_json::json!({"format": {"tags": {"comment": unescape(comment.unwrap())}}});

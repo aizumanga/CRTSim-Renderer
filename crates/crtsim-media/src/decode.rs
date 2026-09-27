@@ -3,7 +3,10 @@
 //! FFmpeg decodes videos. Animated GIF and WebP are decoded by `animated` instead; both come
 //! out as the same stream of packed RGBA frames at the video's size.
 use crate::{
-    animated, check_cancel, export::QUEUED_FRAMES, probe::Source, process::Process, render_config,
+    animated, check_cancel,
+    export::{render_frame, QUEUED_FRAMES},
+    probe::Source,
+    process::Process,
     Options, Rate, Tool, Video,
 };
 use anyhow::{ensure, Context, Result};
@@ -203,8 +206,7 @@ pub fn playback(
     let mut decoder = Decoder::open(video, &request, cancel)?;
     let mut output = decoder.frames();
     let mut input = RgbaImage::new(video.size.0, video.size.1);
-    let c = render_config(config, options.timing, rate.fps);
-    let mut sequence = Sequence::default();
+    let mut sequence = Sequence::video(options.timing, rate.fps);
     let mut index = 0u64;
     loop {
         check_cancel(cancel)?;
@@ -215,7 +217,7 @@ pub fn playback(
         output
             .read_exact(&mut bytes[1..])
             .context("Truncated playback frame")?;
-        let rendered = renderer.render_frame(&input, &c, &mut sequence, Some(cancel), |_| {})?;
+        let rendered = render_frame(renderer, &mut sequence, &input, config, cancel)?;
         let time = preroll + index as f64 / rate.fps;
         index += 1;
         if time + 0.00001 >= start {

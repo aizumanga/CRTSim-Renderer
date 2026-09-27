@@ -26,7 +26,7 @@ mod widgets;
 mod worker;
 
 use crtsim_core::config::{self, ColorMode, Config, Filter, Fit, MaskRepeats, Phase};
-use crtsim_core::{settings, RenderProgress};
+use crtsim_core::settings;
 use dialogs::Dialog;
 use eframe::egui::{self, TextureHandle};
 use image::RgbaImage;
@@ -58,7 +58,7 @@ enum Work {
     /// An export or a batch job, with the latest progress the worker has reported.
     Exporting {
         cancel: Arc<AtomicBool>,
-        progress: Option<RenderProgress>,
+        progress: Option<crtsim_media::Progress>,
     },
 }
 
@@ -495,7 +495,7 @@ impl App {
         let cancel = Arc::new(AtomicBool::new(false));
         self.work = Work::Exporting {
             cancel: cancel.clone(),
-            progress: queued.map(|stage| RenderProgress {
+            progress: queued.map(|stage| crtsim_media::Progress {
                 fraction: 0.,
                 stage: stage.into(),
             }),

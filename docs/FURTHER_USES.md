@@ -22,9 +22,9 @@ What stands in the way today, in `crtsim-core`:
 
 | Obstacle | Where | Why it matters |
 | --- | --- | --- |
-| The input is a CPU `RgbaImage`, uploaded each frame | `Renderer::run` | A game's frame is already a GPU texture. The round trip costs more than the effect. |
-| The renderer submits and waits: `device.poll(Maintain::Wait)` every 8 ticks and on readback | `lib.rs`, `gpu.rs` | A host records into its own frame. Browsers cannot block at all. |
-| A new uniform buffer and bind group for every tick and pass | `Renderer::uniform`, `bind` | This is fine offline, but it allocates 60 or more times a second in a game. |
+| The input is a CPU `RgbaImage`, uploaded each frame | `Renderer::frame` | A game's frame is already a GPU texture. The round trip costs more than the effect. |
+| ~~The renderer submits and waits~~ Done: `Renderer::frame` and `read` are `async`, and wait only natively | `lib.rs`, `gpu.rs` | A host records into its own frame. Browsers cannot block at all. |
+| ~~A new uniform buffer and bind group for every tick and pass~~ Done: one buffer per sequence, bind groups made with it | `Workspace` | This was fine offline, but allocated 60 or more times a second in a game. |
 | ~~wgpu 0.19, pinned by eframe 0.27~~ Done: wgpu 30 and eframe 0.36 | `Cargo.toml` | Current Bevy and wgpu releases were far newer. |
 
 ## The enabling step, for every route
@@ -36,11 +36,11 @@ host's target:
 renderer.encode(&mut encoder, &source_view, &target_view, &config, &mut sequence)?;
 ```
 
-It would keep one uniform buffer per sequence, written with `queue.write_buffer` and not recreated,
-and cache its bind groups. It would submit nothing and wait for nothing. `render_frame`,
-`render_preview` and the exports become thin wrappers around it: upload, `encode`, submit, read
-back. The golden-image tests then guard the new path for free. After that, upgrade wgpu (with
-eframe) to a current release.
+Part of this is done ([web plan](WEB_PLAN.md), step 3). A `Sequence` owns its timing and GPU
+state; `Renderer::frame` renders its next frame and waits for nothing on the web; `read`,
+`show` and `still` cover the app's own needs. What is left for a game or OBS is the host's
+texture as input and the host's view as the target, which `frame` could take once a host
+needs them.
 
 ## Route 1: in the browser
 

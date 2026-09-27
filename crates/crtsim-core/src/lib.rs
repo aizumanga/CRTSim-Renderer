@@ -5,6 +5,7 @@ pub mod input;
 pub mod mesh;
 pub mod nes_luts;
 pub mod palette;
+mod sequence;
 pub mod settings;
 #[cfg(test)]
 mod tests;
@@ -19,9 +20,9 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use wgpu::util::DeviceExt;
 
 pub use gpu_prepare::PrepareOn;
+pub use sequence::{Sequence, Timing};
 
 pub const SHADER: &str = include_str!("../../../shaders/crtsim.wgsl");
 
@@ -43,6 +44,10 @@ struct Params {
     bloom: [f32; 4],
     processing: [f32; 4],
 }
+
+/// The size of `Params`, which each settings slot holds.
+const PARAMS_SIZE: Option<std::num::NonZeroU64> =
+    std::num::NonZeroU64::new(std::mem::size_of::<Params>() as u64);
 
 impl Params {
     /// Everything but the composite phase and the interlaced field, which `tick` sets.
@@ -142,8 +147,9 @@ impl Pipelines {
     }
 }
 
-/// The targets one sequence renders through, made for its sizes and color mode.
-struct Workspace {
+/// The targets one sequence renders through, made for its sizes and color mode, with the bind
+/// groups its passes use.
+pub(crate) struct Workspace {
     /// The prepared signal: the source resized, edited and graded, before the simulation.
     source: Target,
     /// The simulated signal's feedback: each tick reads one and writes the other.
@@ -154,60 +160,71 @@ struct Workspace {
     final_target: Target,
     _depth: wgpu::Texture,
     depth_view: wgpu::TextureView,
-    readback: Readback,
+    /// Made on the first read back, which a frame only shown on the device never needs.
+    readback: Option<Readback>,
     prepare: gpu_prepare::Cache,
+    uniforms: Uniforms,
+    bindings: Bindings,
     signal_size: (u32, u32),
     output_size: (u32, u32),
     surface_format: wgpu::TextureFormat,
 }
 
 impl Workspace {
-    fn new(
-        device: &wgpu::Device,
-        signal_size: (u32, u32),
-        output_size: (u32, u32),
-        surface_format: wgpu::TextureFormat,
-    ) -> Self {
-        let depth = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("depth"),
-            size: gpu::extent(output_size.0, output_size.1),
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Depth32Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let depth_view = depth.create_view(&Default::default());
-        let surface = |name, size| Target::with_format(device, name, size, surface_format, 1);
-        Self {
-            source: Target::new(device, "clean signal", signal_size),
-            history: [
-                Target::new(device, "history A", signal_size),
-                Target::new(device, "history B", signal_size),
-            ],
-            full: surface("screen and frame", output_size),
-            down: surface(
-                "bloom downsample",
-                ((output_size.0 / 16).max(1), (output_size.1 / 16).max(1)),
-            ),
-            up: surface("bloom upsample", output_size),
-            final_target: Target::new(device, "output", output_size),
-            _depth: depth,
-            depth_view,
-            readback: Readback::new(device, output_size),
-            prepare: Default::default(),
-            signal_size,
-            output_size,
-            surface_format,
-        }
-    }
-
     fn matches(&self, plan: &Plan) -> bool {
         self.signal_size == plan.signal
             && self.output_size == plan.output
             && self.surface_format == plan.surface_format
     }
+}
+
+/// Ticks encoded before each submission, which is also where a frame reports progress and
+/// notices a cancel.
+const BATCH: u32 = 8;
+
+/// A workspace's settings, one slot per tick of a batch and one for the surface passes, each
+/// reached by dynamic offset. `write_buffer` takes effect when the batch is submitted, so every
+/// tick needs a slot of its own: sharing one would give them all the last tick's settings.
+struct Uniforms {
+    buffer: wgpu::Buffer,
+    stride: u32,
+}
+
+/// The surface passes' slot, after the ticks'.
+const SURFACE_SLOT: u32 = BATCH;
+
+impl Uniforms {
+    fn new(device: &wgpu::Device) -> Self {
+        let alignment = device.limits().min_uniform_buffer_offset_alignment;
+        let stride = (std::mem::size_of::<Params>() as u32).div_ceil(alignment) * alignment;
+        Self {
+            buffer: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("settings"),
+                size: u64::from(stride * (SURFACE_SLOT + 1)),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            stride,
+        }
+    }
+
+    /// Puts `params` in `slot` for the next submission, and returns the slot's offset.
+    fn write(&self, queue: &wgpu::Queue, slot: u32, params: &Params) -> u32 {
+        let offset = slot * self.stride;
+        queue.write_buffer(&self.buffer, offset.into(), bytemuck::bytes_of(params));
+        offset
+    }
+}
+
+/// The bind groups of a workspace's passes, made once with it.
+struct Bindings {
+    /// By the history target a tick writes; it reads the other.
+    composite: [wgpu::BindGroup; 2],
+    /// By the history target holding the signal the glass shows.
+    glass: [wgpu::BindGroup; 2],
+    downsample: wgpu::BindGroup,
+    upsample: wgpu::BindGroup,
+    present: wgpu::BindGroup,
 }
 
 /// What a render of one input with one configuration makes, checked against the device.
@@ -219,7 +236,7 @@ struct Plan {
     prepare_on_gpu: bool,
 }
 
-/// One reusable GPU device; individual still jobs own and reset their history.
+/// One reusable GPU device, which renders sequences of frames.
 pub struct Renderer {
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
@@ -237,13 +254,12 @@ pub struct Renderer {
     pub adapter: wgpu::AdapterInfo,
 }
 
-/// A still with the images it was made from, for inspection and tests.
-pub struct Rendered {
+/// The images a frame was made from, for inspection and tests.
+pub struct Signals {
     /// The prepared signal: the source resized, edited and graded, before the simulation.
     pub clean: RgbaImage,
     /// The simulated signal, before the glass.
     pub signal: RgbaImage,
-    pub crt: RgbaImage,
 }
 
 /// A rendered frame left on the render device, for a caller that is only going to draw it
@@ -258,24 +274,30 @@ pub struct PreviewFrame {
     pub height: u32,
 }
 
-/// Feedback belongs to a single sequence on this renderer. Start a new sequence after seeking
-/// or changing settings. Reuse it only with the same device and signal dimensions.
-#[derive(Default)]
-pub struct Sequence {
-    workspace: Option<Workspace>,
-    tick: u64,
-}
-
 /// Which history target tick `tick` writes. It reads the other, which the tick before wrote.
 fn written(tick: u64) -> usize {
     (tick % 2) as usize
 }
 
-#[derive(Clone, Debug)]
+/// How far a render has got.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RenderProgress {
     /// Completed, weighted stages; not an estimate of elapsed time.
     pub fraction: f32,
-    pub stage: String,
+    pub stage: Stage,
+}
+
+/// What a render is doing. Callers put it into words.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stage {
+    /// Resizing, editing and grading the source into the signal.
+    Preparing,
+    /// Simulating the signal: a new sequence's warm-up, then the frame's own tick.
+    Simulating { done: u32, of: u32 },
+    /// Reading the finished frame back from the device.
+    Reading,
+    /// The frame is finished and read.
+    Done,
 }
 
 impl Renderer {
@@ -335,8 +357,8 @@ impl Renderer {
             visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
+                has_dynamic_offset: true,
+                min_binding_size: PARAMS_SIZE,
             },
             count: None,
         }];
@@ -479,93 +501,31 @@ impl Renderer {
         }
     }
 
-    /// A deterministic still from cleared history, with the prepared and simulated signals it
-    /// was made from; warmup=0 means one tick. An export wants only the result, from
-    /// `render_frame`.
-    pub fn render(&self, input: &RgbaImage, c: &Config) -> Result<Rendered> {
-        let mut sequence = Sequence::default();
-        let clean = self.run(input, c, &mut sequence, None, &mut |_| {})?;
-        let latest = written(sequence.tick - 1);
-        let workspace = sequence
-            .workspace
-            .as_mut()
-            .context("render made no workspace")?;
-        let signal = self.readback(&workspace.history[latest])?;
-        let clean = match clean {
-            Some(clean) => clean,
-            None => self.readback(&workspace.source)?,
-        };
-        let crt = workspace
-            .readback
-            .read(&self.device, &self.queue, &workspace.final_target)?;
-        Ok(Rendered { clean, signal, crt })
-    }
-
-    /// The next frame of `sequence`, read back. A new sequence makes a still: history starts
-    /// cleared and warm-up runs first; after that, history and phase carry on frame to frame.
-    /// `cancel` is checked between bounded GPU batches.
-    pub fn render_frame(
+    /// Renders `sequence`'s next frame of `input`, which stays on the device until it is read
+    /// or shown. The sequence's first frame starts from cleared history and warms up; later
+    /// ones carry its history and phase on. `cancel` is checked between batches of ticks.
+    pub async fn frame(
         &self,
-        input: &RgbaImage,
-        c: &Config,
         sequence: &mut Sequence,
+        input: &RgbaImage,
+        config: &Config,
         cancel: Option<&AtomicBool>,
         mut progress: impl FnMut(RenderProgress),
-    ) -> Result<RgbaImage> {
-        self.run(input, c, sequence, cancel, &mut progress)?;
-        progress(RenderProgress {
-            fraction: 0.9,
-            stage: "Glass, lighting and bloom complete; reading pixels".into(),
-        });
-        let workspace = sequence
-            .workspace
-            .as_mut()
-            .context("render made no workspace")?;
-        let crt = workspace
-            .readback
-            .read(&self.device, &self.queue, &workspace.final_target)?;
-        progress(RenderProgress {
-            fraction: 1.,
-            stage: "Render complete".into(),
-        });
-        Ok(crt)
-    }
-
-    /// A still for display on this renderer's own device, skipping the read back to system
-    /// memory that a saved or encoded frame needs.
-    pub fn render_preview(&self, input: &RgbaImage, c: &Config) -> Result<PreviewFrame> {
-        let mut sequence = Sequence::default();
-        self.run(input, c, &mut sequence, None, &mut |_| {})?;
-        let workspace = sequence
-            .workspace
-            .as_ref()
-            .context("render made no workspace")?;
-        Ok(self.copy_out(&workspace.final_target))
-    }
-
-    /// Everything up to the final image, which stays in the sequence's workspace. Returns the
-    /// prepared signal when it was prepared on this thread rather than on the device.
-    fn run(
-        &self,
-        input: &RgbaImage,
-        c: &Config,
-        sequence: &mut Sequence,
-        cancel: Option<&AtomicBool>,
-        progress: &mut dyn FnMut(RenderProgress),
-    ) -> Result<Option<RgbaImage>> {
+    ) -> Result<()> {
         let cancelled = || cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed));
         ensure!(!cancelled(), "Render cancelled");
-        let mut report = |fraction, stage: String| progress(RenderProgress { fraction, stage });
-        report(0., "Preparing image".into());
+        let mut report = |fraction, stage| progress(RenderProgress { fraction, stage });
+        report(0., Stage::Preparing);
+        let c = &sequence.timed(config);
         let plan = self.plan(input, c)?;
         let clean = if plan.prepare_on_gpu {
             None
         } else {
             Some(config::prepare(input, c)?)
         };
-        let workspace = sequence.workspace.get_or_insert_with(|| {
-            Workspace::new(&self.device, plan.signal, plan.output, plan.surface_format)
-        });
+        let workspace = sequence
+            .workspace
+            .get_or_insert_with(|| self.workspace(&plan));
         ensure!(
             workspace.matches(&plan),
             "Start a new video sequence after changing signal size, output size or color mode"
@@ -573,7 +533,7 @@ impl Renderer {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("still job"),
+                label: Some("frame"),
             });
         match &clean {
             Some(clean) => workspace.source.upload(&self.queue, clean),
@@ -587,50 +547,175 @@ impl Renderer {
                 &workspace.source,
             ),
         }
-        report(0.05, "Image prepared".into());
         let mut params = Params::new(c, plan.signal, plan.output);
-        // A sequence starts from cleared history, then warms up; each job is independent.
+        // A sequence starts from cleared history, then warms up.
         let first = sequence.tick == 0;
         if first {
             for target in &workspace.history {
                 gpu::clear(&mut encoder, target);
             }
         }
-        // Separate immutable uniform per tick avoids queue.write_buffer ordering bugs.
         let ticks = if first { c.warmup + 1 } else { 1 };
+        report(0.05, Stage::Simulating { done: 0, of: ticks });
         for step in 0..ticks {
             ensure!(!cancelled(), "Render cancelled");
             let tick = sequence.tick;
             params.tick(c.phase, c.ntsc_blending, tick);
-            let uniform = self.uniform(&params, "tick settings");
-            let bindings = self.bind(
-                &uniform,
-                &workspace.source,
-                &workspace.history[written(tick + 1)],
-            );
+            let offset = workspace.uniforms.write(&self.queue, step % BATCH, &params);
             gpu::fullscreen(
                 &mut encoder,
                 &workspace.history[written(tick)],
                 &self.pipelines.composite,
-                &bindings,
+                &workspace.bindings.composite[written(tick)],
+                &[offset],
             );
             sequence.tick += 1;
             // Report completed GPU work, not just command encoding. Small batches keep overhead bounded.
-            if (step + 1) % 8 == 0 || step + 1 == ticks {
+            if (step + 1) % BATCH == 0 || step + 1 == ticks {
                 self.queue.submit(Some(encoder.finish()));
-                self.device.poll(wgpu::PollType::wait_indefinitely())?;
+                gpu::finished(&self.device, &self.queue).await?;
                 report(
                     0.05 + 0.75 * (step + 1) as f32 / ticks as f32,
-                    format!("Simulation {}/{}", step + 1, ticks),
+                    Stage::Simulating {
+                        done: step + 1,
+                        of: ticks,
+                    },
                 );
                 encoder = self.device.create_command_encoder(&Default::default());
             }
         }
-        let signal = &workspace.history[written(sequence.tick - 1)];
-        self.surface(&mut encoder, workspace, signal, &params, c);
+        self.surface(
+            &mut encoder,
+            workspace,
+            written(sequence.tick - 1),
+            &params,
+            c,
+        );
         self.queue.submit(Some(encoder.finish()));
         ensure!(!cancelled(), "Render cancelled");
-        Ok(clean)
+        Ok(())
+    }
+
+    /// The pixels of `sequence`'s latest frame.
+    pub async fn read(&self, sequence: &mut Sequence) -> Result<RgbaImage> {
+        let workspace = sequence
+            .workspace
+            .as_mut()
+            .context("Render a frame before reading it")?;
+        let size = workspace.output_size;
+        workspace
+            .readback
+            .get_or_insert_with(|| Readback::new(&self.device, size))
+            .read(&self.device, &self.queue, &workspace.final_target)
+            .await
+    }
+
+    /// `sequence`'s latest frame, copied on the device into a texture of its own for drawing
+    /// there. A preview wants this rather than a read back.
+    pub fn show(&self, sequence: &Sequence) -> Result<PreviewFrame> {
+        let workspace = sequence
+            .workspace
+            .as_ref()
+            .context("Render a frame before showing it")?;
+        Ok(self.copy_out(&workspace.final_target))
+    }
+
+    /// The prepared and simulated signals behind `sequence`'s latest frame.
+    pub async fn signals(&self, sequence: &Sequence) -> Result<Signals> {
+        let workspace = sequence
+            .workspace
+            .as_ref()
+            .context("Render a frame before reading its signals")?;
+        Ok(Signals {
+            clean: self.read_target(&workspace.source).await?,
+            signal: self
+                .read_target(&workspace.history[written(sequence.tick - 1)])
+                .await?,
+        })
+    }
+
+    async fn read_target(&self, target: &Target) -> Result<RgbaImage> {
+        Readback::new(&self.device, target.size())
+            .read(&self.device, &self.queue, target)
+            .await
+    }
+
+    /// A still: one frame from cleared history after warm-up, read back.
+    pub async fn still(
+        &self,
+        input: &RgbaImage,
+        config: &Config,
+        cancel: Option<&AtomicBool>,
+        mut progress: impl FnMut(RenderProgress),
+    ) -> Result<RgbaImage> {
+        let mut sequence = Sequence::still();
+        self.frame(&mut sequence, input, config, cancel, &mut progress)
+            .await?;
+        progress(RenderProgress {
+            fraction: 0.9,
+            stage: Stage::Reading,
+        });
+        let image = self.read(&mut sequence).await?;
+        progress(RenderProgress {
+            fraction: 1.,
+            stage: Stage::Done,
+        });
+        Ok(image)
+    }
+
+    /// The targets for `plan`, and the bind groups their passes use.
+    fn workspace(&self, plan: &Plan) -> Workspace {
+        let device = &self.device;
+        let (signal_size, output_size) = (plan.signal, plan.output);
+        let depth = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("depth"),
+            size: gpu::extent(output_size.0, output_size.1),
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let depth_view = depth.create_view(&Default::default());
+        let surface = |name, size| Target::with_format(device, name, size, plan.surface_format, 1);
+        let source = Target::new(device, "clean signal", signal_size);
+        let history = [
+            Target::new(device, "history A", signal_size),
+            Target::new(device, "history B", signal_size),
+        ];
+        let full = surface("screen and frame", output_size);
+        let down = surface(
+            "bloom downsample",
+            ((output_size.0 / 16).max(1), (output_size.1 / 16).max(1)),
+        );
+        let up = surface("bloom upsample", output_size);
+        let uniforms = Uniforms::new(device);
+        let bind = |a, b| self.bind(&uniforms.buffer, a, b);
+        let bindings = Bindings {
+            composite: [bind(&source, &history[1]), bind(&source, &history[0])],
+            glass: [bind(&history[0], &source), bind(&history[1], &source)],
+            downsample: bind(&full, &source),
+            upsample: bind(&down, &source),
+            present: bind(&full, &up),
+        };
+        Workspace {
+            final_target: Target::new(device, "output", output_size),
+            _depth: depth,
+            depth_view,
+            readback: None,
+            prepare: Default::default(),
+            uniforms,
+            bindings,
+            source,
+            history,
+            full,
+            down,
+            up,
+            signal_size,
+            output_size,
+            surface_format: plan.surface_format,
+        }
     }
 
     fn plan(&self, input: &RgbaImage, c: &Config) -> Result<Plan> {
@@ -671,19 +756,19 @@ impl Renderer {
         })
     }
 
-    /// The curved glass and its bezel over the simulated signal, then bloom, into the final
-    /// target.
+    /// The curved glass and its bezel over the simulated signal in history target `latest`,
+    /// then bloom, into the final target.
     fn surface(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         workspace: &Workspace,
-        signal: &Target,
+        latest: usize,
         params: &Params,
         c: &Config,
     ) {
-        let uniform = self.uniform(params, "surface settings");
+        let offset = workspace.uniforms.write(&self.queue, SURFACE_SLOT, params);
         let passes = self.pipelines.surface(c.color_mode);
-        let bindings = self.bind(&uniform, signal, &workspace.source);
+        let bindings = &workspace.bindings;
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("curved glass and frame"),
@@ -700,7 +785,7 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_bind_group(0, &bindings, &[]);
+            pass.set_bind_group(0, &bindings.glass[latest], &[offset]);
             draw(&mut pass, &passes.screen, &self.screen);
             if !c.screen_only {
                 draw(&mut pass, &passes.frame, &self.frame);
@@ -710,35 +795,35 @@ impl Renderer {
             encoder,
             &workspace.down,
             &passes.downsample,
-            &self.bind(&uniform, &workspace.full, &workspace.source),
+            &bindings.downsample,
+            &[offset],
         );
         gpu::fullscreen(
             encoder,
             &workspace.up,
             &passes.upsample,
-            &self.bind(&uniform, &workspace.down, &workspace.source),
+            &bindings.upsample,
+            &[offset],
         );
         gpu::fullscreen(
             encoder,
             &workspace.final_target,
             &self.pipelines.present,
-            &self.bind(&uniform, &workspace.full, &workspace.up),
+            &bindings.present,
+            &[offset],
         );
     }
 
-    fn uniform(&self, params: &Params, label: &str) -> wgpu::Buffer {
-        self.device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(label),
-                contents: bytemuck::bytes_of(params),
-                usage: wgpu::BufferUsages::UNIFORM,
-            })
-    }
-
-    fn bind(&self, uniform: &wgpu::Buffer, source: &Target, previous: &Target) -> wgpu::BindGroup {
+    /// A bind group reading `source` and `previous`, with the settings slot the pass chooses
+    /// by dynamic offset.
+    fn bind(&self, uniforms: &wgpu::Buffer, source: &Target, previous: &Target) -> wgpu::BindGroup {
         let mut entries = vec![wgpu::BindGroupEntry {
             binding: 0,
-            resource: uniform.as_entire_binding(),
+            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                buffer: uniforms,
+                offset: 0,
+                size: PARAMS_SIZE,
+            }),
         }];
         for (i, t) in [source, previous, &self.artifacts, &self.mask]
             .iter()
@@ -791,10 +876,6 @@ impl Renderer {
             width: final_target.width,
             height: final_target.height,
         }
-    }
-
-    fn readback(&self, target: &Target) -> Result<RgbaImage> {
-        Readback::new(&self.device, target.size()).read(&self.device, &self.queue, target)
     }
 }
 

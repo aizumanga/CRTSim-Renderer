@@ -12,6 +12,7 @@ serde.workspace = true
 serde_json.workspace = true
 wgpu.workspace = true
 glam = "0.27"
+futures-channel = "0.3"
 
 [dev-dependencies]
 naga = { version = "30.0.1", features = ["wgsl-in"] }

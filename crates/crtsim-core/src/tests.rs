@@ -1,4 +1,30 @@
 use super::*;
+
+/// A still with the signals it was made from.
+struct Rendered {
+    clean: RgbaImage,
+    signal: RgbaImage,
+    crt: RgbaImage,
+}
+
+fn render(r: &Renderer, input: &RgbaImage, c: &Config) -> Result<Rendered> {
+    pollster::block_on(async {
+        let mut sequence = Sequence::still();
+        r.frame(&mut sequence, input, c, None, |_| {}).await?;
+        let crt = r.read(&mut sequence).await?;
+        let Signals { clean, signal } = r.signals(&sequence).await?;
+        Ok(Rendered { clean, signal, crt })
+    })
+}
+
+/// `sequence`'s next frame of `input`, read back.
+fn next(r: &Renderer, sequence: &mut Sequence, input: &RgbaImage, c: &Config) -> RgbaImage {
+    pollster::block_on(async {
+        r.frame(sequence, input, c, None, |_| {}).await?;
+        r.read(sequence).await
+    })
+    .unwrap()
+}
 #[test]
 fn wgsl_validates_without_a_gpu() {
     let module = naga::front::wgsl::parse_str(SHADER).unwrap();
@@ -23,17 +49,12 @@ fn video_history_survives_between_frames_and_resets_for_new_sequence() {
     };
     let white = RgbaImage::from_pixel(32, 32, image::Rgba([255; 4]));
     let black = RgbaImage::from_pixel(32, 32, image::Rgba([0, 0, 0, 255]));
-    let mut sequence = Sequence::default();
-    r.render_frame(&white, &c, &mut sequence, None, |_| {})
-        .unwrap();
-    let trailing = r
-        .render_frame(&black, &c, &mut sequence, None, |_| {})
-        .unwrap();
-    let reset = r
-        .render_frame(&black, &c, &mut Sequence::default(), None, |_| {})
-        .unwrap();
+    let mut sequence = Sequence::still();
+    next(&r, &mut sequence, &white, &c);
+    let trailing = next(&r, &mut sequence, &black, &c);
+    let reset = next(&r, &mut Sequence::still(), &black, &c);
     assert_ne!(trailing, reset, "history was reset between video frames");
-    assert_eq!(reset, r.render(&black, &c).unwrap().crt);
+    assert_eq!(reset, render(&r, &black, &c).unwrap().crt);
 }
 #[test]
 #[ignore = "requires a Vulkan adapter"]
@@ -44,11 +65,12 @@ fn preview_frame_matches_the_pixels_a_read_back_render_produces() {
         ..Config::default()
     };
     let source = config::test_card();
-    let preview = r.render_preview(&source, &c).unwrap();
+    let mut sequence = Sequence::still();
+    pollster::block_on(r.frame(&mut sequence, &source, &c, None, |_| {})).unwrap();
+    let preview = r.show(&sequence).unwrap();
     assert_eq!((preview.width, preview.height), (320, 180));
     // Read the frame back the same way an export would, to compare like with like. The
-    // copy into the preview texture keeps the bytes and only relabels them as sRGB, which
-    // is the conversion egui would otherwise apply when it uploads the pixels itself.
+    // copy into the preview texture keeps the bytes as they are.
     let view = preview.texture.create_view(&Default::default());
     let target = Target {
         texture: preview.texture,
@@ -57,8 +79,8 @@ fn preview_frame_matches_the_pixels_a_read_back_render_produces() {
         height: preview.height,
     };
     assert_eq!(
-        r.readback(&target).unwrap(),
-        r.render(&source, &c).unwrap().crt
+        pollster::block_on(r.read_target(&target)).unwrap(),
+        render(&r, &source, &c).unwrap().crt
     );
 }
 
@@ -153,9 +175,9 @@ fn gpu_prepare_matches_cpu_prepare() {
             c.chroma = 1. + next(1.);
         }
         r.prepare = PrepareOn::Cpu;
-        let cpu = r.render(&source, &c).unwrap().clean;
+        let cpu = render(&r, &source, &c).unwrap().clean;
         r.prepare = PrepareOn::Gpu;
-        let gpu = r.render(&source, &c).unwrap().clean;
+        let gpu = render(&r, &source, &c).unwrap().clean;
         assert_eq!(cpu.dimensions(), gpu.dimensions(), "case {case}");
         for (a, b) in cpu.pixels().zip(gpu.pixels()) {
             for channel in 0..4 {
@@ -188,7 +210,7 @@ fn interlaced_ticks_scan_alternate_fields() {
     };
     let white = RgbaImage::from_pixel(32, 16, image::Rgba([255; 4]));
     let rows = |c: &Config| -> Vec<u8> {
-        let signal = r.render(&white, c).unwrap().signal;
+        let signal = render(&r, &white, c).unwrap().signal;
         (0..16).map(|y| signal.get_pixel(16, y)[0]).collect()
     };
     // One tick scans the first field only.
@@ -240,48 +262,57 @@ fn gpu_smoke() {
     };
     let source = config::test_card();
     let cancel = AtomicBool::new(true);
-    assert!(r
-        .render_frame(&source, &c, &mut Sequence::default(), Some(&cancel), |_| {})
-        .err()
-        .unwrap()
-        .to_string()
-        .contains("cancelled"));
-    let a = r.render(&source, &c).unwrap();
-    let b = r.render(&source, &c).unwrap();
+    assert!(
+        pollster::block_on(r.still(&source, &c, Some(&cancel), |_| {}))
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("cancelled")
+    );
+    let a = render(&r, &source, &c).unwrap();
+    let b = render(&r, &source, &c).unwrap();
     assert_eq!(a.crt.dimensions(), (641, 361));
     assert_eq!(a.crt, b.crt);
     assert!(a.crt.pixels().any(|p| p[0] > 180));
     assert!(a.crt.pixels().any(|p| p[0] < 20));
     c.phase = Phase::A;
-    let a = r.render(&source, &c).unwrap();
+    let a = render(&r, &source, &c).unwrap();
     c.phase = Phase::B;
-    let b = r.render(&source, &c).unwrap();
+    let b = render(&r, &source, &c).unwrap();
     assert_ne!(a.signal, b.signal);
     c.phase = Phase::Stable;
     c.artifacts = 0.;
     c.sharpness = 0.;
     c.persistence = [0.; 3];
-    let a = r.render(&source, &c).unwrap();
+    let a = render(&r, &source, &c).unwrap();
     assert_eq!(a.clean, a.signal);
     c.color_mode = ColorMode::LinearLight;
     let mut progress = vec![];
-    let linear = r
-        .render_frame(&source, &c, &mut Sequence::default(), None, |p| {
-            progress.push(p.fraction)
-        })
-        .unwrap();
+    let linear = pollster::block_on(r.still(&source, &c, None, |p| progress.push(p))).unwrap();
     assert_eq!(linear.dimensions(), (641, 361));
     assert_ne!(linear, a.crt);
-    assert_eq!(progress.first(), Some(&0.));
-    assert_eq!(progress.last(), Some(&1.));
-    assert!(progress.windows(2).all(|w| w[0] <= w[1]));
+    assert_eq!(
+        progress.first().map(|p| (p.fraction, p.stage)),
+        Some((0., Stage::Preparing))
+    );
+    assert_eq!(
+        progress.last().map(|p| (p.fraction, p.stage)),
+        Some((1., Stage::Done))
+    );
+    assert!(progress.windows(2).all(|w| w[0].fraction <= w[1].fraction));
+    let ticks = c.warmup + 1;
+    assert!(progress.iter().any(|p| p.stage
+        == Stage::Simulating {
+            done: ticks,
+            of: ticks
+        }));
     c.color_mode = ColorMode::Reference;
-    let filtered = r.render(&source, &c).unwrap();
+    let filtered = render(&r, &source, &c).unwrap();
     let unfiltered = Config {
         mask_antialias: false,
         ..c.clone()
     };
-    assert_ne!(filtered.crt, r.render(&source, &unfiltered).unwrap().crt);
+    assert_ne!(filtered.crt, render(&r, &source, &unfiltered).unwrap().crt);
     if let Ok(dir) = std::env::var("CRTSIM_TEST_OUTPUT") {
         std::fs::create_dir_all(&dir).unwrap();
         linear

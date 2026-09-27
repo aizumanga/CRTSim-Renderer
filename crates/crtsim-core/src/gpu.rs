@@ -108,8 +108,8 @@ impl Readback {
         }
     }
 
-    /// Copies `target` into the buffer, waits for the GPU and returns its pixels.
-    pub fn read(
+    /// Copies `target` into the buffer and returns its pixels once the GPU has written them.
+    pub async fn read(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -134,12 +134,12 @@ impl Readback {
         );
         queue.submit(Some(encoder.finish()));
         let slice = self.buffer.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (mapped, map) = futures_channel::oneshot::channel();
         slice.map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
+            let _ = mapped.send(r);
         });
-        device.poll(wgpu::PollType::wait_indefinitely())?;
-        rx.recv()??;
+        drive(device)?;
+        map.await.context("the device dropped a read back")??;
         let mapped = slice.get_mapped_range()?;
         let mut pixels = Vec::with_capacity((target.width * target.height * 4) as usize);
         for row in mapped.chunks_exact(self.pitch as usize) {
@@ -201,12 +201,34 @@ pub(crate) fn clear(encoder: &mut wgpu::CommandEncoder, target: &Target) {
     });
 }
 
+/// Resolves once the GPU has finished the work submitted so far.
+pub(crate) async fn finished(device: &wgpu::Device, queue: &wgpu::Queue) -> Result<()> {
+    let (done, wait) = futures_channel::oneshot::channel();
+    queue.on_submitted_work_done(move || {
+        let _ = done.send(());
+    });
+    drive(device)?;
+    wait.await.context("the device dropped a submission")
+}
+
+/// Makes the device call back what it has finished. Natively that takes a poll, which waits for
+/// the GPU; in a browser the page's event loop delivers callbacks, and nothing may block.
+fn drive(device: &wgpu::Device) -> Result<()> {
+    #[cfg(not(target_arch = "wasm32"))]
+    device.poll(wgpu::PollType::wait_indefinitely())?;
+    #[cfg(target_arch = "wasm32")]
+    let _ = device;
+    Ok(())
+}
+
 /// Draws one triangle over all of `dst`, the fullscreen pass every image-space step uses.
+/// `offsets` picks the uniform slot of a binding with a dynamic offset.
 pub(crate) fn fullscreen(
     encoder: &mut wgpu::CommandEncoder,
     dst: &Target,
     pipeline: &wgpu::RenderPipeline,
     bindings: &wgpu::BindGroup,
+    offsets: &[u32],
 ) {
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("fullscreen pass"),
@@ -217,7 +239,7 @@ pub(crate) fn fullscreen(
         multiview_mask: None,
     });
     pass.set_pipeline(pipeline);
-    pass.set_bind_group(0, bindings, &[]);
+    pass.set_bind_group(0, bindings, offsets);
     pass.draw(0..3, 0..1);
 }
 
