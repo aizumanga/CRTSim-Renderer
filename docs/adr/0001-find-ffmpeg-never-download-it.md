@@ -1,6 +1,6 @@
 # 1. Find FFmpeg; never download it
 
-Status: accepted for v0.7. The open question below needs the maintainer's decision.
+Status: accepted. The maintainer ruled out a download button too (see the end).
 
 ## Context
 
@@ -36,22 +36,9 @@ The app **finds** FFmpeg and **guides** its installation. It does not download i
 - A release could still ship FFmpeg in an `ffmpeg` folder beside the app, and it would be found,
   but that bundle would carry GPL source-offer obligations.
 
-## Open question: a one-click download
+## Rejected: a one-click download
 
-A **Download FFmpeg** button in the setup window, run only when clicked, would remove the last
-manual step. Before building it, decide:
-
-1. **Whether to change the promise.** A download the person asks for is not automatic, but the
-   README currently says there are *no* runtime downloads.
-2. **Where from.** Windows and Linux builds come from gyan.dev or BtbN's GitHub releases, and
-   macOS builds from evermeet.cx or osxexperts. Each release must be pinned by URL and SHA-256
-   in the source, and updated deliberately.
-3. **What it adds.** An HTTPS client, and ZIP and `.tar.xz` extraction, would all be new
-   dependencies, as would a folder for the download in app data, which the lookup above would
-   also search.
-4. **Licence notices.** They would be shown next to the button, because the download is GPL
-   software.
-
-Recommendation: keep the guided setup as the default. Add the button only if the maintainer
-accepts points 1 and 4, pinning one build per platform and verifying its checksum before
-extracting it.
+A **Download FFmpeg** button, even one that runs only when clicked, was considered and rejected.
+It would break the promise of no runtime downloads, and it would need three things: pinned
+third-party builds with their checksums, new download and unpacking dependencies, and GPL
+notices. Guided setup is the whole answer: find FFmpeg, and tell the person how to install it.

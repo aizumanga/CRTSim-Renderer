@@ -36,5 +36,5 @@ ones in [CONTEXT.md](../CONTEXT.md).
 
 ## Not planned
 
-- Automatic FFmpeg downloads, until ADR 1's open question is decided.
+- Downloading or installing FFmpeg from the app, automatically or on request ([ADR 1](adr/0001-find-ffmpeg-never-download-it.md)).
 - Room reflections, VHS noise and sprite flicker (see the plan's *Later work*).
