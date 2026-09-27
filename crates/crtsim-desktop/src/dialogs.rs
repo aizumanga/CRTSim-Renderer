@@ -1,7 +1,9 @@
-//! Native file dialogs: what each one offers, and what happens with the file chosen.
+//! Native file dialogs: what each one offers, and what happens with what is chosen. Every
+//! dialog opens on a thread of its own and answers on one channel.
 use crate::export_ui::ExportFormat;
 use crate::worker::Export;
 use crate::*;
+use std::panic::AssertUnwindSafe;
 
 #[derive(Clone, Copy)]
 pub(crate) enum Dialog {
@@ -14,6 +16,70 @@ pub(crate) enum Dialog {
     LoadPreset,
     SavePreset,
     Export,
+}
+
+/// What a dialog is asked for.
+pub(crate) enum Request {
+    /// One file, as `Dialog` says.
+    File(Dialog),
+    /// Files for new batch jobs, then the folder their exports go to. The jobs keep these
+    /// settings, the ones on screen when the dialog opened.
+    Batch(Box<batch::Settings>),
+}
+
+/// What a dialog answered.
+pub(crate) enum Answer {
+    Cancelled,
+    File(Dialog, PathBuf),
+    Batch {
+        settings: Box<batch::Settings>,
+        sources: Vec<PathBuf>,
+        folder: PathBuf,
+    },
+    /// The dialog closed without answering, as when it fails to open.
+    Failed,
+}
+
+impl Request {
+    /// Shows the dialog and waits for its answer.
+    fn ask(self, export: ExportFormat) -> Answer {
+        match self {
+            Self::File(kind) => {
+                let chooser = kind.chooser(export);
+                let dialog = rfd::FileDialog::new().add_filter(chooser.filter, &chooser.extensions);
+                let path = match chooser.save_as {
+                    None => dialog.pick_file(),
+                    Some(name) => {
+                        let extension = chooser.extensions[0];
+                        dialog
+                            .set_file_name(format!("{name}.{extension}"))
+                            .save_file()
+                            .and_then(|path| with_extension_confirmed(path, extension))
+                    }
+                };
+                path.map_or(Answer::Cancelled, |path| Answer::File(kind, path))
+            }
+            Self::Batch(settings) => {
+                let chosen = rfd::FileDialog::new()
+                    .add_filter("Images and videos", &files::media_extensions())
+                    .pick_files()
+                    .and_then(|sources| {
+                        rfd::FileDialog::new()
+                            .set_title("Batch export destination")
+                            .pick_folder()
+                            .map(|folder| (sources, folder))
+                    });
+                match chosen {
+                    Some((sources, folder)) => Answer::Batch {
+                        settings,
+                        sources,
+                        folder,
+                    },
+                    None => Answer::Cancelled,
+                }
+            }
+        }
+    }
 }
 
 /// What a file dialog offers: the files it filters for and, when it saves, the name it suggests.
@@ -67,38 +133,42 @@ fn with_extension_confirmed(mut path: PathBuf, extension: &str) -> Option<PathBu
 }
 
 impl App {
-    /// Opens `kind` on a thread of its own, since native dialogs block. Edits are frozen
-    /// while it is open, so its answer is applied to the settings that were on screen.
+    /// Opens a dialog for one file of `kind`.
     pub(crate) fn dialog(&mut self, kind: Dialog, ctx: &egui::Context) {
+        self.ask(Request::File(kind), ctx);
+    }
+
+    /// Opens the dialog `request` asks for, on a thread of its own, since native dialogs block.
+    /// Edits are frozen while it is open, so its answer is applied to the settings that were on
+    /// screen.
+    pub(crate) fn ask(&mut self, request: Request, ctx: &egui::Context) {
         self.stop_playback();
         self.dialog_open = true;
         let send = self.dialog_send.clone();
         let ctx = ctx.clone();
         let export = self.workflow.export_format;
         std::thread::spawn(move || {
-            let chooser = kind.chooser(export);
-            let dialog = rfd::FileDialog::new().add_filter(chooser.filter, &chooser.extensions);
-            let path = match chooser.save_as {
-                None => dialog.pick_file(),
-                Some(name) => {
-                    let extension = chooser.extensions[0];
-                    dialog
-                        .set_file_name(format!("{name}.{extension}"))
-                        .save_file()
-                        .and_then(|path| with_extension_confirmed(path, extension))
-                }
-            };
-            let _ = send.send((kind, path));
+            // A dialog that fails must still answer, or the interface stays frozen.
+            let answer = std::panic::catch_unwind(AssertUnwindSafe(|| request.ask(export)))
+                .unwrap_or(Answer::Failed);
+            let _ = send.send(answer);
             ctx.request_repaint();
         });
     }
 
     /// Applies the dialogs that have closed since the last frame.
     pub(crate) fn receive_dialogs(&mut self) {
-        while let Ok((kind, path)) = self.dialog_receive.try_recv() {
+        while let Ok(answer) = self.dialog_receive.try_recv() {
             self.dialog_open = false;
-            if let Some(path) = path {
-                self.chosen(kind, path);
+            match answer {
+                Answer::Cancelled => {}
+                Answer::File(kind, path) => self.chosen(kind, path),
+                Answer::Batch {
+                    settings,
+                    sources,
+                    folder,
+                } => self.add_batch_jobs(&settings, sources, &folder),
+                Answer::Failed => self.error = Some("File chooser closed unexpectedly".into()),
             }
         }
     }

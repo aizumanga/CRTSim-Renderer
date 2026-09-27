@@ -617,14 +617,20 @@ mod tests {
         app.animation_options.fps = 12;
 
         app.dialog_send
-            .send((Dialog::ExportVideo, Some(dir.path().join("out.mp4"))))
+            .send(crate::dialogs::Answer::File(
+                Dialog::ExportVideo,
+                dir.path().join("out.mp4"),
+            ))
             .unwrap();
         app.receive(&ctx);
         assert!(app.error.take().unwrap().contains(".gif"));
         assert!(receive.try_recv().is_err());
 
         app.dialog_send
-            .send((Dialog::ExportVideo, Some(dir.path().join("out.GIF"))))
+            .send(crate::dialogs::Answer::File(
+                Dialog::ExportVideo,
+                dir.path().join("out.GIF"),
+            ))
             .unwrap();
         app.receive(&ctx);
         match receive.try_recv() {

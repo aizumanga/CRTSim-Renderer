@@ -104,8 +104,6 @@ struct App {
     show_queue: bool,
     /// The batch export queue.
     queue: batch::Queue,
-    /// The file chooser for new batch jobs, while it is open.
-    batch_picking: Option<batch::Picking>,
     lut_gallery_search: String,
     gallery_entries: Vec<gallery::Entry>,
     /// A look previewed from a gallery without being applied; see `audition`.
@@ -136,8 +134,8 @@ struct App {
     dialog_open: bool,
     jobs: worker::Jobs,
     events: mpsc::Receiver<Event>,
-    dialog_send: mpsc::Sender<(Dialog, Option<PathBuf>)>,
-    dialog_receive: mpsc::Receiver<(Dialog, Option<PathBuf>)>,
+    dialog_send: mpsc::Sender<dialogs::Answer>,
+    dialog_receive: mpsc::Receiver<dialogs::Answer>,
     status: String,
     error: Option<String>,
     preview_error: Option<String>,
@@ -262,7 +260,6 @@ impl App {
             show_lut_gallery,
             show_queue: false,
             queue: Default::default(),
-            batch_picking: None,
             lut_gallery_search: String::new(),
             gallery_entries,
             audition: None,

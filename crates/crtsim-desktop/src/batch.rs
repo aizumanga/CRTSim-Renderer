@@ -217,67 +217,37 @@ impl Queue {
     }
 }
 
-type Chosen = Option<(Vec<PathBuf>, PathBuf)>;
-
-/// The file chooser open for new batch jobs, and the settings on screen when it opened, which
-/// the jobs keep.
-pub struct Picking {
-    chosen: mpsc::Receiver<Chosen>,
-    config: Config,
-    options: Options,
+/// The settings new batch jobs keep: the ones on screen when their files were asked for.
+pub struct Settings {
+    pub config: Config,
+    pub options: Options,
 }
 
 impl App {
     /// Asks for the files to add to the queue, then the folder their exports go to.
     fn pick_batch_files(&mut self, ctx: &egui::Context) {
-        self.stop_playback();
-        self.dialog_open = true;
-        let (send, chosen) = mpsc::channel();
-        self.batch_picking = Some(Picking {
-            chosen,
+        let settings = Settings {
             config: self.config.clone(),
             options: self.video_options.clone(),
-        });
-        let ctx = ctx.clone();
-        std::thread::spawn(move || {
-            let result = rfd::FileDialog::new()
-                .add_filter("Images and videos", &files::media_extensions())
-                .pick_files()
-                .and_then(|files| {
-                    rfd::FileDialog::new()
-                        .set_title("Batch export destination")
-                        .pick_folder()
-                        .map(|folder| (files, folder))
-                });
-            let _ = send.send(result);
-            ctx.request_repaint();
-        });
+        };
+        self.ask(dialogs::Request::Batch(Box::new(settings)), ctx);
     }
 
-    /// Adds the jobs for the files chosen, once the chooser has closed.
-    pub(crate) fn receive_batch_files(&mut self) {
-        let Some(picking) = self.batch_picking.take() else {
-            return;
-        };
-        match picking.chosen.try_recv() {
-            Err(mpsc::TryRecvError::Empty) => self.batch_picking = Some(picking),
-            Err(mpsc::TryRecvError::Disconnected) => {
-                self.dialog_open = false;
-                self.error = Some("File chooser closed unexpectedly".into());
-            }
-            Ok(None) => self.dialog_open = false,
-            Ok(Some((sources, folder))) => {
-                self.dialog_open = false;
-                let added = self
-                    .queue
-                    .add(sources, &folder, &picking.config, &picking.options);
-                if let Err(e) = added {
-                    self.error = Some(format!("{e:#}"));
-                }
-                self.show_queue = true;
-                self.save_session();
-            }
+    /// Adds a job for each of the files chosen, exporting into `folder`.
+    pub(crate) fn add_batch_jobs(
+        &mut self,
+        settings: &Settings,
+        sources: Vec<PathBuf>,
+        folder: &Path,
+    ) {
+        let added = self
+            .queue
+            .add(sources, folder, &settings.config, &settings.options);
+        if let Err(e) = added {
+            self.error = Some(format!("{e:#}"));
         }
+        self.show_queue = true;
+        self.save_session();
     }
 
     /// Starts the queue's next job once nothing else needs the work thread or the preview.
@@ -584,6 +554,48 @@ mod tests {
         assert!(
             receive.try_recv().is_err(),
             "the second job waits to be resumed"
+        );
+    }
+
+    #[test]
+    fn files_chosen_for_the_queue_come_back_on_the_dialogs_path_with_their_settings() {
+        let ctx = egui::Context::default();
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(
+            &ctx,
+            worker::Gpu::Own(wgpu::Backends::PRIMARY),
+            None,
+            Some(Smoke::new("unused-smoke.png".into())),
+        );
+        let captured = Config {
+            bloom: 0.,
+            ..Config::general()
+        };
+        app.dialog_open = true;
+        app.dialog_send
+            .send(dialogs::Answer::Batch {
+                settings: Box::new(Settings {
+                    config: captured.clone(),
+                    options: Options::default(),
+                }),
+                sources: vec!["clip.png".into()],
+                folder: dir.path().to_path_buf(),
+            })
+            .unwrap();
+        app.receive(&ctx);
+        assert!(!app.dialog_open && app.show_queue);
+        assert_eq!(app.queue.items()[0].config, captured);
+        assert_eq!(app.queue.items()[0].output, dir.path().join("clip-crt.png"));
+        app.dialog_open = true;
+        app.dialog_send.send(dialogs::Answer::Failed).unwrap();
+        app.receive(&ctx);
+        assert!(
+            !app.dialog_open,
+            "a failed dialog does not leave edits frozen"
+        );
+        assert_eq!(
+            app.error.as_deref(),
+            Some("File chooser closed unexpectedly")
         );
     }
 }

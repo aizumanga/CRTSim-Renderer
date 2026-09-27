@@ -152,7 +152,6 @@ impl App {
     pub fn workflow_ui(&mut self, ctx: &egui::Context) {
         self.video_export_window(ctx);
         self.tick_playback(ctx);
-        self.receive_batch_files();
         if self.workflow.recovery.is_some() && !self.show_welcome {
             let mut restore = false;
             let mut discard = false;
