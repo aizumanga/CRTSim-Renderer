@@ -102,20 +102,14 @@ impl App {
 
     /// Makes a loaded image, or frame of a video, the source being edited.
     fn show_loaded(&mut self, loaded: worker::Loaded) {
-        let status = match &loaded.video {
-            Some(at) => {
-                self.play_time = at.frame as f64 / at.video.fps;
-                self.video_frame = at.frame;
-                self.selected_frame = at.frame;
-                self.video_frames = at.frames;
-                "Video frame loaded"
-            }
+        let status = match &loaded.timeline {
+            Some(_) => "Video frame loaded",
             None => "Image loaded",
         };
         self.set_source(
             Some(loaded.path),
             loaded.name,
-            loaded.video.map(|at| at.video),
+            loaded.timeline,
             loaded.image,
             &loaded.thumbnail,
         );

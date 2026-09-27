@@ -137,7 +137,7 @@ impl App {
         Project {
             version: 1,
             source: self.source_path.clone(),
-            frame: self.video_frame,
+            frame: self.timeline.as_ref().map_or(0, |t| t.shown),
             config: self.config.clone(),
             options: self.video_options.clone(),
             queue: self.queue.items().to_vec(),

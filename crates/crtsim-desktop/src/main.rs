@@ -19,6 +19,7 @@ mod settings_ui;
 mod smoke;
 mod theme;
 mod thumbnails;
+mod timeline;
 mod toolbar;
 mod widgets;
 mod worker;
@@ -84,12 +85,8 @@ struct App {
     /// The session saved to recover, and the project files opened in it.
     session: session::Session,
     ui_context: egui::Context,
-    video: Option<crtsim_media::Video>,
-    video_frame: u64,
-    selected_frame: u64,
-    video_frames: u64,
-    /// Where in the video the frame on screen is, in seconds; playing starts from here.
-    play_time: f64,
+    /// Where the editor is in the video open, if one is.
+    timeline: Option<timeline::Timeline>,
     /// The video playing in the preview, if it is.
     playback: Option<playback::Playback>,
     video_options: crtsim_media::Options,
@@ -251,11 +248,7 @@ impl App {
         let mut app = Self {
             session: Default::default(),
             ui_context: ctx.clone(),
-            video: None,
-            video_frame: 0,
-            selected_frame: 0,
-            video_frames: 0,
-            play_time: 0.,
+            timeline: None,
             playback: None,
             video_options: crtsim_media::Options::default(),
             animation_options: Default::default(),
@@ -387,19 +380,19 @@ impl App {
     fn app_data(&self) -> Option<&app_data::Store> {
         self.store.as_ref().filter(|_| self.smoke.is_none())
     }
-    /// Makes `input` the image being edited: the file at `path`, a frame of `video`, or with
-    /// neither the built-in test card. The original view shows `thumbnail`.
+    /// Makes `input` the image being edited: the file at `path`, a frame of a video at
+    /// `timeline`, or with neither the built-in test card. The original view shows `thumbnail`.
     fn set_source(
         &mut self,
         path: Option<PathBuf>,
         name: String,
-        video: Option<crtsim_media::Video>,
+        timeline: Option<timeline::Timeline>,
         input: RgbaImage,
         thumbnail: &RgbaImage,
     ) {
         self.source_path = path;
         self.source_name = name;
-        self.video = video;
+        self.timeline = timeline;
         self.original = texture(&self.ui_context, "original", thumbnail, 2048);
         self.input = Arc::new(input);
         self.show_preview(None);
@@ -434,11 +427,11 @@ impl App {
         self.send(Job::LoadVideo {
             path,
             frame,
-            cached: if reuse {
-                self.video.clone().map(|v| (v, self.video_frames))
-            } else {
-                None
-            },
+            cached: self
+                .timeline
+                .as_ref()
+                .filter(|_| reuse)
+                .map(|t| (t.video.clone(), t.frames)),
             cancel,
         });
     }
@@ -525,6 +518,24 @@ impl App {
             }
         }
     }
+    /// Ctrl+Shift+Z redoes and Ctrl+Z undoes, or with Command on macOS.
+    fn undo_shortcuts(&mut self, ctx: &egui::Context) {
+        let pressed = |shift: egui::Modifiers| {
+            ctx.input_mut(|i| {
+                [egui::Modifiers::CTRL, egui::Modifiers::COMMAND]
+                    .into_iter()
+                    .any(|key| {
+                        i.consume_shortcut(&egui::KeyboardShortcut::new(key | shift, egui::Key::Z))
+                    })
+            })
+        };
+        // Redo first: its shortcut would also match undo's.
+        if pressed(egui::Modifiers::SHIFT) {
+            self.redo();
+        } else if pressed(egui::Modifiers::NONE) {
+            self.undo();
+        }
+    }
     /// Remembered placement for one tool window. Copied out so the window's contents can
     /// still borrow `self`; write it back with `store_window_state` after the window runs.
     fn window_state(&self, title: &str) -> chrome::ToolWindow {
@@ -565,29 +576,7 @@ impl eframe::App for App {
         ctx.request_repaint_after(Duration::from_secs(2));
         self.receive(ctx);
         if !self.modal_open() && !ctx.wants_keyboard_input() {
-            let mut ctrl_shift = egui::Modifiers::CTRL;
-            ctrl_shift.shift = true;
-            let mut command_shift = egui::Modifiers::COMMAND;
-            command_shift.shift = true;
-            let redo = ctx.input_mut(|i| {
-                i.consume_shortcut(&egui::KeyboardShortcut::new(ctrl_shift, egui::Key::Z))
-                    || i.consume_shortcut(&egui::KeyboardShortcut::new(command_shift, egui::Key::Z))
-            });
-            let undo = !redo
-                && ctx.input_mut(|i| {
-                    i.consume_shortcut(&egui::KeyboardShortcut::new(
-                        egui::Modifiers::CTRL,
-                        egui::Key::Z,
-                    )) || i.consume_shortcut(&egui::KeyboardShortcut::new(
-                        egui::Modifiers::COMMAND,
-                        egui::Key::Z,
-                    ))
-                });
-            if redo {
-                self.redo();
-            } else if undo {
-                self.undo();
-            }
+            self.undo_shortcuts(ctx);
         }
         if self.can_start_work() {
             let dropped = ctx.input(|i| i.raw.dropped_files.first().and_then(|f| f.path.clone()));

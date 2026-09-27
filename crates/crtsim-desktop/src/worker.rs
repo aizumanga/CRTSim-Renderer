@@ -1,4 +1,4 @@
-use crate::{file_name, files};
+use crate::{file_name, files, timeline::Timeline};
 use anyhow::{ensure, Result};
 use crtsim_core::{config::Config, nes_luts, RenderProgress, Renderer, Sequence};
 use crtsim_media::{Options, Video};
@@ -325,13 +325,7 @@ pub struct Loaded {
     /// The image made opaque and at most 2048 pixels on a side, for showing the original.
     pub thumbnail: RgbaImage,
     /// For a frame of a video, the video and where in it the frame is.
-    pub video: Option<VideoFrame>,
-}
-pub struct VideoFrame {
-    pub video: Video,
-    pub frame: u64,
-    /// How many frames the video decodes to.
-    pub frames: u64,
+    pub timeline: Option<Timeline>,
 }
 pub struct ImportedPreset {
     pub path: PathBuf,
@@ -555,7 +549,7 @@ fn load_image(path: PathBuf) -> Result<Loaded> {
         path: path.canonicalize().unwrap_or(path),
         image,
         thumbnail,
-        video: None,
+        timeline: None,
     })
 }
 
@@ -583,11 +577,7 @@ fn load_video(
         name: file_name(&video.path),
         image,
         thumbnail,
-        video: Some(VideoFrame {
-            video,
-            frame,
-            frames,
-        }),
+        timeline: Some(Timeline::new(video, frame, frames)),
     })
 }
 

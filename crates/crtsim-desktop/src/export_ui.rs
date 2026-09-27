@@ -1,4 +1,7 @@
-use crate::{widgets::Keyed, App, Dialog};
+use crate::{
+    widgets::{choice, Keyed},
+    App, Dialog,
+};
 use crtsim_media::{
     AnimationFormat, AnimationOptions, AnimationSummary, Audio, Container, Dither, Encoder,
     EncodingSpeed, Options, Quality, Timing,
@@ -166,16 +169,16 @@ impl App {
                     ui.small(draft.format.description());
                     match draft.format {
                         ExportFormat::Video(container) => {
-                            let notes = match &self.video {
-                                Some(video) if !draft.batch => {
-                                    crtsim_media::preservation_notes(video, container)
+                            let notes = match &self.timeline {
+                                Some(timeline) if !draft.batch => {
+                                    crtsim_media::preservation_notes(&timeline.video, container)
                                 }
                                 _ => vec![],
                             };
                             video_settings(ui, &mut draft.options, container, &notes);
                         }
                         ExportFormat::Animation(format) => {
-                            let frame = self.video_frame;
+                            let frame = self.timeline.as_ref().map_or(0, |t| t.shown);
                             animation_settings(
                                 ui,
                                 &mut draft.animation,
@@ -183,7 +186,8 @@ impl App {
                                 &mut draft.from_current_frame,
                                 frame,
                             );
-                            if let Some(video) = &self.video {
+                            if let Some(timeline) = &self.timeline {
+                                let video = &timeline.video;
                                 draft.animation.start = if draft.from_current_frame {
                                     video.frame_time(frame)
                                 } else {
@@ -264,44 +268,36 @@ fn video_settings(
         options.encoder = Encoder::Software;
     }
     ui.separator();
-    egui::ComboBox::from_label("Picture quality")
-        .selected_text(format!("{:?}", options.quality))
-        .show_ui(ui, |ui| {
-            for (q, label) in [
-                (Quality::Draft, "Draft · smaller, quicker files"),
-                (Quality::Balanced, "Balanced · recommended"),
-                (Quality::High, "High · more detail, larger files"),
-                (Quality::Archival, "Archival · largest files, still lossy"),
-            ] {
-                if ui
-                    .selectable_value(&mut options.quality, q, label)
-                    .changed()
-                {
-                    options.crf = None;
-                    options.bitrate_mbps = None;
-                }
-            }
-        });
+    let quality = choice(
+        ui,
+        "Picture quality",
+        &mut options.quality,
+        &[
+            (Quality::Draft, "Draft · smaller, quicker files"),
+            (Quality::Balanced, "Balanced · recommended"),
+            (Quality::High, "High · more detail, larger files"),
+            (Quality::Archival, "Archival · largest files, still lossy"),
+        ],
+    );
+    if quality {
+        options.crf = None;
+        options.bitrate_mbps = None;
+    }
     ui.small(
         "Quality changes file size and compression. It does not \
         change export resolution or CRT effects.",
     );
     timing_controls(ui, options);
-    egui::ComboBox::from_label("Audio in exported file")
-        .selected_text(match options.audio {
-            Audio::Auto => "Preserve when compatible",
-            Audio::Encode => "Re-encode",
-            Audio::Mute => "No audio",
-        })
-        .show_ui(ui, |ui| {
-            for (value, label) in [
-                (Audio::Auto, "Preserve when compatible"),
-                (Audio::Encode, "Re-encode AAC / Opus"),
-                (Audio::Mute, "No audio"),
-            ] {
-                ui.selectable_value(&mut options.audio, value, label);
-            }
-        });
+    choice(
+        ui,
+        "Audio in exported file",
+        &mut options.audio,
+        &[
+            (Audio::Auto, "Preserve when compatible"),
+            (Audio::Encode, "Re-encode AAC / Opus"),
+            (Audio::Mute, "No audio"),
+        ],
+    );
     ui.checkbox(
         &mut options.preserve_streams,
         "Keep additional tracks, subtitles, chapters & metadata",
@@ -315,19 +311,7 @@ fn video_settings(
         if container == Container::Webm {
             ui.label("VP9 uses software encoding.");
         } else {
-            egui::ComboBox::from_label("Encoding method")
-                .selected_text(encoder_label(options.encoder))
-                .show_ui(ui, |ui| {
-                    for e in [
-                        Encoder::Software,
-                        Encoder::Nvenc,
-                        Encoder::Qsv,
-                        Encoder::Amf,
-                        Encoder::VideoToolbox,
-                    ] {
-                        ui.selectable_value(&mut options.encoder, e, encoder_label(e));
-                    }
-                });
+            choice(ui, "Encoding method", &mut options.encoder, &ENCODERS);
         }
         ui.small(encoder_description(options.encoder));
         if options.encoder == Encoder::Software {
@@ -342,23 +326,17 @@ fn video_settings(
                 "Lower CRF keeps more detail and usually produces larger \
                 files. Leave custom quality off to use the selected profile.",
             );
-            egui::ComboBox::from_label("Compression speed")
-                .selected_text(match options.speed {
-                    None => "Profile default",
-                    Some(EncodingSpeed::Fast) => "Fast",
-                    Some(EncodingSpeed::Balanced) => "Balanced",
-                    Some(EncodingSpeed::Slow) => "Slow",
-                })
-                .show_ui(ui, |ui| {
-                    for (speed, label) in [
-                        (None, "Profile default"),
-                        (Some(EncodingSpeed::Fast), "Fast"),
-                        (Some(EncodingSpeed::Balanced), "Balanced"),
-                        (Some(EncodingSpeed::Slow), "Slow"),
-                    ] {
-                        ui.selectable_value(&mut options.speed, speed, label);
-                    }
-                });
+            choice(
+                ui,
+                "Compression speed",
+                &mut options.speed,
+                &[
+                    (None, "Profile default"),
+                    (Some(EncodingSpeed::Fast), "Fast"),
+                    (Some(EncodingSpeed::Balanced), "Balanced"),
+                    (Some(EncodingSpeed::Slow), "Slow"),
+                ],
+            );
             ui.small(
                 "Slower compression spends more time finding efficient \
                 encoding; CRT rendering speed is separate.",
@@ -421,15 +399,15 @@ fn animation_settings(
     if options.timing == Timing::Ntsc60 {
         options.timing = Timing::Stable;
     }
-    egui::ComboBox::from_label("Timing")
-        .selected_text(match options.timing {
-            Timing::Disabled => "Persistence off",
-            _ => "Stable artifacts",
-        })
-        .show_ui(ui, |ui| {
-            ui.selectable_value(&mut options.timing, Timing::Stable, "Stable artifacts");
-            ui.selectable_value(&mut options.timing, Timing::Disabled, "Persistence off");
-        });
+    choice(
+        ui,
+        "Timing",
+        &mut options.timing,
+        &[
+            (Timing::Stable, "Stable artifacts"),
+            (Timing::Disabled, "Persistence off"),
+        ],
+    );
     ui.checkbox(
         from_current_frame,
         format!("Start at the frame shown ({})", frame + 1),
@@ -452,21 +430,16 @@ fn animation_settings(
     });
     match format {
         AnimationFormat::Gif => {
-            egui::ComboBox::from_label("Dithering")
-                .selected_text(match options.dither {
-                    Dither::Bayer => "Pattern · smaller files",
-                    Dither::Diffusion => "Diffusion · smoother, larger",
-                    Dither::None => "None · smallest, banding",
-                })
-                .show_ui(ui, |ui| {
-                    for (dither, label) in [
-                        (Dither::Bayer, "Pattern · smaller files"),
-                        (Dither::Diffusion, "Diffusion · smoother, larger"),
-                        (Dither::None, "None · smallest, banding"),
-                    ] {
-                        ui.selectable_value(&mut options.dither, dither, label);
-                    }
-                });
+            choice(
+                ui,
+                "Dithering",
+                &mut options.dither,
+                &[
+                    (Dither::Bayer, "Pattern · smaller files"),
+                    (Dither::Diffusion, "Diffusion · smoother, larger"),
+                    (Dither::None, "None · smallest, banding"),
+                ],
+            );
         }
         AnimationFormat::Webp => {
             ui.checkbox(
@@ -538,31 +511,27 @@ fn size_estimate(
 }
 
 pub fn timing_controls(ui: &mut egui::Ui, options: &mut Options) {
-    egui::ComboBox::from_label("Video timing")
-        .selected_text(match options.timing {
-            Timing::Stable => "Source rate · stable artifacts",
-            Timing::Ntsc60 => "60 Hz · alternating artifacts",
-            Timing::Disabled => "Source rate · persistence off",
-        })
-        .show_ui(ui, |ui| {
-            for (t, label) in [
-                (Timing::Stable, "Source rate · stable artifacts"),
-                (Timing::Ntsc60, "60 Hz · alternating artifacts"),
-                (Timing::Disabled, "Source rate · persistence off"),
-            ] {
-                ui.selectable_value(&mut options.timing, t, label);
-            }
-        });
+    choice(
+        ui,
+        "Video timing",
+        &mut options.timing,
+        &[
+            (Timing::Stable, "Source rate · stable artifacts"),
+            (Timing::Ntsc60, "60 Hz · alternating artifacts"),
+            (Timing::Disabled, "Source rate · persistence off"),
+        ],
+    );
 }
-fn encoder_label(encoder: Encoder) -> &'static str {
-    match encoder {
-        Encoder::Software => "Software · CPU (recommended)",
-        Encoder::Nvenc => "NVIDIA graphics card · NVENC",
-        Encoder::Qsv => "Intel graphics · Quick Sync",
-        Encoder::Amf => "AMD graphics card · AMF",
-        Encoder::VideoToolbox => "Apple hardware · VideoToolbox",
-    }
-}
+
+/// The ways a video can be compressed, by what does it.
+const ENCODERS: [(Encoder, &str); 5] = [
+    (Encoder::Software, "Software · CPU (recommended)"),
+    (Encoder::Nvenc, "NVIDIA graphics card · NVENC"),
+    (Encoder::Qsv, "Intel graphics · Quick Sync"),
+    (Encoder::Amf, "AMD graphics card · AMF"),
+    (Encoder::VideoToolbox, "Apple hardware · VideoToolbox"),
+];
+
 fn encoder_description(encoder: Encoder) -> &'static str {
     match encoder {
         Encoder::Software => {
@@ -612,7 +581,8 @@ mod tests {
         }
         drop(encoder);
         let cancel = Arc::new(AtomicBool::new(false));
-        app.video = Some(crtsim_media::probe(&source, &cancel).unwrap());
+        let video = crtsim_media::probe(&source, &cancel).unwrap();
+        app.timeline = Some(crate::timeline::Timeline::new(video, 0, 2));
         app.export_format = ExportFormat::Animation(AnimationFormat::Gif);
         app.animation_options.fps = 12;
 

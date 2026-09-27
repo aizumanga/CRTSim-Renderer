@@ -106,37 +106,30 @@ impl App {
             });
         self.store_window_state("LUT gallery", window);
         self.show_lut_gallery = open;
+        // The settings in use with `lut` in place of their colour table.
+        let with_lut = |config: &Config, lut| {
+            let mut config = config.clone();
+            config.set_lut(lut);
+            config
+        };
         if open && hovered_none {
-            let config = Config {
-                lut: None,
-                ..self.config.clone()
-            };
-            self.offer_audition("no LUT", config);
+            self.offer_audition("no LUT", with_lut(&self.config, None));
         } else if let Some(index) = hovered.filter(|_| open) {
             // A LUT that cannot be decoded is reported when it is clicked, not while pointed at.
             if let Ok(lut) = self.included_lut(index) {
                 let label = format!("LUT “{}”", lut.name);
-                let config = Config {
-                    lut: Some(lut),
-                    palette: None,
-                    ..self.config.clone()
-                };
-                self.offer_audition(label, config);
+                self.offer_audition(label, with_lut(&self.config, Some(lut)));
             }
         }
         if remove {
-            let mut config = self.config.clone();
-            config.lut = None;
-            self.replace_config(config);
+            self.replace_config(with_lut(&self.config, None));
             self.error = None;
             self.status = "LUT removed".into();
         } else if let Some(index) = selected {
             match self.included_lut(index) {
                 Ok(lut) => {
                     let name = lut.name.clone();
-                    let mut config = self.config.clone();
-                    config.lut = Some(lut);
-                    config.palette = None;
+                    let config = with_lut(&self.config, Some(lut));
                     if config != self.config {
                         self.replace_config(config);
                     }
