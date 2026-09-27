@@ -58,8 +58,8 @@ backend could cover older browsers for the gamma-space mode.
 - Video export in the browser would use WebCodecs `VideoEncoder` plus a small MP4 or WebM
   muxer, not FFmpeg. ffmpeg.wasm works, but it is tens of megabytes and slow.
 - The whole egui interface could also build for the web (eframe supports it), with presets in
-  IndexedDB and files through the browser's pickers. Start with the library and a single page;
-  port the full app only if people ask for it.
+  IndexedDB and files through the browser's pickers. This is the route taken: see
+  [ADR 2](adr/0002-the-web-app-is-the-whole-app-on-webgpu.md) and the [web plan](WEB_PLAN.md).
 
 Expect wgpu plus the embedded assets to come to a few megabytes of wasm. Measure it before
 promising anything.

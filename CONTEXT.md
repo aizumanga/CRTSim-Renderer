@@ -63,4 +63,5 @@ programs are found, never downloaded (`crates/crtsim-media/src/tools.rs`); see
 
 **Web app**: the whole app, with editing, the galleries, playback and exports, running in a
 browser from the author's Neocities site. It is not a cut-down demo: what the desktop app does
-with a look, the web app does too, within what a browser allows.
+with a look, the web app does too, within what a browser allows. It needs WebGPU and never
+runs FFmpeg; see [the decision](docs/adr/0002-the-web-app-is-the-whole-app-on-webgpu.md).
