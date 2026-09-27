@@ -589,7 +589,13 @@ mod tests {
     #[test]
     fn an_animation_is_exported_with_its_own_options_to_its_own_extension() {
         let ctx = egui::Context::default();
-        let mut app = App::new(&ctx, worker::Gpu::Own(wgpu::Backends::PRIMARY), None, None);
+        let mut app = App::new(
+            &ctx,
+            worker::Gpu::Own(wgpu::Backends::PRIMARY),
+            Ok(crate::app_data::Store::temporary()),
+            None,
+            None,
+        );
         let (jobs, receive, _previews) = worker::Jobs::capture();
         app.jobs = jobs;
         let dir = tempfile::tempdir().unwrap();

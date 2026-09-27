@@ -52,7 +52,13 @@ mod tests {
 
     fn app() -> (App, mpsc::Receiver<Job>, mpsc::Receiver<PreviewJob>) {
         let ctx = egui::Context::default();
-        let mut app = App::new(&ctx, worker::Gpu::Own(wgpu::Backends::PRIMARY), None, None);
+        let mut app = App::new(
+            &ctx,
+            worker::Gpu::Own(wgpu::Backends::PRIMARY),
+            Ok(app_data::Store::temporary()),
+            None,
+            None,
+        );
         let (jobs, work, previews) = worker::Jobs::capture();
         app.jobs = jobs;
         app.show_welcome = false;

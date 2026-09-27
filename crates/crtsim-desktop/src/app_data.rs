@@ -36,14 +36,34 @@ pub struct Preset {
 #[derive(Clone)]
 pub struct Store {
     root: PathBuf,
+    /// The temporary folder a test's store is in, removed with the store's last clone.
+    #[cfg(test)]
+    _temporary: Option<std::sync::Arc<tempfile::TempDir>>,
 }
 
 impl Store {
+    fn at(root: PathBuf) -> Self {
+        Self {
+            root,
+            #[cfg(test)]
+            _temporary: None,
+        }
+    }
+
     /// A store in `root`, for tests.
     #[cfg(test)]
     pub fn in_folder(root: &Path) -> Self {
+        Self::at(root.to_path_buf())
+    }
+
+    /// A store in a new, empty temporary folder, so a test never reads or writes a person's
+    /// own app data.
+    #[cfg(test)]
+    pub fn temporary() -> Self {
+        let folder = tempfile::tempdir().expect("a temporary app data folder");
         Self {
-            root: root.to_path_buf(),
+            root: folder.path().to_path_buf(),
+            _temporary: Some(std::sync::Arc::new(folder)),
         }
     }
 
@@ -54,13 +74,11 @@ impl Store {
                 !path.is_empty() && Path::new(&path).is_absolute(),
                 "CRTSIM_DATA_DIR must be an absolute directory"
             );
-            return Ok(Self { root: path.into() });
+            return Ok(Self::at(path.into()));
         }
         let dirs = directories::ProjectDirs::from("", "", "CRTSim-Renderer")
             .context("Cannot locate app data directory")?;
-        Ok(Self {
-            root: dirs.data_dir().to_path_buf(),
-        })
+        Ok(Self::at(dirs.data_dir().to_path_buf()))
     }
 
     /// The contents of `file`, or `None` when there is none. A file larger than `limit` bytes

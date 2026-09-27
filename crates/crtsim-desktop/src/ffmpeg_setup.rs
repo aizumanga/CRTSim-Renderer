@@ -294,6 +294,7 @@ mod tests {
         let mut app = App::new(
             &ctx,
             worker::Gpu::Own(wgpu::Backends::PRIMARY),
+            Ok(app_data::Store::temporary()),
             None,
             Some(Smoke::new("unused-smoke.png".into())),
         );

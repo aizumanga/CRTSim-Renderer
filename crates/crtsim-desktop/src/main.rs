@@ -212,9 +212,12 @@ fn texture(ctx: &egui::Context, name: &str, image: &RgbaImage, limit: u32) -> Te
 }
 
 impl App {
+    /// The app, remembering between runs in `store`: the person's own app data when run, a
+    /// temporary folder in tests.
     fn new(
         ctx: &egui::Context,
         gpu: worker::Gpu,
+        store: anyhow::Result<app_data::Store>,
         input_path: Option<PathBuf>,
         smoke: Option<Smoke>,
     ) -> Self {
@@ -224,7 +227,7 @@ impl App {
         let render_state = gpu.render_state().cloned();
         let (jobs, events, worker_thread) = worker::start(ctx.clone(), gpu);
         let (dialog_send, dialog_receive) = mpsc::channel();
-        let (store, mut storage_error) = match app_data::Store::discover() {
+        let (store, mut storage_error) = match store {
             Ok(s) => (Some(s), None),
             Err(e) => (None, Some(format!("App data unavailable: {e:#}"))),
         };
@@ -834,7 +837,13 @@ fn main() -> eframe::Result<()> {
                 // Keep galleries inside the main window so the smoke screenshot captures them.
                 cc.egui_ctx.set_embed_viewports(true);
             }
-            Box::new(App::new(&cc.egui_ctx, gpu, input, smoke))
+            Box::new(App::new(
+                &cc.egui_ctx,
+                gpu,
+                app_data::Store::discover(),
+                input,
+                smoke,
+            ))
         }),
     )
 }
@@ -846,7 +855,13 @@ mod tests {
     #[test]
     fn obsolete_preview_cannot_replace_current_settings() {
         let ctx = egui::Context::default();
-        let mut app = App::new(&ctx, worker::Gpu::Own(wgpu::Backends::PRIMARY), None, None);
+        let mut app = App::new(
+            &ctx,
+            worker::Gpu::Own(wgpu::Backends::PRIMARY),
+            Ok(app_data::Store::temporary()),
+            None,
+            None,
+        );
         let (send, receive) = mpsc::channel();
         app.events = receive;
         let asked = app.schedule.take().unwrap();
@@ -889,7 +904,13 @@ mod tests {
     #[test]
     fn settings_changed_during_an_export_are_previewed() {
         let ctx = egui::Context::default();
-        let mut app = App::new(&ctx, worker::Gpu::Own(wgpu::Backends::PRIMARY), None, None);
+        let mut app = App::new(
+            &ctx,
+            worker::Gpu::Own(wgpu::Backends::PRIMARY),
+            Ok(app_data::Store::temporary()),
+            None,
+            None,
+        );
         let (jobs, work, previews) = worker::Jobs::capture();
         app.jobs = jobs;
         let dir = tempfile::tempdir().unwrap();
@@ -911,6 +932,7 @@ mod tests {
         let mut app = App::new(
             &ctx,
             worker::Gpu::Own(wgpu::Backends::PRIMARY),
+            Ok(app_data::Store::temporary()),
             None,
             Some(Smoke::new("unused-smoke.png".into())),
         );
@@ -936,7 +958,13 @@ mod tests {
     #[test]
     fn export_captures_full_resolution_and_original_source() {
         let ctx = egui::Context::default();
-        let mut app = App::new(&ctx, worker::Gpu::Own(wgpu::Backends::PRIMARY), None, None);
+        let mut app = App::new(
+            &ctx,
+            worker::Gpu::Own(wgpu::Backends::PRIMARY),
+            Ok(app_data::Store::temporary()),
+            None,
+            None,
+        );
         let (jobs, receive, _previews) = worker::Jobs::capture();
         app.jobs = jobs;
         let dir = tempfile::tempdir().unwrap();

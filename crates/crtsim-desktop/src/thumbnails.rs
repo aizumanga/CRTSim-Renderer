@@ -217,7 +217,13 @@ mod tests {
     #[test]
     fn thumbnails_are_asked_for_once_per_source_and_preset() {
         let ctx = egui::Context::default();
-        let mut app = App::new(&ctx, worker::Gpu::Own(wgpu::Backends::PRIMARY), None, None);
+        let mut app = App::new(
+            &ctx,
+            worker::Gpu::Own(wgpu::Backends::PRIMARY),
+            Ok(app_data::Store::temporary()),
+            None,
+            None,
+        );
         let (captured, _work, jobs) = worker::Jobs::capture();
         app.jobs = captured;
         let preset = Config::general();
@@ -261,7 +267,13 @@ mod tests {
     #[test]
     fn a_failed_thumbnail_does_not_keep_the_smoke_screenshot_waiting() {
         let ctx = egui::Context::default();
-        let mut app = App::new(&ctx, worker::Gpu::Own(wgpu::Backends::PRIMARY), None, None);
+        let mut app = App::new(
+            &ctx,
+            worker::Gpu::Own(wgpu::Backends::PRIMARY),
+            Ok(app_data::Store::temporary()),
+            None,
+            None,
+        );
         let (captured, _work, _previews) = worker::Jobs::capture();
         app.jobs = captured;
         app.luts.open = true;
