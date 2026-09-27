@@ -127,6 +127,7 @@ impl App {
         let mut proceed = false;
         let mut cancel = false;
         let mut summary = None;
+        let mut setup = false;
         egui::Window::new(if draft.batch {
             "Batch video export settings"
         } else {
@@ -167,6 +168,23 @@ impl App {
                         }
                     }
                     ui.small(draft.format.description());
+                    let encoder = match draft.format {
+                        ExportFormat::Video(container) => draft.options.encoder.codec(container),
+                        ExportFormat::Animation(format) => Ok(format.encoder()),
+                    };
+                    let unavailable = if self.ffmpeg.missing() {
+                        Some("Exporting needs FFmpeg, which was not found.".to_owned())
+                    } else {
+                        encoder.ok().filter(|e| self.ffmpeg.lacks(e)).map(|e| {
+                            format!("This FFmpeg cannot write this format: it has no {e} encoder.")
+                        })
+                    };
+                    if let Some(problem) = unavailable {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.colored_label(ui.visuals().warn_fg_color, problem);
+                            setup |= ui.small_button("FFmpeg setup…").clicked();
+                        });
+                    }
                     match draft.format {
                         ExportFormat::Video(container) => {
                             let notes = match &self.timeline {
@@ -228,6 +246,9 @@ impl App {
                 cancel = ui.button("Cancel").clicked();
             });
         });
+        if setup {
+            self.show_ffmpeg_setup();
+        }
         if proceed {
             let valid = match draft.format {
                 ExportFormat::Video(_) => draft.options.validate(),

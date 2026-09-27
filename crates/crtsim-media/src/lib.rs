@@ -6,6 +6,7 @@ mod export;
 mod plan;
 mod probe;
 mod process;
+mod tools;
 
 pub use animated::AnimationFormat;
 pub use animation::{AnimationOptions, AnimationSummary, Dither};
@@ -13,6 +14,7 @@ pub use decode::{playback, preview, preview_frame};
 pub(crate) use export::Rate;
 pub use export::{export, export_animation, export_animation_with, export_with, render_config};
 pub use probe::{frame_count, probe, Source, Track, TrackKind, Video};
+pub use tools::{Found, Tool, ToolCheck};
 
 use anyhow::{ensure, Context, Result};
 use crtsim_core::config::Config;
@@ -21,7 +23,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     path::Path,
-    process::Command,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -329,49 +330,6 @@ fn parse_preset(root: &Value, input: (u32, u32)) -> Result<Preset> {
 pub fn check_cancel(cancel: &AtomicBool) -> Result<()> {
     ensure!(!cancel.load(Ordering::Relaxed), "Export cancelled");
     Ok(())
-}
-
-/// The FFmpeg programs video work runs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Tool {
-    /// Decodes, encodes and muxes.
-    Ffmpeg,
-    /// Reads what a file holds.
-    Ffprobe,
-}
-
-impl Tool {
-    fn name(self) -> &'static str {
-        match self {
-            Self::Ffmpeg => "ffmpeg",
-            Self::Ffprobe => "ffprobe",
-        }
-    }
-
-    /// The environment variable naming its executable, for a portable FFmpeg installation,
-    /// which may have spaces in its path.
-    fn variable(self) -> &'static str {
-        match self {
-            Self::Ffmpeg => "CRTSIM_FFMPEG",
-            Self::Ffprobe => "CRTSIM_FFPROBE",
-        }
-    }
-
-    /// A command running it quietly, with nothing read from the terminal.
-    pub(crate) fn command(self) -> Command {
-        let program = std::env::var_os(self.variable()).unwrap_or_else(|| self.name().into());
-        let mut command = Command::new(program);
-        if std::env::var_os("CRTSIM_APPIMAGE").is_some() {
-            if let Some(original) = std::env::var_os("CRTSIM_HOST_LD_LIBRARY_PATH") {
-                command.env("LD_LIBRARY_PATH", original);
-            }
-        }
-        command.args(["-v", "error"]);
-        if self == Self::Ffmpeg {
-            command.arg("-nostdin");
-        }
-        command
-    }
 }
 
 #[cfg(test)]

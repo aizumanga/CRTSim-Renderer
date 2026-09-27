@@ -6,8 +6,10 @@
 //! mapped to it. FFmpeg can do both in one pass only by holding every frame in memory.
 //! WebP is encoded directly.
 use crate::{
-    export::{require_encoder, Encoding, Frames, Step, Work},
-    render_config, AnimationFormat, Rate, Timing, Tool, Video,
+    export::{Encoding, Frames, Step, Work},
+    render_config,
+    tools::require_encoder,
+    AnimationFormat, Rate, Timing, Tool, Video,
 };
 use anyhow::{ensure, Result};
 use crtsim_core::config::Config;
@@ -85,7 +87,8 @@ impl AnimationFormat {
         }
     }
 
-    fn encoder(self) -> &'static str {
+    /// The FFmpeg encoder that writes it.
+    pub fn encoder(self) -> &'static str {
         match self {
             Self::Gif => "gif",
             Self::Webp => "libwebp_anim",

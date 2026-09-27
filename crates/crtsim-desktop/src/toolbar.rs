@@ -9,7 +9,13 @@ impl App {
             ui.separator();
             ui.add_enabled_ui(self.can_start_work(), |ui| {
                 ui.menu_button("File", |ui| {
-                    if ui.button("Open media…").clicked() {
+                    if ui
+                        .add(
+                            egui::Button::new("Open media…")
+                                .shortcut_text(shortcut(ctx, SHORTCUT_OPEN)),
+                        )
+                        .clicked()
+                    {
                         self.dialog(Dialog::File, ctx);
                         ui.close_menu();
                     }
@@ -57,12 +63,13 @@ impl App {
                     }
                 });
                 ui.menu_button("Export", |ui| {
+                    let png = if self.timeline.is_some() {
+                        "Current frame as PNG…"
+                    } else {
+                        "Image as PNG…"
+                    };
                     if ui
-                        .button(if self.timeline.is_some() {
-                            "Current frame as PNG…"
-                        } else {
-                            "Image as PNG…"
-                        })
+                        .add(egui::Button::new(png).shortcut_text(shortcut(ctx, SHORTCUT_EXPORT)))
                         .clicked()
                     {
                         self.dialog(Dialog::Export, ctx);
@@ -78,6 +85,10 @@ impl App {
                     ui.separator();
                     if ui.button("Batch queue…").clicked() {
                         self.show_queue = true;
+                        ui.close_menu();
+                    }
+                    if ui.button("FFmpeg setup…").clicked() {
+                        self.show_ffmpeg_setup();
                         ui.close_menu();
                     }
                 });

@@ -5,6 +5,7 @@ mod chrome;
 mod dialogs;
 mod events;
 mod export_ui;
+mod ffmpeg_setup;
 mod files;
 mod gallery;
 mod gallery_ui;
@@ -102,6 +103,8 @@ struct App {
     queue: batch::Queue,
     presets: gallery::PresetGallery,
     luts: lut_gallery::LutGallery,
+    /// Whether FFmpeg is there for video work, and how to install it.
+    ffmpeg: ffmpeg_setup::FfmpegSetup,
     /// A look previewed from a gallery without being applied; see `audition`.
     audition: Option<audition::Audition>,
     /// What a gallery pointed at this frame, for `settle_audition`.
@@ -160,6 +163,16 @@ impl Displayed {
             Self::Frame { id, size, .. } => egui::load::SizedTexture::new(*id, *size),
         }
     }
+}
+
+/// With Ctrl, or Command on macOS: open a file, save the project, export a PNG.
+const SHORTCUT_OPEN: egui::Key = egui::Key::O;
+const SHORTCUT_SAVE: egui::Key = egui::Key::S;
+const SHORTCUT_EXPORT: egui::Key = egui::Key::E;
+
+/// How `key` with Ctrl, or Command on macOS, is written on this computer, for a menu.
+fn shortcut(ctx: &egui::Context, key: egui::Key) -> String {
+    ctx.format_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, key))
 }
 
 /// A path's file name for showing a person, which need not be valid Unicode.
@@ -257,6 +270,7 @@ impl App {
             queue: Default::default(),
             presets,
             luts,
+            ffmpeg: Default::default(),
             audition: None,
             offered: None,
             thumbnails: Default::default(),
@@ -288,6 +302,7 @@ impl App {
             preview_error: None,
             smoke,
         };
+        app.ffmpeg.start_check(ctx);
         app.load_session(input_path.is_some());
         if let Some(path) = input_path {
             app.load(path);
@@ -400,9 +415,17 @@ impl App {
             self.open_project(path);
             return;
         }
-        if crtsim_media::MediaKind::of(&path).is_moving() {
-            self.load_video(path, 0, false);
-            return;
+        match crtsim_media::MediaKind::of(&path) {
+            crtsim_media::MediaKind::Video if self.ffmpeg.missing() => {
+                self.status = format!("Opening {} needs FFmpeg", file_name(&path));
+                self.show_ffmpeg_setup();
+                return;
+            }
+            kind if kind.is_moving() => {
+                self.load_video(path, 0, false);
+                return;
+            }
+            _ => {}
         }
         self.work = Work::Loading(None);
         self.status = format!("Loading {}…", path.display());
@@ -507,22 +530,36 @@ impl App {
             }
         }
     }
-    /// Ctrl+Shift+Z redoes and Ctrl+Z undoes, or with Command on macOS.
-    fn undo_shortcuts(&mut self, ctx: &egui::Context) {
-        let pressed = |shift: egui::Modifiers| {
+    /// The keyboard shortcuts, with Ctrl or, on macOS, Command: Z undoes and Shift+Z redoes;
+    /// O opens a file, S saves the project and E exports a PNG, when a file dialog could open.
+    fn shortcuts(&mut self, ctx: &egui::Context) {
+        let pressed = |shift: egui::Modifiers, key: egui::Key| {
             ctx.input_mut(|i| {
                 [egui::Modifiers::CTRL, egui::Modifiers::COMMAND]
                     .into_iter()
-                    .any(|key| {
-                        i.consume_shortcut(&egui::KeyboardShortcut::new(key | shift, egui::Key::Z))
+                    .any(|command| {
+                        i.consume_shortcut(&egui::KeyboardShortcut::new(command | shift, key))
                     })
             })
         };
         // Redo first: its shortcut would also match undo's.
-        if pressed(egui::Modifiers::SHIFT) {
+        if pressed(egui::Modifiers::SHIFT, egui::Key::Z) {
             self.redo();
-        } else if pressed(egui::Modifiers::NONE) {
+        } else if pressed(egui::Modifiers::NONE, egui::Key::Z) {
             self.undo();
+        }
+        if !self.can_start_work() {
+            return;
+        }
+        if pressed(egui::Modifiers::NONE, SHORTCUT_OPEN) {
+            self.dialog(Dialog::File, ctx);
+        } else if pressed(egui::Modifiers::NONE, SHORTCUT_SAVE) {
+            match self.session.project_path().cloned() {
+                Some(path) => self.save_project_file(path),
+                None => self.dialog(Dialog::SaveProject, ctx),
+            }
+        } else if pressed(egui::Modifiers::NONE, SHORTCUT_EXPORT) {
+            self.dialog(Dialog::Export, ctx);
         }
     }
     /// Remembered placement for one tool window. Copied out so the window's contents can
@@ -565,7 +602,7 @@ impl eframe::App for App {
         ctx.request_repaint_after(Duration::from_secs(2));
         self.receive(ctx);
         if !self.modal_open() && !ctx.wants_keyboard_input() {
-            self.undo_shortcuts(ctx);
+            self.shortcuts(ctx);
         }
         if self.can_start_work() {
             let dropped = ctx.input(|i| i.raw.dropped_files.first().and_then(|f| f.path.clone()));
@@ -652,6 +689,7 @@ impl eframe::App for App {
         self.lut_gallery_window(ctx);
         self.settle_audition();
         self.credits_window(ctx);
+        self.ffmpeg_window(ctx);
         let now = Instant::now();
         match self.schedule.due(now, ctx.input(|i| i.pointer.any_down())) {
             schedule::Due::Nothing => {}
@@ -865,6 +903,34 @@ mod tests {
             _ => panic!("expected a preview while exporting"),
         }
         assert!(app.work.is_exporting() && app.schedule.rendering());
+    }
+
+    #[test]
+    fn ctrl_s_saves_the_open_project() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(
+            &ctx,
+            worker::Gpu::Own(wgpu::Backends::PRIMARY),
+            None,
+            Some(Smoke::new("unused-smoke.png".into())),
+        );
+        app.show_welcome = false;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("look.crtsim");
+        app.session.opened(path.clone(), None).unwrap();
+        let ctrl_s = egui::Event::Key {
+            key: SHORTCUT_SAVE,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::CTRL | egui::Modifiers::COMMAND,
+        };
+        let input = egui::RawInput {
+            events: vec![ctrl_s],
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| app.shortcuts(ctx));
+        assert!(project::read(&path).is_ok(), "{:?}", app.error);
     }
 
     #[test]

@@ -1,10 +1,12 @@
 //! What an export tells FFmpeg, worked out before any process starts, so it can be checked
 //! without FFmpeg installed.
 use crate::{
-    export::{require_encoder, Encoding, Frames, Step, Work},
+    export::{Encoding, Frames, Step, Work},
     process::Process,
-    render_config, Audio, Container, Encoder, EncodingSpeed, Options, Preset, Quality, Rate,
-    Source, Tool, TrackKind, Video, PRESET_PREFIX,
+    render_config,
+    tools::require_encoder,
+    Audio, Container, Encoder, EncodingSpeed, Options, Preset, Quality, Rate, Source, Tool,
+    TrackKind, Video, PRESET_PREFIX,
 };
 use anyhow::{ensure, Context, Result};
 use crtsim_core::config::Config;

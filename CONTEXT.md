@@ -55,3 +55,8 @@ load or a project being restored leaves the settings half applied.
 **App data**: the folder holding everything the app remembers between runs: the welcome
 acknowledged, the theme, tool window placement, personal presets, recent projects and the
 session (`crates/crtsim-desktop/src/app_data.rs`). Only that module knows the files in it.
+
+**FFmpeg setup**: whether the FFmpeg programs video work needs start, which export formats
+they can write, and how to install them (`crates/crtsim-desktop/src/ffmpeg_setup.rs`). The
+programs are found, never downloaded (`crates/crtsim-media/src/tools.rs`); see
+[the decision](docs/adr/0001-find-ffmpeg-never-download-it.md).

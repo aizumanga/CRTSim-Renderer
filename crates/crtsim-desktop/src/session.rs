@@ -261,7 +261,8 @@ impl App {
             if ui
                 .add_enabled(
                     self.session.project_path().is_some(),
-                    egui::Button::new("Save project"),
+                    egui::Button::new("Save project")
+                        .shortcut_text(crate::shortcut(ctx, crate::SHORTCUT_SAVE)),
                 )
                 .clicked()
             {
