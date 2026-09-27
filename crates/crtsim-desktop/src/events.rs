@@ -18,7 +18,7 @@ impl App {
                     self.work = Work::Idle;
                     match result {
                         Ok(imported) => {
-                            self.gallery_name = file_stem(&imported.path);
+                            self.presets.name = file_stem(&imported.path);
                             self.replace_config(imported.config);
                             if let Some(options) = imported.options {
                                 self.video_options = options;

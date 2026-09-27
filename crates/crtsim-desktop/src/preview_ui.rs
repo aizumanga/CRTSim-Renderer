@@ -129,8 +129,7 @@ impl App {
     fn video_controls(&mut self, ui: &mut egui::Ui) {
         // A gallery in its own OS window has its own keyboard focus, so it no longer steals
         // the arrow keys below; only the embedded fallback shares this viewport's input.
-        let galleries_overlap =
-            ui.ctx().embed_viewports() && (self.show_gallery || self.show_lut_gallery);
+        let galleries_overlap = ui.ctx().embed_viewports() && (self.presets.open || self.luts.open);
         let enabled = self.can_start_work() && !galleries_overlap;
         let playing = self.playback.is_some();
         let Some(timeline) = &mut self.timeline else {

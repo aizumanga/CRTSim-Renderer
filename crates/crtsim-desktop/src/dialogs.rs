@@ -212,7 +212,7 @@ impl App {
             }
             Dialog::LoadPreset => match files::load_preset(&path, self.input.dimensions()) {
                 Ok(c) => {
-                    self.gallery_name = file_stem(&path);
+                    self.presets.name = file_stem(&path);
                     self.replace_config(c);
                     self.status = format!("Loaded preset {}", path.display());
                     self.error = None;

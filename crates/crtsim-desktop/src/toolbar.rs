@@ -23,7 +23,7 @@ impl App {
                 ui.menu_button("Presets", |ui| {
                     if ui.button("Preset gallery…").clicked() {
                         self.refresh_gallery();
-                        self.show_gallery = true;
+                        self.presets.open = true;
                         ui.close_menu();
                     }
                     for (label, kind) in [

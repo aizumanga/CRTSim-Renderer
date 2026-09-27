@@ -97,22 +97,16 @@ struct App {
     theme: theme::Theme,
     show_welcome: bool,
     show_credits: bool,
-    show_gallery: bool,
-    show_lut_gallery: bool,
     show_queue: bool,
     /// The batch export queue.
     queue: batch::Queue,
-    lut_gallery_search: String,
-    gallery_entries: Vec<gallery::Entry>,
+    presets: gallery::PresetGallery,
+    luts: lut_gallery::LutGallery,
     /// A look previewed from a gallery without being applied; see `audition`.
     audition: Option<audition::Audition>,
     /// What a gallery pointed at this frame, for `settle_audition`.
     offered: Option<audition::Audition>,
-    included_luts: std::collections::HashMap<usize, Arc<crtsim_core::workflow::Lut>>,
     thumbnails: thumbnails::Thumbnails,
-    gallery_warnings: Vec<String>,
-    gallery_name: String,
-    description_edit: Option<(String, String)>,
     tool_windows: app_data::Layout,
     tool_windows_saved: app_data::Layout,
     config: Config,
@@ -241,10 +235,11 @@ impl App {
             Some(smoke) => smoke.welcome,
             None => store.as_ref().is_none_or(app_data::Store::welcome_needed),
         };
-        let (show_gallery, show_lut_gallery) = smoke
-            .as_ref()
-            .map_or((false, false), |smoke| (smoke.gallery, smoke.lut_gallery));
-        let (gallery_entries, gallery_warnings) = gallery::entries(store.as_ref());
+        let mut presets = gallery::PresetGallery::new(store.as_ref());
+        let mut luts = lut_gallery::LutGallery::default();
+        if let Some(smoke) = &smoke {
+            (presets.open, luts.open) = (smoke.gallery, smoke.lut_gallery);
+        }
         let mut app = Self {
             session: Default::default(),
             ui_context: ctx.clone(),
@@ -258,19 +253,13 @@ impl App {
             theme,
             show_welcome,
             show_credits: false,
-            show_gallery,
-            show_lut_gallery,
             show_queue: false,
             queue: Default::default(),
-            lut_gallery_search: String::new(),
-            gallery_entries,
+            presets,
+            luts,
             audition: None,
             offered: None,
-            included_luts: Default::default(),
             thumbnails: Default::default(),
-            gallery_warnings,
-            gallery_name: String::new(),
-            description_edit: None,
             tool_windows_saved: tool_windows.clone(),
             tool_windows,
             history: model::History::new(config.clone()),
@@ -700,8 +689,8 @@ impl Drop for App {
 fn main() -> eframe::Result<()> {
     let mut input = None;
     let mut smoke = None;
-    let mut backends = wgpu::Backends::PRIMARY;
-    let mut pinned_backend = false;
+    // The backend --backend asks for; none lets wgpu choose among the primary ones.
+    let mut backend = None;
     let mut smoke_welcome = false;
     let mut smoke_gallery = false;
     let mut smoke_lut_gallery = false;
@@ -714,15 +703,11 @@ fn main() -> eframe::Result<()> {
             "--smoke-lut-gallery" => smoke_lut_gallery = true,
             "--smoke-export" => smoke_export = true,
             "--backend" => {
-                pinned_backend = true;
-                backends = match args.next().as_deref() {
-                    Some("vulkan") => wgpu::Backends::VULKAN,
-                    Some("dx12") => wgpu::Backends::DX12,
-                    Some("metal") => wgpu::Backends::METAL,
-                    Some("auto") => {
-                        pinned_backend = false;
-                        wgpu::Backends::PRIMARY
-                    }
+                backend = match args.next().as_deref() {
+                    Some("vulkan") => Some(wgpu::Backends::VULKAN),
+                    Some("dx12") => Some(wgpu::Backends::DX12),
+                    Some("metal") => Some(wgpu::Backends::METAL),
+                    Some("auto") => None,
                     _ => {
                         eprintln!("Expected --backend auto|vulkan|dx12|metal");
                         std::process::exit(2);
@@ -767,11 +752,7 @@ fn main() -> eframe::Result<()> {
                 // pinned, OpenGL stays available so the window still opens on a machine with
                 // no modern backend and can say so, as it could when the interface drew with
                 // GL; rendering there falls back to its own device, exactly as before.
-                supported_backends: if pinned_backend {
-                    backends
-                } else {
-                    backends | wgpu::Backends::GL
-                },
+                supported_backends: backend.unwrap_or(wgpu::Backends::PRIMARY | wgpu::Backends::GL),
                 // The window only needs a device big enough for the window; the renderer needs
                 // one big enough for a full-resolution export, so ask for the larger of the
                 // two. Not of a GL adapter, which cannot meet them -- asking would stop the
@@ -801,7 +782,7 @@ fn main() -> eframe::Result<()> {
                 Some(state) if state.adapter.get_info().backend != wgpu::Backend::Gl => {
                     worker::Gpu::Shared(state.clone())
                 }
-                _ => worker::Gpu::Own(backends),
+                _ => worker::Gpu::Own(backend.unwrap_or(wgpu::Backends::PRIMARY)),
             };
             let smoke = smoke.map(|screenshot| {
                 let mut smoke = Smoke::new(screenshot);

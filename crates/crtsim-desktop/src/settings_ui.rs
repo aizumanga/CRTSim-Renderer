@@ -335,7 +335,7 @@ impl App {
             });
             if ui.button("LUT gallery…").clicked() {
                 self.stop_playback();
-                self.show_lut_gallery = true;
+                self.luts.open = true;
             }
             if ui.button("Import 3D .cube…").clicked() {
                 self.dialog(Dialog::Lut, &ui.ctx().clone());

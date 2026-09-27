@@ -12,14 +12,15 @@ const ARTICLE: &str =
 
 impl App {
     pub(crate) fn gallery_window(&mut self, ctx: &egui::Context) {
-        if !self.show_gallery || self.show_welcome {
+        if !self.presets.open || self.show_welcome {
             return;
         }
         let mut selected = None;
         let mut hovered = None;
         let mut edit = None;
         let wanted: Vec<(String, Config)> = self
-            .gallery_entries
+            .presets
+            .entries
             .iter()
             .map(|e| (e.name.clone(), e.config.clone()))
             .collect();
@@ -39,7 +40,7 @@ impl App {
                 );
                 ui.horizontal(|ui| {
                     ui.label("Name");
-                    ui.text_edit_singleline(&mut self.gallery_name);
+                    ui.text_edit_singleline(&mut self.presets.name);
                     if ui
                         .add_enabled(self.store.is_some(), egui::Button::new("Save current"))
                         .clicked()
@@ -77,9 +78,9 @@ impl App {
                 if let Some(error) = &self.error {
                     ui.colored_label(ui.visuals().error_fg_color, error);
                 }
-                if !self.gallery_warnings.is_empty() {
+                if !self.presets.warnings.is_empty() {
                     egui::CollapsingHeader::new("Skipped preset files").show(ui, |ui| {
-                        for warning in &self.gallery_warnings {
+                        for warning in &self.presets.warnings {
                             ui.label(warning);
                         }
                     });
@@ -95,7 +96,7 @@ impl App {
                                 "Included presets"
                             });
                             let mut count = 0;
-                            for entry in self.gallery_entries.iter().filter(|e| e.user == user) {
+                            for entry in self.presets.entries.iter().filter(|e| e.user == user) {
                                 count += 1;
                                 let response = preset_entry(
                                     ui,
@@ -126,13 +127,13 @@ impl App {
                     });
             });
             if let Some(edit) = edit.take() {
-                self.description_edit = Some(edit);
+                self.presets.editing = Some(edit);
             }
             // Shown inside the gallery's own window, next to the preset being edited.
             self.description_window(ui.ctx());
         });
         self.store_window_state("Preset gallery", window);
-        self.show_gallery = open;
+        self.presets.open = open;
         if let Some((label, config)) = hovered.filter(|_| open) {
             self.offer_audition(label, config);
         }
@@ -142,15 +143,15 @@ impl App {
     }
     /// Reads the personal presets again, which may have changed on disk.
     pub(crate) fn refresh_gallery(&mut self) {
-        (self.gallery_entries, self.gallery_warnings) = gallery::entries(self.store.as_ref());
+        self.presets.refresh(self.store.as_ref());
     }
     fn save_to_gallery(&mut self) {
         let Some(store) = &self.store else {
             return;
         };
-        match store.save_preset(&self.gallery_name, &self.config, self.input.dimensions()) {
+        match store.save_preset(&self.presets.name, &self.config, self.input.dimensions()) {
             Ok(()) => {
-                self.status = format!("Saved '{}' to My presets", self.gallery_name);
+                self.status = format!("Saved '{}' to My presets", self.presets.name);
                 self.error = None;
                 self.refresh_gallery();
             }
@@ -158,7 +159,7 @@ impl App {
         }
     }
     fn description_window(&mut self, ctx: &egui::Context) {
-        if let Some((name, mut description)) = self.description_edit.clone() {
+        if let Some((name, mut description)) = self.presets.editing.clone() {
             let mut editing = true;
             let mut save = false;
             egui::Window::new(format!("Description — {name}"))
@@ -193,7 +194,7 @@ impl App {
                     Err(e) => self.error = Some(format!("Cannot save description: {e:#}")),
                 }
             }
-            self.description_edit = editing.then_some((name, description));
+            self.presets.editing = editing.then_some((name, description));
         }
     }
     fn credit_text(ui: &mut egui::Ui) {
