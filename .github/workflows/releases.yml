@@ -40,7 +40,7 @@ jobs:
         if: github.event_name != 'pull_request'
         run: cargo test --workspace --locked
       - name: Build
-        run: cargo build --release --locked -p crtsim-desktop -p crtsim-cli
+        run: cargo build --release --locked -p crtsim-app -p crtsim-cli
       - name: Package binaries and licenses
         shell: bash
         env:

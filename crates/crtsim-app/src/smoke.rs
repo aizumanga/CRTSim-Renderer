@@ -1,9 +1,9 @@
 //! A CI run: open the window, wait for a rendered preview, save a screenshot and quit.
 use crate::*;
 
-/// What a smoke run shows and where it saves the screenshot. It never reads or writes the app
-/// data a person's own runs keep.
-pub(crate) struct Smoke {
+/// What a smoke run shows and where it saves the screenshot. It reads the app data it is given,
+/// such as a theme or presets to show, but never saves to it.
+pub struct Smoke {
     pub screenshot: PathBuf,
     /// Screenshot the welcome as it first appears, not waiting for a preview.
     pub welcome: bool,

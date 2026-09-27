@@ -11,7 +11,7 @@ order; the polish track can run alongside.
 | 1 ✓ | `App::new` takes its app-data store. `main` passes the user's folder; tests pass a temporary one. | No test can write to the real app data. |
 | 2 ✓ | Upgrade wgpu and eframe to current releases (wgpu 30, eframe 0.36). | The golden images are unchanged. |
 | 3 ✓ | One frame interface for the renderer: callers drive a sequence, which knows its timing; a still is a sequence of one frame; nothing blocks inside. | The golden images, reached through the new interface. |
-| 4 | `crtsim-desktop` becomes `crtsim-app`, a library, with a small native `main`. | The desktop builds and behaves as before. |
+| 4 ✓ | `crtsim-desktop` becomes `crtsim-app`, a library, with a small native `main` (the executable keeps its name). | The desktop builds and behaves as before. |
 | 5 | The render worker speaks renders and typed failures on one stream, with two adapters: a thread and an async task. | The worker's tests run against both adapters. |
 | 6 | The web entry point: WebGPU check, files by picker and drop, downloads, app data in IndexedDB. | Opens, previews and saves a PNG in Chrome and Firefox. |
 | 7 | Web encoders: WebCodecs for MP4 and WebM with a muxer, and Rust encoders for GIF and animated WebP. | Each format opens in the browser that wrote it. |

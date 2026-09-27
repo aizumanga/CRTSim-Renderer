@@ -79,7 +79,7 @@ Old presets load with reference processing and neutral grading. Newly saved pres
 With stable Rust installed, run from the repository folder:
 
 ```sh
-cargo run --release --locked -p crtsim-desktop
+cargo run --release --locked -p crtsim-app
 ```
 
 Use **Open File** or drag one PNG/JPEG/WebP/BMP/GIF into the window. Adjust the controls on the left;
@@ -112,7 +112,7 @@ The native file picker uses the desktop portal. On Arch/KDE, ensure `xdg-desktop
 are installed and working in your logged-in desktop session. Drag-and-drop or passing an image path also works:
 
 ```sh
-cargo run --release --locked -p crtsim-desktop -- "image.png" --backend vulkan
+cargo run --release --locked -p crtsim-app -- "image.png" --backend vulkan
 ```
 
 Windows uses the system file picker and normally DX12 for rendering; macOS uses its system picker and Metal.

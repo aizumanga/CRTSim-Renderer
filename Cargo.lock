@@ -716,6 +716,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
 
 [[package]]
+name = "crtsim-app"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "crtsim-core",
+ "crtsim-media",
+ "directories",
+ "eframe",
+ "image 0.24.9",
+ "pollster 0.3.0",
+ "rfd",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "wgpu",
+]
+
+[[package]]
 name = "crtsim-cli"
 version = "0.6.0"
 dependencies = [
@@ -741,24 +759,6 @@ dependencies = [
  "pollster 0.3.0",
  "serde",
  "serde_json",
- "wgpu",
-]
-
-[[package]]
-name = "crtsim-desktop"
-version = "0.6.0"
-dependencies = [
- "anyhow",
- "crtsim-core",
- "crtsim-media",
- "directories",
- "eframe",
- "image 0.24.9",
- "pollster 0.3.0",
- "rfd",
- "serde",
- "serde_json",
- "tempfile",
  "wgpu",
 ]
 

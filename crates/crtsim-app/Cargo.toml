@@ -1,8 +1,16 @@
 [package]
-name = "crtsim-desktop"
+name = "crtsim-app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+# The executable keeps its name: packages, the AppImage and desktop shortcuts start it by it.
+[[bin]]
+name = "crtsim-desktop"
+path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true

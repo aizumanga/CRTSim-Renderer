@@ -67,8 +67,8 @@ jobs:
           cargo test --locked -p crtsim-core video_history -- --ignored --nocapture
           cargo test --locked -p crtsim-core interlaced_ticks_scan_alternate_fields -- --ignored --nocapture
           cargo test --locked -p crtsim-media --test video -- --ignored --nocapture --test-threads=1
-          cargo test --locked -p crtsim-desktop a_preview_finishes_while_an_export_is_still_running -- --ignored --nocapture
-          cargo test --locked -p crtsim-desktop a_video_plays_through_the_worker_to_its_end -- --ignored --nocapture
+          cargo test --locked -p crtsim-app a_preview_finishes_while_an_export_is_still_running -- --ignored --nocapture
+          cargo test --locked -p crtsim-app a_video_plays_through_the_worker_to_its_end -- --ignored --nocapture
       - name: Render resolution and phase fixtures
         shell: bash
         run: |
@@ -86,19 +86,19 @@ jobs:
           LIBGL_ALWAYS_SOFTWARE: '1'
           WINIT_UNIX_BACKEND: x11
         run: |
-          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-desktop -- --backend vulkan --smoke-test output/desktop.png
+          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-app -- --backend vulkan --smoke-test output/desktop.png
           mkdir -p "$CRTSIM_DATA_DIR"
           echo 'sky-diary' > "$CRTSIM_DATA_DIR/theme-v1.txt"
-          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-desktop -- --smoke-test output/welcome.png --smoke-welcome
+          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-app -- --smoke-test output/welcome.png --smoke-welcome
           mkdir -p "$CRTSIM_DATA_DIR/presets"
           cp output/general.json "$CRTSIM_DATA_DIR/presets/Animation CRT.json"
           echo 'A personal description for animation, with a soft mask and gentle bloom.' > "$CRTSIM_DATA_DIR/presets/Animation CRT.txt"
-          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-desktop -- --backend vulkan --smoke-test output/gallery.png --smoke-gallery
-          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-desktop -- --backend vulkan --smoke-test output/lut-gallery.png --smoke-lut-gallery
-          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-desktop -- output/video-input.mkv --backend vulkan --smoke-test output/video-desktop.png
-          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-desktop -- output/video-input.mkv --backend vulkan --smoke-test output/video-export-window.png --smoke-export
+          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-app -- --backend vulkan --smoke-test output/gallery.png --smoke-gallery
+          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-app -- --backend vulkan --smoke-test output/lut-gallery.png --smoke-lut-gallery
+          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-app -- output/video-input.mkv --backend vulkan --smoke-test output/video-desktop.png
+          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-app -- output/video-input.mkv --backend vulkan --smoke-test output/video-export-window.png --smoke-export
           ffmpeg -v error -f lavfi -i testsrc2=size=160x120:rate=10 -t 1 -c:v gif -loop 0 output/animation-input.gif
-          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-desktop -- output/animation-input.gif --backend vulkan --smoke-test output/animation-desktop.png
+          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-app -- output/animation-input.gif --backend vulkan --smoke-test output/animation-desktop.png
       - uses: actions/upload-artifact@v4
         # Runs on failure too: a golden mismatch writes its rendered and diff images here.
         if: always()

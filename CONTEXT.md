@@ -15,7 +15,7 @@ one frame persists into the next. A video is a sequence with a timing and a fram
 first frame already has the glow of a picture that has been on screen.
 
 **Preview schedule**: decides whether the preview on screen is out of date and when to render
-the next one (`crates/crtsim-desktop/src/schedule.rs`). One preview renders at a time.
+the next one (`crates/crtsim-app/src/schedule.rs`). One preview renders at a time.
 
 **Revision**: counts the changes to what the preview should show. A preview is of the revision
 it was asked for, and one that comes back after a newer change is not shown.
@@ -31,9 +31,9 @@ their undo history or an export.
 
 **Timeline**: where the editor is in an open video: the frame on screen, the frame the
 controls have picked to go to, and the time playing starts from
-(`crates/crtsim-desktop/src/timeline.rs`). There is one only while a video or animation is open.
+(`crates/crtsim-app/src/timeline.rs`). There is one only while a video or animation is open.
 
-**Playback**: playing a video in the preview (`crates/crtsim-desktop/src/playback.rs`). The
+**Playback**: playing a video in the preview (`crates/crtsim-app/src/playback.rs`). The
 worker renders frames ahead into a small buffer, and each is shown when its time comes. Frames
 already overdue are skipped rather than shown late.
 
@@ -49,23 +49,23 @@ has one at most; choosing either replaces the other (`Config::set_lut`, `Config:
 personal preset; the LUT gallery decodes each included LUT once and shares it.
 
 **Batch queue**: exports that each render one file with the settings in use when they were
-added, one at a time and in order (`crates/crtsim-desktop/src/batch.rs`). Each output is named
+added, one at a time and in order (`crates/crtsim-app/src/batch.rs`). Each output is named
 after its source and never replaces a file; cancelling a job pauses the queue.
 
 **Project**: a source, its settings and the batch queue, saved as a `.crtsim` file to pick up
-later (`crates/crtsim-desktop/src/project.rs`).
+later (`crates/crtsim-app/src/project.rs`).
 
 **Session**: the project the app saves to its app data every two seconds, and offers to
-recover on the next start (`crates/crtsim-desktop/src/session.rs`, which also keeps the project
+recover on the next start (`crates/crtsim-app/src/session.rs`, which also keeps the project
 file open and the recent ones). It is never saved over a session still on offer, nor while a
 load or a project being restored leaves the settings half applied.
 
 **App data**: the folder holding everything the app remembers between runs: the welcome
 acknowledged, the theme, tool window placement, personal presets, recent projects and the
-session (`crates/crtsim-desktop/src/app_data.rs`). Only that module knows the files in it.
+session (`crates/crtsim-app/src/app_data.rs`). Only that module knows the files in it.
 
 **FFmpeg setup**: whether the FFmpeg programs video work needs start, which export formats
-they can write, and how to install them (`crates/crtsim-desktop/src/ffmpeg_setup.rs`). The
+they can write, and how to install them (`crates/crtsim-app/src/ffmpeg_setup.rs`). The
 programs are found, never downloaded (`crates/crtsim-media/src/tools.rs`); see
 [the decision](docs/adr/0001-find-ffmpeg-never-download-it.md).
 
