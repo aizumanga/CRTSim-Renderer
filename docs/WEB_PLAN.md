@@ -8,8 +8,8 @@ order; the polish track can run alongside.
 
 | Step | Work | Proven by |
 | --- | --- | --- |
-| 1 | `App::new` takes its app-data store. `main` passes the user's folder; tests pass a temporary one. | No test can write to the real app data. |
-| 2 | Upgrade wgpu and eframe to current releases. | The golden images are unchanged. |
+| 1 ✓ | `App::new` takes its app-data store. `main` passes the user's folder; tests pass a temporary one. | No test can write to the real app data. |
+| 2 ✓ | Upgrade wgpu and eframe to current releases (wgpu 30, eframe 0.36). | The golden images are unchanged. |
 | 3 | One frame interface for the renderer: callers drive a sequence, which knows its timing; a still is a sequence of one frame; nothing blocks inside. | The golden images, reached through the new interface. |
 | 4 | `crtsim-desktop` becomes `crtsim-app`, a library, with a small native `main`. | The desktop builds and behaves as before. |
 | 5 | The render worker speaks renders and typed failures on one stream, with two adapters: a thread and an async task. | The worker's tests run against both adapters. |

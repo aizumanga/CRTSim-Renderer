@@ -310,7 +310,9 @@ mod tests {
         // The window draws the missing programs and how to install them.
         app.ffmpeg.checking = None;
         app.ffmpeg.check = Some(missing());
-        let _ = ctx.run(Default::default(), |ctx| app.ffmpeg_window(ctx));
+        ctx.run_ui(Default::default(), |ui| app.ffmpeg_window(ui.ctx()))
+            .textures_delta
+            .clear();
         assert!(app.ffmpeg.open);
     }
 

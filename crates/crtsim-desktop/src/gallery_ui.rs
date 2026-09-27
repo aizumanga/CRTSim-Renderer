@@ -166,7 +166,7 @@ impl App {
                 .open(&mut editing)
                 .collapsible(false)
                 .default_width(400.)
-                .constrain_to(ctx.screen_rect())
+                .constrain_to(ctx.content_rect())
                 .show(ctx, |ui| {
                     ui.add(
                         egui::TextEdit::multiline(&mut description)
@@ -316,7 +316,7 @@ fn preset_entry(
                 } else {
                     &entry.description
                 };
-                ui.add(egui::Label::new(description).wrap(true));
+                ui.add(egui::Label::new(description).wrap());
                 preset_differences(ui, entry, current);
             });
         });
@@ -340,7 +340,7 @@ fn preset_differences(ui: &mut egui::Ui, entry: &gallery::Entry, current: &Confi
         "Differs from your settings in {} {noun}",
         changes.len()
     ))
-    .id_source(("preset differences", &entry.name, entry.user))
+    .id_salt(("preset differences", &entry.name, entry.user))
     .show(ui, |ui| {
         egui::Grid::new(("preset difference grid", &entry.name, entry.user))
             .striped(true)

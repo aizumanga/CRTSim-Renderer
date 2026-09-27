@@ -595,7 +595,8 @@ impl App {
 }
 
 impl eframe::App for App {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = &ui.ctx().clone();
         self.video_export_window(ctx);
         self.tick_playback(ctx);
         self.recovery_window(ctx);
@@ -604,30 +605,34 @@ impl eframe::App for App {
         self.autosave();
         ctx.request_repaint_after(Duration::from_secs(2));
         self.receive(ctx);
-        if !self.modal_open() && !ctx.wants_keyboard_input() {
+        if !self.modal_open() && !ctx.egui_wants_keyboard_input() {
             self.shortcuts(ctx);
         }
         if self.can_start_work() {
-            let dropped = ctx.input(|i| i.raw.dropped_files.first().and_then(|f| f.path.clone()));
+            let dropped = ctx.input(|i| {
+                i.raw
+                    .dropped_files
+                    .first()
+                    .map(|f| f.path().to_path_buf())
+                    .filter(|path| !path.as_os_str().is_empty())
+            });
             if let Some(path) = dropped {
                 self.load(path);
             }
         }
         // A modal file dialog freezes edits so its eventual result uses the displayed settings.
-        egui::TopBottomPanel::top("toolbar")
-            .exact_height(42.)
-            .show(ctx, |ui| {
-                let rect = ui.max_rect();
-                chrome::gradient(
-                    ui.painter(),
-                    rect,
-                    ui.visuals().extreme_bg_color,
-                    ui.visuals().panel_fill,
-                );
-                chrome::bevel(ui, rect);
-                ui.add_enabled_ui(!self.show_welcome, |ui| self.toolbar(ui, ctx));
-            });
-        egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
+        egui::Panel::top("toolbar").exact_size(42.).show(ui, |ui| {
+            let rect = ui.max_rect();
+            chrome::gradient(
+                ui.painter(),
+                rect,
+                ui.visuals().extreme_bg_color,
+                ui.visuals().panel_fill,
+            );
+            chrome::bevel(ui, rect);
+            ui.add_enabled_ui(!self.show_welcome, |ui| self.toolbar(ui, ctx));
+        });
+        egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
                 chrome::status_light(
                     ui,
@@ -665,18 +670,18 @@ impl eframe::App for App {
                 });
             }
         });
-        egui::SidePanel::left("settings")
-            .default_width(310.)
-            .min_width(280.)
+        egui::Panel::left("settings")
+            .default_size(310.)
+            .min_size(280.)
             .resizable(true)
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 ui.add_enabled_ui(!self.modal_open(), |ui| {
                     egui::ScrollArea::vertical().show(ui, |ui| self.settings(ui));
                 });
             });
         egui::CentralPanel::default()
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(egui::Color32::from_rgb(16, 35, 55))
                     .inner_margin(12.)
                     .stroke(egui::Stroke::new(
@@ -684,7 +689,7 @@ impl eframe::App for App {
                         egui::Color32::from_rgb(75, 117, 155),
                     )),
             )
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 chrome::preview_style(ui);
                 ui.add_enabled_ui(!self.modal_open(), |ui| self.preview(ui));
             });
@@ -725,6 +730,21 @@ impl Drop for App {
             let _ = thread.join();
         }
     }
+}
+
+/// wgpu fails a window's surface reconfigure, on a resize say, when another thread submits work
+/// while it waits for the device to go idle: here, the worker rendering on the window's device.
+/// The surface keeps its old configuration and egui configures it again on the next frame, so
+/// that one error is only logged. Every other error still panics, as wgpu's own handler does.
+fn tolerate_busy_reconfigure(device: &wgpu::Device) {
+    device.on_uncaptured_error(Arc::new(|error: wgpu::Error| {
+        let text = error.to_string();
+        if text.contains("before reconfiguring the Surface") {
+            eprintln!("Window resize deferred while rendering: {text}");
+            return;
+        }
+        panic!("wgpu error: {text}");
+    }));
 }
 
 fn main() -> eframe::Result<()> {
@@ -789,27 +809,40 @@ fn main() -> eframe::Result<()> {
             // wgpu, so the interface draws on the same device the CRT frames are rendered on.
             renderer: eframe::Renderer::Wgpu,
             wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
-                // Honour --backend, which egui would otherwise pick for itself. Without one
-                // pinned, OpenGL stays available so the window still opens on a machine with
-                // no modern backend and can say so, as it could when the interface drew with
-                // GL; rendering there falls back to its own device, exactly as before.
-                supported_backends: backend.unwrap_or(wgpu::Backends::PRIMARY | wgpu::Backends::GL),
-                // The window only needs a device big enough for the window; the renderer needs
-                // one big enough for a full-resolution export, so ask for the larger of the
-                // two. Not of a GL adapter, which cannot meet them -- asking would stop the
-                // window opening at all, which is the failure this fallback exists to avoid.
-                device_descriptor: std::sync::Arc::new(|adapter: &wgpu::Adapter| {
-                    wgpu::DeviceDescriptor {
-                        label: Some("CRTSim"),
-                        required_features: wgpu::Features::empty(),
-                        required_limits: if adapter.get_info().backend == wgpu::Backend::Gl {
-                            wgpu::Limits::downlevel_webgl2_defaults()
-                                .using_resolution(adapter.limits())
-                        } else {
-                            crtsim_core::Renderer::limits(adapter)
+                wgpu_setup: eframe::egui_wgpu::WgpuSetup::CreateNew(
+                    eframe::egui_wgpu::WgpuSetupCreateNew {
+                        // Honour --backend, which egui would otherwise pick for itself. Without
+                        // one pinned, OpenGL stays available so the window still opens on a
+                        // machine with no modern backend and can say so, as it could when the
+                        // interface drew with GL; rendering there falls back to its own device,
+                        // exactly as before.
+                        instance_descriptor: wgpu::InstanceDescriptor {
+                            backends: backend
+                                .unwrap_or(wgpu::Backends::PRIMARY | wgpu::Backends::GL),
+                            ..wgpu::InstanceDescriptor::new_without_display_handle()
                         },
-                    }
-                }),
+                        // The window only needs a device big enough for the window; the
+                        // renderer needs one big enough for a full-resolution export, so ask
+                        // for the larger of the two. Not of a GL adapter, which cannot meet
+                        // them -- asking would stop the window opening at all, which is the
+                        // failure this fallback exists to avoid.
+                        device_descriptor: std::sync::Arc::new(|adapter: &wgpu::Adapter| {
+                            wgpu::DeviceDescriptor {
+                                label: Some("CRTSim"),
+                                required_features: wgpu::Features::empty(),
+                                required_limits: if adapter.get_info().backend == wgpu::Backend::Gl
+                                {
+                                    wgpu::Limits::downlevel_webgl2_defaults()
+                                        .using_resolution(adapter.limits())
+                                } else {
+                                    crtsim_core::Renderer::limits(adapter)
+                                },
+                                ..Default::default()
+                            }
+                        }),
+                        ..eframe::egui_wgpu::WgpuSetupCreateNew::without_display_handle()
+                    },
+                ),
                 ..Default::default()
             },
             ..Default::default()
@@ -821,6 +854,7 @@ fn main() -> eframe::Result<()> {
                 // Sharing is only worth it on a device that can also do the rendering. A GL
                 // fallback window keeps the interface alive; the renderer makes its own.
                 Some(state) if state.adapter.get_info().backend != wgpu::Backend::Gl => {
+                    tolerate_busy_reconfigure(&state.device);
                     worker::Gpu::Shared(state.clone())
                 }
                 _ => worker::Gpu::Own(backend.unwrap_or(wgpu::Backends::PRIMARY)),
@@ -834,16 +868,19 @@ fn main() -> eframe::Result<()> {
                 smoke
             });
             if smoke.is_some() {
-                // Keep galleries inside the main window so the smoke screenshot captures them.
+                // Keep galleries inside the main window so the smoke screenshot captures them,
+                // and show windows at once rather than fading in, so it captures them whole.
                 cc.egui_ctx.set_embed_viewports(true);
+                cc.egui_ctx
+                    .all_styles_mut(|style| style.animation_time = 0.);
             }
-            Box::new(App::new(
+            Ok(Box::new(App::new(
                 &cc.egui_ctx,
                 gpu,
                 app_data::Store::discover(),
                 input,
                 smoke,
-            ))
+            )))
         }),
     )
 }
@@ -951,7 +988,9 @@ mod tests {
             events: vec![ctrl_s],
             ..Default::default()
         };
-        let _ = ctx.run(input, |ctx| app.shortcuts(ctx));
+        ctx.run_ui(input, |ui| app.shortcuts(ui.ctx()))
+            .textures_delta
+            .clear();
         assert!(project::read(&path).is_ok(), "{:?}", app.error);
     }
 

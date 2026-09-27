@@ -441,7 +441,7 @@ fn animation_settings(
         if let Some(seconds) = options.max_seconds.as_mut() {
             ui.add(
                 egui::DragValue::new(seconds)
-                    .clamp_range(0.1..=600.)
+                    .range(0.1..=600.)
                     .speed(0.1)
                     .suffix(" s"),
             );

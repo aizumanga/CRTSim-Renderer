@@ -47,6 +47,7 @@ pub fn monitor(ui: &mut egui::Ui) {
         3.,
         Color32::from_rgb(23, 51, 80),
         Stroke::new(1.0_f32, ui.visuals().text_color()),
+        egui::StrokeKind::Middle,
     );
     gradient(
         ui.painter(),
@@ -98,10 +99,10 @@ impl<'a> Section<'a> {
         self
     }
     pub fn show<R>(self, ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui) -> R) {
-        let response = egui::Frame::none()
+        let response = egui::Frame::NONE
             .fill(ui.visuals().faint_bg_color)
             .stroke(ui.visuals().window_stroke)
-            .rounding(3.)
+            .corner_radius(3.)
             .inner_margin(7.)
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
@@ -199,26 +200,31 @@ pub fn tool_window(
     }
     let mut on_top = window.on_top;
     let mut live = None;
+    // egui calls this once a frame, so the contents, which are drawn once, are taken.
+    let mut contents = Some(contents);
     let open = ctx.show_viewport_immediate(
         egui::ViewportId::from_hash_of(title),
         builder,
-        |ctx, class| {
-            if class == egui::ViewportClass::Embedded {
+        |ui, class| {
+            let ctx = ui.ctx().clone();
+            if class == egui::ViewportClass::EmbeddedWindow {
                 // An in-app window already floats above the panels, so keep-on-top has
                 // nothing to do and no native geometry to remember.
                 let mut open = true;
                 egui::Window::new(title)
                     .open(&mut open)
                     .default_size(default_size)
-                    .constrain_to(ctx.screen_rect())
-                    .show(ctx, contents);
+                    .constrain_to(ctx.content_rect())
+                    .show(&ctx, |ui| contents.take().map(|contents| contents(ui)));
                 open
             } else {
-                egui::CentralPanel::default().show(ctx, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     ui.checkbox(&mut on_top, "Keep on top")
                         .on_hover_text("Keep this window above the main window");
                     ui.separator();
-                    contents(ui);
+                    if let Some(contents) = contents.take() {
+                        contents(ui);
+                    }
                 });
                 live = ctx.input(|i| {
                     let info = i.viewport();

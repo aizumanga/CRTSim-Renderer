@@ -62,7 +62,9 @@ pub(crate) fn slider(
             *value = default;
         }
         let slider = Keyed::new(range).logarithmic(logarithmic).reset_to(default);
-        slider.show(ui, value, |slider| slider.clamp_to_range(false).text(label));
+        slider.show(ui, value, |slider| {
+            slider.clamping(egui::SliderClamping::Never).text(label)
+        });
     });
 }
 
@@ -212,7 +214,7 @@ pub(crate) fn choice<T: PartialEq + Clone>(
 
 pub(crate) fn resolution(ui: &mut egui::Ui, label: &str, value: &mut String, presets: &[&str]) {
     ui.horizontal(|ui| {
-        egui::ComboBox::from_id_source(label)
+        egui::ComboBox::from_id_salt(label)
             .selected_text(label)
             .show_ui(ui, |ui| {
                 for preset in presets {
@@ -280,8 +282,8 @@ mod tests {
                 ..Default::default()
             };
             let mut left_over = vec![];
-            let _ = ctx.run(input, |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            let mut output = ctx.run_ui(input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     let mut shown = value.get();
                     Keyed::new(0.0..=1.)
                         .reset_to(0.2)
@@ -290,6 +292,8 @@ mod tests {
                     left_over = ui.input(|i| i.events.clone());
                 });
             });
+            // No renderer takes the font atlas in a test, so its upload is dropped deliberately.
+            output.textures_delta.clear();
             left_over
         };
         let key = |key, modifiers| egui::Event::Key {
@@ -318,8 +322,8 @@ mod tests {
     fn a_choice_shows_the_chosen_name_on_the_closed_box() {
         let ctx = egui::Context::default();
         let mut value = 2;
-        let output = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 let changed = choice(ui, "Number", &mut value, &[(1, "One"), (2, "Two")]);
                 assert!(!changed);
             });
@@ -333,6 +337,8 @@ mod tests {
             })
             .collect();
         assert!(texts.iter().any(|text| text == "Two"), "{texts:?}");
+        // No renderer takes the font atlas in a test, so its upload is dropped deliberately.
+        output.textures_delta.clear();
     }
 
     #[test]

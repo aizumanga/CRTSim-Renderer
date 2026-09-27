@@ -38,8 +38,8 @@ impl Gpu {
         match self {
             Self::Own(backends) => pollster::block_on(Renderer::new(*backends)),
             Self::Shared(state) => pollster::block_on(Renderer::with_device(
-                state.device.clone(),
-                state.queue.clone(),
+                Arc::new(state.device.clone()),
+                Arc::new(state.queue.clone()),
                 state.adapter.get_info(),
             )),
         }

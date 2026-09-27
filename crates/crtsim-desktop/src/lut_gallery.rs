@@ -89,7 +89,7 @@ impl App {
                         hovered_none = button.hovered() && self.config.lut.is_some();
                     });
                     egui::ScrollArea::vertical()
-                        .id_source("nes_lut_gallery")
+                        .id_salt("nes_lut_gallery")
                         .max_height(330.)
                         .show(ui, |ui| {
                             for (index, entry) in nes_luts::ENTRIES.iter().enumerate() {

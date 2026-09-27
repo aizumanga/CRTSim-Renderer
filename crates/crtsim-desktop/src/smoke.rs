@@ -56,7 +56,7 @@ impl App {
         }
         if (smoke.welcome || ready && !thumbnails_pending) && !smoke.requested {
             smoke.requested = true;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
         }
         for event in ctx.input(|i| i.events.clone()) {
             if let egui::Event::Screenshot { image, .. } = event {

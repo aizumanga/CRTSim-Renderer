@@ -168,7 +168,7 @@ impl App {
                 let mut display_frame = timeline.picked + 1;
                 let number = ui.add(
                     egui::DragValue::new(&mut display_frame)
-                        .clamp_range(1..=timeline.frames)
+                        .range(1..=timeline.frames)
                         .speed(1),
                 );
                 timeline.picked = display_frame.saturating_sub(1).min(last);
@@ -185,7 +185,7 @@ impl App {
                 seek |= response.drag_stopped()
                     || (response.changed() && !ui.input(|i| i.pointer.any_down()));
             });
-            if !ui.ctx().wants_keyboard_input() {
+            if !ui.ctx().egui_wants_keyboard_input() {
                 toggle |= ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space));
                 // A slider that has the keyboard takes the arrows for itself.
                 let stepping = ui.ctx().memory(|m| m.focused().is_none());

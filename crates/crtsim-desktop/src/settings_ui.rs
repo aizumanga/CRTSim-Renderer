@@ -24,10 +24,10 @@ impl App {
             chrome::monitor(ui);
             ui.heading("Source");
         });
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(ui.visuals().extreme_bg_color)
             .stroke(ui.visuals().window_stroke)
-            .rounding(3.)
+            .corner_radius(3.)
             .inner_margin(9.)
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());

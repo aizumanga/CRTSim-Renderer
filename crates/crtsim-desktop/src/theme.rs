@@ -163,11 +163,11 @@ impl Theme {
         visuals.widgets.open.weak_bg_fill = active;
         visuals.widgets.open.bg_stroke = Stroke::new(1.0_f32, self.accent());
         visuals.widgets.open.fg_stroke.color = text;
-        visuals.window_rounding = egui::Rounding::same(6.);
+        visuals.window_corner_radius = egui::CornerRadius::same(6);
         visuals.window_shadow = egui::epaint::Shadow {
-            offset: egui::vec2(0., 5.),
-            blur: 14.,
-            spread: 1.,
+            offset: [0, 5],
+            blur: 14,
+            spread: 1,
             color: Color32::from_black_alpha(80),
         };
         visuals.collapsing_header_frame = true;
@@ -178,10 +178,10 @@ impl Theme {
             &mut visuals.widgets.active,
             &mut visuals.widgets.open,
         ] {
-            widget.rounding = egui::Rounding::same(3.);
+            widget.corner_radius = egui::CornerRadius::same(3);
         }
 
-        let mut style = (*ctx.style()).clone();
+        let mut style = (*ctx.global_style()).clone();
         style.visuals = visuals;
         style.spacing.item_spacing = egui::vec2(8., 8.);
         style.spacing.button_padding = egui::vec2(9., 5.);
@@ -191,7 +191,9 @@ impl Theme {
         style
             .text_styles
             .insert(egui::TextStyle::Heading, egui::FontId::proportional(18.));
-        ctx.set_style(style);
+        // The same style whatever the system's light or dark preference: the theme is the
+        // person's choice here, not the system's.
+        ctx.all_styles_mut(|each| *each = style.clone());
     }
 }
 
@@ -214,7 +216,7 @@ mod tests {
                 .iter()
                 .any(|other| other.id() == theme.id()));
             theme.apply(&ctx);
-            let style = ctx.style();
+            let style = ctx.global_style();
             assert_eq!(style.visuals.selection.bg_fill, theme.accent());
             assert_eq!(style.spacing.item_spacing, egui::vec2(8., 8.));
         }

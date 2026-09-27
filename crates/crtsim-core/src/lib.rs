@@ -292,13 +292,14 @@ impl Renderer {
     pub async fn new(backends: wgpu::Backends) -> Result<Self> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends,
-            ..Default::default()
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: None,
                 force_fallback_adapter: false,
+                apply_limit_buckets: false,
             })
             .await
             .context(
@@ -308,14 +309,12 @@ impl Renderer {
         let info = adapter.get_info();
         let limits = Self::limits(&adapter);
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: Some("CRTSim"),
-                    required_features: wgpu::Features::empty(),
-                    required_limits: limits,
-                },
-                None,
-            )
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("CRTSim"),
+                required_features: wgpu::Features::empty(),
+                required_limits: limits,
+                ..Default::default()
+            })
             .await?;
         Self::with_device(Arc::new(device), Arc::new(queue), info).await
     }
@@ -365,10 +364,10 @@ impl Renderer {
             label: Some("CRT bindings"),
             entries: &entries,
         });
-        device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let pipelines = Self::pipelines(&device, &layout);
         let prepare_pipelines = gpu_prepare::Pipelines::new(&device, &queue);
-        if let Some(error) = device.pop_error_scope().await {
+        if let Some(error) = scope.pop().await {
             anyhow::bail!("shader/pipeline validation: {error}");
         }
         let sampler = |address, filter| {
@@ -377,7 +376,7 @@ impl Renderer {
                 address_mode_v: address,
                 mag_filter: filter,
                 min_filter: filter,
-                mipmap_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::MipmapFilterMode::Linear,
                 ..Default::default()
             })
         };
@@ -408,19 +407,19 @@ impl Renderer {
     fn pipelines(device: &wgpu::Device, layout: &wgpu::BindGroupLayout) -> Pipelines {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
-            bind_group_layouts: &[layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(layout)],
+            immediate_size: 0,
         });
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("CRT WGSL"),
             source: wgpu::ShaderSource::Wgsl(SHADER.into()),
         });
         let attrs = wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3,2=>Float32x4,3=>Float32x2,4=>Float32];
-        let vertex_layout = [wgpu::VertexBufferLayout {
+        let vertex_layout = [Some(wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<mesh::Vertex>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &attrs,
-        }];
+        })];
         let pipeline = |entry: &str, format| {
             // The screen and bezel are meshes, depth-tested; everything else covers its target.
             let mesh = entry == "screen" || entry == "frame";
@@ -429,12 +428,14 @@ impl Renderer {
                 layout: Some(&pipeline_layout),
                 vertex: wgpu::VertexState {
                     module: &module,
-                    entry_point: if mesh { "mesh" } else { "quad" },
+                    entry_point: Some(if mesh { "mesh" } else { "quad" }),
+                    compilation_options: Default::default(),
                     buffers: if mesh { &vertex_layout } else { &[] },
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &module,
-                    entry_point: entry,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
                         blend: None,
@@ -451,13 +452,14 @@ impl Renderer {
                 },
                 depth_stencil: mesh.then(|| wgpu::DepthStencilState {
                     format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: true,
-                    depth_compare: wgpu::CompareFunction::Less,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Less),
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
                 multisample: Default::default(),
-                multiview: None,
+                multiview_mask: None,
+                cache: None,
             })
         };
         let surface = |mode| {
@@ -616,7 +618,7 @@ impl Renderer {
             // Report completed GPU work, not just command encoding. Small batches keep overhead bounded.
             if (step + 1) % 8 == 0 || step + 1 == ticks {
                 self.queue.submit(Some(encoder.finish()));
-                self.device.poll(wgpu::Maintain::Wait);
+                self.device.poll(wgpu::PollType::wait_indefinitely())?;
                 report(
                     0.05 + 0.75 * (step + 1) as f32 / ticks as f32,
                     format!("Simulation {}/{}", step + 1, ticks),
@@ -696,6 +698,7 @@ impl Renderer {
                 }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             pass.set_bind_group(0, &bindings, &[]);
             draw(&mut pass, &passes.screen, &self.screen);
@@ -760,9 +763,9 @@ impl Renderer {
     }
 
     /// The final target is reused by the next render, so the frame is copied out rather than
-    /// handed over: a blit on the device, not a round trip through system memory. sRGB because
-    /// that is the format egui requires of a texture it is given, and the copy is legal because
-    /// the two differ only in that.
+    /// handed over: a blit on the device, not a round trip through system memory. The copy
+    /// keeps the target's gamma-encoded `Rgba8Unorm`, the format egui requires of a texture it
+    /// is given.
     fn copy_out(&self, final_target: &Target) -> PreviewFrame {
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("preview frame"),
@@ -770,7 +773,7 @@ impl Renderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format: FORMAT,
             usage: wgpu::TextureUsages::COPY_DST
                 | wgpu::TextureUsages::COPY_SRC
                 | wgpu::TextureUsages::TEXTURE_BINDING,

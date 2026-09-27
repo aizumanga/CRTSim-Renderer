@@ -307,8 +307,8 @@ impl Pipelines {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
-            bind_group_layouts: &[&layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
         });
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("prepare WGSL"),
@@ -320,12 +320,14 @@ impl Pipelines {
                 layout: Some(&pipeline_layout),
                 vertex: wgpu::VertexState {
                     module: &module,
-                    entry_point: "quad",
+                    entry_point: Some("quad"),
+                    compilation_options: Default::default(),
                     buffers: &[],
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &module,
-                    entry_point: entry,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
                         blend: None,
@@ -335,7 +337,8 @@ impl Pipelines {
                 primitive: Default::default(),
                 depth_stencil: None,
                 multisample: Default::default(),
-                multiview: None,
+                multiview_mask: None,
+                cache: None,
             })
         };
         Self {

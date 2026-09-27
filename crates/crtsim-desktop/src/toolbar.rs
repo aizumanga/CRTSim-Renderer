@@ -17,11 +17,11 @@ impl App {
                         .clicked()
                     {
                         self.dialog(Dialog::File, ctx);
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Test card").clicked() {
                         self.show_test_card();
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     self.project_menu(ui, ctx);
@@ -30,7 +30,7 @@ impl App {
                     if ui.button("Preset gallery…").clicked() {
                         self.refresh_gallery();
                         self.presets.open = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     for (label, kind) in [
                         ("Load preset…", Dialog::LoadPreset),
@@ -39,7 +39,7 @@ impl App {
                     ] {
                         if ui.button(label).clicked() {
                             self.dialog(kind, ctx);
-                            ui.close_menu();
+                            ui.close();
                         }
                     }
                 });
@@ -59,7 +59,7 @@ impl App {
                                     Some(format!("Could not remember the selected theme: {e:#}"));
                             }
                         }
-                        ui.close_menu();
+                        ui.close();
                     }
                 });
                 ui.menu_button("Export", |ui| {
@@ -73,23 +73,23 @@ impl App {
                         .clicked()
                     {
                         self.dialog(Dialog::Export, ctx);
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .add_enabled(self.timeline.is_some(), egui::Button::new("Video…"))
                         .clicked()
                     {
                         self.open_video_export(false);
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     if ui.button("Batch queue…").clicked() {
                         self.show_queue = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("FFmpeg setup…").clicked() {
                         self.show_ffmpeg_setup();
-                        ui.close_menu();
+                        ui.close();
                     }
                 });
             });

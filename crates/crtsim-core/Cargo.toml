@@ -14,5 +14,5 @@ wgpu.workspace = true
 glam = "0.27"
 
 [dev-dependencies]
-naga = { version = "0.19", features = ["wgsl-in"] }
+naga = { version = "30.0.1", features = ["wgsl-in"] }
 pollster = "0.3"

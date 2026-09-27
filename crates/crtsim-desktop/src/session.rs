@@ -252,11 +252,11 @@ impl App {
         ui.menu_button("Project", |ui| {
             if ui.button("Open project…").clicked() {
                 self.dialog(Dialog::OpenProject, ctx);
-                ui.close_menu();
+                ui.close();
             }
             if ui.button("Save project as…").clicked() {
                 self.dialog(Dialog::SaveProject, ctx);
-                ui.close_menu();
+                ui.close();
             }
             if ui
                 .add_enabled(
@@ -269,14 +269,14 @@ impl App {
                 if let Some(path) = self.session.project_path().cloned() {
                     self.save_project_file(path);
                 }
-                ui.close_menu();
+                ui.close();
             }
             ui.separator();
             ui.label("Recent projects");
             for path in self.session.recent().to_vec() {
                 if ui.button(path.display().to_string()).clicked() {
                     self.open_project(path);
-                    ui.close_menu();
+                    ui.close();
                 }
             }
         });

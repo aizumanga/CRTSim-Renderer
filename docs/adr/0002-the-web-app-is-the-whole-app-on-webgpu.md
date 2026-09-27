@@ -36,7 +36,8 @@ JavaScript. It is served from the author's Neocities supporter site, as `.wasm`.
 ## Consequences
 
 - wgpu and eframe must be upgraded first. wgpu 0.19 asks for `maxInterStageShaderComponents`,
-  which Chrome 135 removed, so it cannot create a device in current Chrome.
+  which Chrome 135 removed, so it cannot create a device in current Chrome. (Done: wgpu 30 and
+  eframe 0.36, with every golden image unchanged.)
 - The renderer may not block. `device.poll(Maintain::Wait)` and waiting on a channel for
   `map_async` never finish on a browser's main thread.
 - The render worker gets two adapters: a thread on the desktop and an async task in the browser.

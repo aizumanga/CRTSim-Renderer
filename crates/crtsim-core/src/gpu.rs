@@ -60,14 +60,14 @@ impl Target {
 
     fn upload_level(&self, queue: &wgpu::Queue, mip_level: u32, image: &RgbaImage) {
         queue.write_texture(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: &self.texture,
                 mip_level,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
             image.as_raw(),
-            wgpu::ImageDataLayout {
+            wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(4 * image.width()),
                 rows_per_image: Some(image.height()),
@@ -122,9 +122,9 @@ impl Readback {
         let mut encoder = device.create_command_encoder(&Default::default());
         encoder.copy_texture_to_buffer(
             target.texture.as_image_copy(),
-            wgpu::ImageCopyBuffer {
+            wgpu::TexelCopyBufferInfo {
                 buffer: &self.buffer,
-                layout: wgpu::ImageDataLayout {
+                layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(self.pitch),
                     rows_per_image: Some(target.height),
@@ -138,9 +138,9 @@ impl Readback {
         slice.map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx.send(r);
         });
-        device.poll(wgpu::Maintain::Wait);
+        device.poll(wgpu::PollType::wait_indefinitely())?;
         rx.recv()??;
-        let mapped = slice.get_mapped_range();
+        let mapped = slice.get_mapped_range()?;
         let mut pixels = Vec::with_capacity((target.width * target.height * 4) as usize);
         for row in mapped.chunks_exact(self.pitch as usize) {
             pixels.extend_from_slice(&row[..target.width as usize * 4]);
@@ -180,6 +180,7 @@ impl GpuMesh {
 pub(crate) fn cleared(view: &wgpu::TextureView) -> Option<wgpu::RenderPassColorAttachment<'_>> {
     Some(wgpu::RenderPassColorAttachment {
         view,
+        depth_slice: None,
         resolve_target: None,
         ops: wgpu::Operations {
             load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -196,6 +197,7 @@ pub(crate) fn clear(encoder: &mut wgpu::CommandEncoder, target: &Target) {
         depth_stencil_attachment: None,
         timestamp_writes: None,
         occlusion_query_set: None,
+        multiview_mask: None,
     });
 }
 
@@ -212,6 +214,7 @@ pub(crate) fn fullscreen(
         depth_stencil_attachment: None,
         timestamp_writes: None,
         occlusion_query_set: None,
+        multiview_mask: None,
     });
     pass.set_pipeline(pipeline);
     pass.set_bind_group(0, bindings, &[]);

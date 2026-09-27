@@ -25,7 +25,7 @@ What stands in the way today, in `crtsim-core`:
 | The input is a CPU `RgbaImage`, uploaded each frame | `Renderer::run` | A game's frame is already a GPU texture. The round trip costs more than the effect. |
 | The renderer submits and waits: `device.poll(Maintain::Wait)` every 8 ticks and on readback | `lib.rs`, `gpu.rs` | A host records into its own frame. Browsers cannot block at all. |
 | A new uniform buffer and bind group for every tick and pass | `Renderer::uniform`, `bind` | This is fine offline, but it allocates 60 or more times a second in a game. |
-| wgpu 0.19, pinned by eframe 0.27 | `Cargo.toml` | Current Bevy and wgpu releases are far newer. |
+| ~~wgpu 0.19, pinned by eframe 0.27~~ Done: wgpu 30 and eframe 0.36 | `Cargo.toml` | Current Bevy and wgpu releases were far newer. |
 
 ## The enabling step, for every route
 
