@@ -12,7 +12,7 @@ order; the polish track can run alongside.
 | 2 ✓ | Upgrade wgpu and eframe to current releases (wgpu 30, eframe 0.36). | The golden images are unchanged. |
 | 3 ✓ | One frame interface for the renderer: callers drive a sequence, which knows its timing; a still is a sequence of one frame; nothing blocks inside. | The golden images, reached through the new interface. |
 | 4 ✓ | `crtsim-desktop` becomes `crtsim-app`, a library, with a small native `main` (the executable keeps its name). | The desktop builds and behaves as before. |
-| 5 | The render worker speaks renders and typed failures on one stream, with two adapters: a thread and an async task. | The worker's tests run against both adapters. |
+| 5 ✓ | The render worker speaks renders and typed failures on one stream, with two adapters: a thread and an async task. | The worker's tests run against both adapters. |
 | 6 | The web entry point: WebGPU check, files by picker and drop, downloads, app data in IndexedDB. | Opens, previews and saves a PNG in Chrome and Firefox. |
 | 7 | Web encoders: WebCodecs for MP4 and WebM with a muxer, and Rust encoders for GIF and animated WebP. | Each format opens in the browser that wrote it. |
 | 8 | Release and site workflows (below). | A published release reaches the site through a pull request. |
@@ -37,6 +37,23 @@ order; the polish track can run alongside.
 - **The web app declines an image larger than the GPU allows**, with a notice naming the limit.
   The desktop keeps preparing such images on the CPU, which one browser thread cannot afford.
   This belongs to the web entry point (step 6).
+
+## The worker's two runtimes (step 5, done)
+
+- **The lanes are async.** The preview lane (previews before thumbnails, stale thumbnails
+  dropped) and the work lane (loading, exports, playback) are each one `async fn`. On the
+  desktop, `Runtime::Threads` runs each on a thread of its own, as before. In the browser,
+  `Runtime::Tasks` hands each to the page as a task on its one thread.
+- **Jobs ring a bell.** Job channels stay `std::mpsc`; sending one wakes the lane waiting for
+  it, whether that lane sleeps on a thread or is a task that gave its thread back.
+- **A render yields between batches**, so a long export on one lane lets the other lane's
+  preview through when both share a thread. The worker's test proves it on both runtimes, and
+  fails without the yield.
+- **Failures are typed.** Events carry the error itself, not text made from it, and the app
+  words it. Playback's frames keep their own bounded channel: its back-pressure paces playback.
+- **No lock around building a renderer.** wgpu 30 keeps error scopes per thread, and a renderer
+  opens and closes its scope with no await between. A blocking lock held across awaits could
+  have deadlocked the browser's one thread.
 
 ## Polish track
 

@@ -211,6 +211,22 @@ pub(crate) async fn finished(device: &wgpu::Device, queue: &wgpu::Queue) -> Resu
     wait.await.context("the device dropped a submission")
 }
 
+/// Returns once, after letting anything else waiting on this thread run: in a browser the whole
+/// app shares one thread, and a long render gives previews and the interface their turn between
+/// batches.
+pub(crate) async fn yield_now() {
+    let mut yielded = false;
+    std::future::poll_fn(|cx| {
+        if yielded {
+            return std::task::Poll::Ready(());
+        }
+        yielded = true;
+        cx.waker().wake_by_ref();
+        std::task::Poll::Pending
+    })
+    .await
+}
+
 /// Makes the device call back what it has finished. Natively that takes a poll, which waits for
 /// the GPU; in a browser the page's event loop delivers callbacks, and nothing may block.
 fn drive(device: &wgpu::Device) -> Result<()> {

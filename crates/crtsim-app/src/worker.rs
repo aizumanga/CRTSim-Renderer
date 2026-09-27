@@ -6,12 +6,16 @@ use eframe::egui;
 use image::RgbaImage;
 use std::{
     collections::VecDeque,
+    future::Future,
     panic::AssertUnwindSafe,
     path::{Path, PathBuf},
+    pin::Pin,
+    rc::Rc,
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc, Arc, Mutex,
     },
+    task::{Poll, Waker},
     time::{Duration, Instant},
 };
 
@@ -25,23 +29,21 @@ pub enum Gpu {
     /// screen without a round trip through system memory.
     Shared(eframe::egui_wgpu::RenderState),
 }
-/// Held while a renderer is built. Construction validates its pipelines inside an error scope,
-/// and wgpu keeps one scope stack per device, not per thread: two workers building at once on
-/// a shared device could each pop the other's scope and report the wrong error, or none.
-static BUILDING: Mutex<()> = Mutex::new(());
-
 impl Gpu {
-    fn renderer(&self) -> Result<Renderer> {
-        let _building = BUILDING
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+    /// A renderer on this device. Building one validates its pipelines in an error scope, which
+    /// wgpu keeps per thread and which opens and closes with no await between, so renderers can
+    /// be built at once on the lanes' threads, or one after another as tasks on one thread.
+    async fn renderer(&self) -> Result<Renderer> {
         match self {
-            Self::Own(backends) => pollster::block_on(Renderer::new(*backends)),
-            Self::Shared(state) => pollster::block_on(Renderer::with_device(
-                Arc::new(state.device.clone()),
-                Arc::new(state.queue.clone()),
-                state.adapter.get_info(),
-            )),
+            Self::Own(backends) => Renderer::new(*backends).await,
+            Self::Shared(state) => {
+                Renderer::with_device(
+                    Arc::new(state.device.clone()),
+                    Arc::new(state.queue.clone()),
+                    state.adapter.get_info(),
+                )
+                .await
+            }
         }
     }
     /// The interface's own device, where there is one. Only a frame rendered on it can be
@@ -70,10 +72,10 @@ impl Graphics {
 
     /// The renderer, made on first use. `starting` is told when it is being made, which takes
     /// a moment.
-    fn renderer(&mut self, starting: impl FnOnce()) -> Result<&Renderer> {
+    async fn renderer(&mut self, starting: impl FnOnce()) -> Result<&Renderer> {
         if self.renderer.is_none() {
             starting();
-            self.renderer = Some(self.gpu.renderer()?);
+            self.renderer = Some(self.gpu.renderer().await?);
         }
         Ok(self.renderer.as_ref().expect("made above"))
     }
@@ -81,9 +83,23 @@ impl Graphics {
     /// Runs `work`, turning a panic -- a graphics driver failing under it -- into the error
     /// `failure` and dropping the renderer it may have broken, so the next job makes a new one.
     /// The job is lost; the settings stay usable.
-    fn guard<T>(&mut self, failure: &str, work: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
-        let this = &mut *self;
-        std::panic::catch_unwind(AssertUnwindSafe(|| work(this))).unwrap_or_else(|_| {
+    async fn guard<T>(
+        &mut self,
+        failure: &str,
+        work: impl AsyncFnOnce(&mut Self) -> Result<T>,
+    ) -> Result<T> {
+        let caught = {
+            let mut job = std::pin::pin!(work(self));
+            std::future::poll_fn(|cx| {
+                match std::panic::catch_unwind(AssertUnwindSafe(|| job.as_mut().poll(cx))) {
+                    Ok(Poll::Pending) => Poll::Pending,
+                    Ok(Poll::Ready(result)) => Poll::Ready(Some(result)),
+                    Err(_) => Poll::Ready(None),
+                }
+            })
+            .await
+        };
+        caught.unwrap_or_else(|| {
             self.renderer = None;
             Err(anyhow::anyhow!("{failure}"))
         })
@@ -93,36 +109,136 @@ impl Graphics {
 const STILL_FAILED: &str = "Graphics driver failed. Try a smaller resolution or restart with \
                             another --backend. Settings are still available to save.";
 
-/// Where the interface sends work. Previews have a thread of their own, so they keep coming
-/// while an export holds the other one for minutes: a preview queued behind an export used to
-/// wait for all of it, and settings edited meanwhile could not be seen until it finished.
+/// Where the interface sends work. The worker has two lanes: previews have one of their own,
+/// so they keep coming while an export holds the other for minutes. A preview queued behind an
+/// export used to wait for all of it, and settings edited meanwhile could not be seen until it
+/// finished.
 #[derive(Clone)]
 pub struct Jobs {
     work: mpsc::Sender<Job>,
     preview: mpsc::Sender<PreviewJob>,
+    /// Last, so it rings once the senders above are gone.
+    bells: Bells,
 }
 /// A job could not be sent because its worker has stopped.
 #[derive(Debug)]
 pub struct Stopped;
 impl Jobs {
     pub fn send(&self, job: Job) -> Result<(), Stopped> {
-        self.work.send(job).map_err(|_| Stopped)
+        self.work.send(job).map_err(|_| Stopped)?;
+        self.bells.0[0].ring();
+        Ok(())
     }
     pub fn preview(&self, job: PreviewJob) -> Result<(), Stopped> {
-        self.preview.send(job).map_err(|_| Stopped)
+        self.preview.send(job).map_err(|_| Stopped)?;
+        self.bells.0[1].ring();
+        Ok(())
     }
-    /// Asks both threads to stop once their current job is done.
+    /// Asks both lanes to stop once their current job is done.
     pub fn shutdown(&self) {
-        let _ = self.preview.send(PreviewJob::Shutdown);
-        let _ = self.work.send(Job::Shutdown);
+        let _ = self.preview(PreviewJob::Shutdown);
+        let _ = self.send(Job::Shutdown);
     }
-    /// Channels in place of the threads, for a test to inspect what the interface sends.
+    /// Channels in place of the lanes, for a test to inspect what the interface sends.
     #[cfg(test)]
     pub fn capture() -> (Self, mpsc::Receiver<Job>, mpsc::Receiver<PreviewJob>) {
         let (work, jobs) = mpsc::channel();
         let (preview, previews) = mpsc::channel();
-        (Self { work, preview }, jobs, previews)
+        (
+            Self {
+                work,
+                preview,
+                bells: Bells::default(),
+            },
+            jobs,
+            previews,
+        )
     }
+}
+
+/// The work lane's bell and the preview lane's. Dropped with the interface's end of the
+/// channels, after them, they wake the lanes to see the channels closed and stop: a lane waiting
+/// for a job would otherwise wait forever.
+#[derive(Clone, Default)]
+struct Bells([Arc<Bell>; 2]);
+
+impl Drop for Bells {
+    fn drop(&mut self) {
+        for bell in &self.0 {
+            bell.ring();
+        }
+    }
+}
+
+/// Wakes a lane waiting for its next job. A lane on a thread of its own sleeps until then; one
+/// sharing the host's thread as a task gives it back.
+#[derive(Default)]
+struct Bell(Mutex<Option<Waker>>);
+
+impl Bell {
+    fn ring(&self) {
+        if let Some(waker) = self.0.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            waker.wake();
+        }
+    }
+}
+
+/// A lane's end of its channel.
+struct Inbox<T> {
+    jobs: mpsc::Receiver<T>,
+    bell: Arc<Bell>,
+}
+
+impl<T> Inbox<T> {
+    /// The next job, or `None` once the interface has gone.
+    async fn next(&self) -> Option<T> {
+        std::future::poll_fn(|cx| {
+            let take = || match self.jobs.try_recv() {
+                Ok(job) => Some(Some(job)),
+                Err(mpsc::TryRecvError::Disconnected) => Some(None),
+                Err(mpsc::TryRecvError::Empty) => None,
+            };
+            if let Some(job) = take() {
+                return Poll::Ready(job);
+            }
+            *self.bell.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(cx.waker().clone());
+            // A job sent between the look and the waker going in has already rung.
+            take().map_or(Poll::Pending, Poll::Ready)
+        })
+        .await
+    }
+
+    /// Every job already waiting.
+    fn waiting(&self) -> impl Iterator<Item = T> + '_ {
+        self.jobs.try_iter()
+    }
+}
+
+/// A lane as a task, which runs on the thread it was made on.
+pub type Task = Pin<Box<dyn Future<Output = ()>>>;
+
+/// How the worker's two lanes run.
+pub enum Runtime {
+    /// Each lane on a thread of its own, sleeping between jobs: the desktop.
+    Threads,
+    /// Each lane a task on the host's own thread, handed to this to run. The browser has no
+    /// threads; the lanes take turns there, at every await.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the web entry point runs the lanes as tasks (web plan, step 6)"
+        )
+    )]
+    Tasks(Rc<dyn Fn(Task)>),
+}
+
+/// The worker a running interface talks to.
+pub struct Worker {
+    pub jobs: Jobs,
+    pub events: mpsc::Receiver<Event>,
+    /// Joins the lanes' threads once they stop, where they have threads.
+    pub threads: Option<std::thread::JoinHandle<()>>,
 }
 
 /// Work for the preview thread.
@@ -212,7 +328,7 @@ impl Export {
         }
     }
 
-    fn run(
+    async fn run(
         &self,
         graphics: &mut Graphics,
         path: &Path,
@@ -221,19 +337,19 @@ impl Export {
     ) -> Result<()> {
         match self {
             Self::Image { input, config } => {
-                export_image(graphics, input, config, path, cancel, progress)
+                export_image(graphics, input, config, path, cancel, progress).await
             }
             Self::Video {
                 video,
                 options,
                 config,
-            } => export_video(graphics, video, config, options, path, cancel, progress),
+            } => export_video(graphics, video, config, options, path, cancel, progress).await,
             Self::Animation {
                 video,
                 options,
                 config,
             } => {
-                let renderer = graphics.renderer(|| {})?;
+                let renderer = graphics.renderer(|| {}).await?;
                 crtsim_media::export_animation(
                     video, path, config, options, renderer, cancel, progress,
                 )
@@ -245,10 +361,10 @@ impl Export {
             } => {
                 if crtsim_media::Container::of(path).is_some() {
                     let video = crtsim_media::probe(source, cancel)?;
-                    export_video(graphics, &video, config, options, path, cancel, progress)
+                    export_video(graphics, &video, config, options, path, cancel, progress).await
                 } else {
                     let input = crtsim_core::input::load_image(source)?;
-                    export_image(graphics, &input, config, path, cancel, progress)
+                    export_image(graphics, &input, config, path, cancel, progress).await
                 }
             }
         }
@@ -301,7 +417,7 @@ impl Preview {
 pub enum Failure {
     /// Stopped on request; nothing went wrong.
     Cancelled,
-    Failed(String),
+    Failed(anyhow::Error),
 }
 impl Failure {
     /// A job's error, which is a cancellation when the job had been asked to stop.
@@ -309,7 +425,7 @@ impl Failure {
         if cancel.load(Ordering::Relaxed) {
             Self::Cancelled
         } else {
-            Self::Failed(format!("{error:#}"))
+            Self::Failed(error)
         }
     }
 }
@@ -344,61 +460,88 @@ pub enum Event {
     PresetImported(Outcome<ImportedPreset>),
     Preview {
         revision: u64,
-        result: std::result::Result<Previewed, String>,
+        result: Result<Previewed>,
     },
     Exported(Outcome<PathBuf>),
     Thumbnail {
         generation: u64,
         key: ThumbnailKey,
-        result: std::result::Result<RgbaImage, String>,
+        result: Result<RgbaImage>,
     },
 }
-/// Starts the two worker threads. The handle returned joins both.
-pub fn start(
-    ctx: egui::Context,
-    gpu: Gpu,
-) -> (Jobs, mpsc::Receiver<Event>, std::thread::JoinHandle<()>) {
-    let (send, jobs) = mpsc::channel();
-    let (preview_send, previews) = mpsc::channel();
+/// Starts the worker's two lanes on `runtime`.
+pub fn start(ctx: egui::Context, gpu: Gpu, runtime: Runtime) -> Worker {
+    let (work, jobs) = mpsc::channel();
+    let (preview, previews) = mpsc::channel();
     let (events, receive) = mpsc::channel();
-    let preview_thread = {
-        let (ctx, gpu, events) = (ctx.clone(), gpu.clone(), events.clone());
-        std::thread::spawn(move || preview_worker(ctx, gpu, previews, events))
+    let bells = Bells::default();
+    let jobs = Inbox {
+        jobs,
+        bell: bells.0[0].clone(),
     };
-    let thread = std::thread::spawn(move || {
-        work(ctx, gpu, jobs, events);
-        let _ = preview_thread.join();
-    });
-    (
-        Jobs {
-            work: send,
-            preview: preview_send,
+    let previews = Inbox {
+        jobs: previews,
+        bell: bells.0[1].clone(),
+    };
+    let (preview_ctx, preview_gpu, preview_events) = (ctx.clone(), gpu.clone(), events.clone());
+    let threads = match runtime {
+        // Each lane is made on its own thread: a lane holds what only one thread may use.
+        Runtime::Threads => {
+            let previews = std::thread::spawn(move || {
+                pollster::block_on(preview_lane(
+                    preview_ctx,
+                    preview_gpu,
+                    previews,
+                    preview_events,
+                ))
+            });
+            Some(std::thread::spawn(move || {
+                pollster::block_on(work_lane(ctx, gpu, jobs, events));
+                let _ = previews.join();
+            }))
+        }
+        Runtime::Tasks(spawn) => {
+            spawn(Box::pin(work_lane(ctx, gpu, jobs, events)));
+            spawn(Box::pin(preview_lane(
+                preview_ctx,
+                preview_gpu,
+                previews,
+                preview_events,
+            )));
+            None
+        }
+    };
+    Worker {
+        jobs: Jobs {
+            work,
+            preview,
+            bells,
         },
-        receive,
-        thread,
-    )
+        events: receive,
+        threads,
+    }
 }
 
-/// Previews only, with a renderer of its own. On a shared device the two renderers draw on the
-/// same GPU, so a preview taken during an export slows that export somewhat, and the export
-/// slows the preview; neither waits for the other to finish.
-fn preview_worker(
+/// Previews and thumbnails, with a renderer of its own. On a shared device the two lanes'
+/// renderers draw on the same GPU, so a preview taken during an export slows that export
+/// somewhat, and the export slows the preview; neither waits for the other to finish.
+async fn preview_lane(
     ctx: egui::Context,
     gpu: Gpu,
-    jobs: mpsc::Receiver<PreviewJob>,
+    jobs: Inbox<PreviewJob>,
     events: mpsc::Sender<Event>,
 ) {
     let mut graphics = Graphics::new(gpu);
     let mut backlog = VecDeque::new();
     loop {
-        // Collect everything waiting, blocking only when there is nothing to do.
+        // Collect everything waiting, waiting only when there is nothing to do.
         if backlog.is_empty() {
-            match jobs.recv() {
-                Ok(job) => backlog.push_back(job),
-                Err(_) => return,
+            match jobs.next().await {
+                Some(job) => backlog.push_back(job),
+                None => return,
             }
         }
-        backlog.extend(jobs.try_iter());
+        backlog.extend(jobs.waiting());
         let Some(job) = next_job(&mut backlog) else {
             continue;
         };
@@ -411,11 +554,11 @@ fn preview_worker(
             } => {
                 let started = Instant::now();
                 let result = preview(&mut graphics, &input, &config)
+                    .await
                     .map(|image| Previewed {
                         image,
                         seconds: started.elapsed().as_secs_f32(),
-                    })
-                    .map_err(|e| format!("{e:#}"));
+                    });
                 Event::Preview { revision, result }
             }
             PreviewJob::Thumbnail {
@@ -426,7 +569,11 @@ fn preview_worker(
             } => {
                 let result = match look {
                     Look::Crt(config) => {
-                        graphics.guard(STILL_FAILED, |g| still(g, &input, &config, None, |_| {}))
+                        graphics
+                            .guard(STILL_FAILED, async |g| {
+                                still(g, &input, &config, None, |_| {}).await
+                            })
+                            .await
                     }
                     Look::Lut(index) => nes_luts::load(index).map(|lut| {
                         let mut image = (*input).clone();
@@ -437,7 +584,7 @@ fn preview_worker(
                 Event::Thumbnail {
                     generation,
                     key,
-                    result: result.map_err(|e| format!("{e:#}")),
+                    result,
                 }
             }
         };
@@ -448,7 +595,7 @@ fn preview_worker(
     }
 }
 
-/// The preview thread's next job: shutdown before anything, then the preview someone is
+/// The preview lane's next job: shutdown before anything, then the preview someone is
 /// waiting to see, then thumbnails in the order asked for, skipping any whose source has since
 /// been replaced.
 fn next_job(backlog: &mut VecDeque<PreviewJob>) -> Option<PreviewJob> {
@@ -479,13 +626,13 @@ fn next_job(backlog: &mut VecDeque<PreviewJob>) -> Option<PreviewJob> {
 }
 
 /// Everything but previews: loading, exports, batches and playback, one at a time.
-fn work(ctx: egui::Context, gpu: Gpu, jobs: mpsc::Receiver<Job>, events: mpsc::Sender<Event>) {
+async fn work_lane(ctx: egui::Context, gpu: Gpu, jobs: Inbox<Job>, events: mpsc::Sender<Event>) {
     let mut graphics = Graphics::new(gpu);
     let progress = |progress: Progress| {
         let _ = events.send(Event::Progress(progress));
         ctx.request_repaint();
     };
-    while let Ok(job) = jobs.recv() {
+    while let Some(job) = jobs.next().await {
         let event = match job {
             Job::Shutdown => break,
             Job::Playback {
@@ -494,13 +641,11 @@ fn work(ctx: egui::Context, gpu: Gpu, jobs: mpsc::Receiver<Job>, events: mpsc::S
                 options,
                 feed,
             } => {
-                play(&mut graphics, &ctx, &video, &config, &options, &feed);
+                play(&mut graphics, &ctx, &video, &config, &options, &feed).await;
                 continue;
             }
             // Loading an image cannot be cancelled.
-            Job::Load(path) => {
-                Event::Loaded(load_image(path).map_err(|e| Failure::Failed(format!("{e:#}"))))
-            }
+            Job::Load(path) => Event::Loaded(load_image(path).map_err(Failure::Failed)),
             Job::LoadVideo {
                 path,
                 frame,
@@ -522,9 +667,10 @@ fn work(ctx: egui::Context, gpu: Gpu, jobs: mpsc::Receiver<Job>, events: mpsc::S
                 cancel,
             } => Event::Exported(
                 graphics
-                    .guard(export.driver_failed(), |g| {
-                        export.run(g, &path, &cancel, &progress)
+                    .guard(export.driver_failed(), async |g| {
+                        export.run(g, &path, &cancel, &progress).await
                     })
+                    .await
                     .map(|()| path)
                     .map_err(|e| Failure::of(e, &cancel)),
             ),
@@ -620,39 +766,50 @@ fn worded(progress: RenderProgress) -> Progress {
     }
 }
 
-/// A still from fresh history on this thread's renderer.
-fn still(
+/// A still from fresh history on this lane's renderer.
+async fn still(
     graphics: &mut Graphics,
     input: &RgbaImage,
     c: &Config,
     cancel: Option<&AtomicBool>,
     mut progress: impl FnMut(Progress),
 ) -> Result<RgbaImage> {
-    let renderer = graphics.renderer(|| {
-        progress(Progress {
-            fraction: 0.,
-            stage: "Initializing graphics device".into(),
+    let renderer = graphics
+        .renderer(|| {
+            progress(Progress {
+                fraction: 0.,
+                stage: "Initializing graphics device".into(),
+            })
         })
-    })?;
-    pollster::block_on(renderer.still(input, c, cancel, |p| progress(worded(p))))
+        .await?;
+    renderer
+        .still(input, c, cancel, |p| progress(worded(p)))
+        .await
 }
 
 /// A frame for the screen. On the interface's own device it is left there; otherwise it is
 /// read back, which is what the interface then has to upload again.
-fn preview(graphics: &mut Graphics, input: &RgbaImage, c: &Config) -> Result<Preview> {
-    graphics.guard("Graphics device failed while rendering the preview", |g| {
-        if g.gpu.render_state().is_none() {
-            return still(g, input, c, None, |_| {}).map(Preview::Pixels);
-        }
-        let renderer = g.renderer(|| {})?;
-        let mut sequence = Sequence::still();
-        pollster::block_on(renderer.frame(&mut sequence, input, c, None, |_| {}))?;
-        renderer.show(&sequence).map(Preview::Frame)
-    })
+async fn preview(graphics: &mut Graphics, input: &RgbaImage, c: &Config) -> Result<Preview> {
+    graphics
+        .guard(
+            "Graphics device failed while rendering the preview",
+            async |g| {
+                if g.gpu.render_state().is_none() {
+                    return still(g, input, c, None, |_| {}).await.map(Preview::Pixels);
+                }
+                let renderer = g.renderer(|| {}).await?;
+                let mut sequence = Sequence::still();
+                renderer
+                    .frame(&mut sequence, input, c, None, |_| {})
+                    .await?;
+                renderer.show(&sequence).map(Preview::Frame)
+            },
+        )
+        .await
 }
 
 /// A still at full resolution, saved as a PNG that carries its settings.
-fn export_image(
+async fn export_image(
     graphics: &mut Graphics,
     input: &RgbaImage,
     config: &Config,
@@ -663,7 +820,8 @@ fn export_image(
     let image = still(graphics, input, config, Some(cancel), |mut stage| {
         stage.fraction *= 0.9;
         progress(stage);
-    })?;
+    })
+    .await?;
     ensure!(!cancel.load(Ordering::Relaxed), "Render cancelled");
     progress(Progress {
         fraction: 0.95,
@@ -673,7 +831,7 @@ fn export_image(
 }
 
 /// A whole video rendered and encoded, with its audio and other tracks.
-fn export_video(
+async fn export_video(
     graphics: &mut Graphics,
     video: &Video,
     config: &Config,
@@ -682,13 +840,13 @@ fn export_video(
     cancel: &Arc<AtomicBool>,
     progress: &dyn Fn(Progress),
 ) -> Result<()> {
-    let renderer = graphics.renderer(|| {})?;
+    let renderer = graphics.renderer(|| {}).await?;
     crtsim_media::export(video, path, config, options, renderer, cancel, progress)
 }
 
 /// Streams rendered frames of `video` into the feed, which the interface plays from. An error
 /// is queued behind the frames already there, unless playback has been stopped meanwhile.
-fn play(
+async fn play(
     graphics: &mut Graphics,
     ctx: &egui::Context,
     video: &Video,
@@ -701,36 +859,38 @@ fn play(
         frames,
         cancel,
     } = feed;
-    let played = graphics.guard("Playback graphics driver failed", |g| {
-        let renderer = g.renderer(|| {})?;
-        crtsim_media::playback(
-            video,
-            *start,
-            config,
-            options,
-            renderer,
-            cancel,
-            |time, source, crt| {
-                let mut item = Ok(PlaybackFrame { time, source, crt });
-                loop {
-                    ensure!(!cancel.load(Ordering::Relaxed), "Playback cancelled");
-                    match frames.try_send(item) {
-                        Ok(()) => {
-                            ctx.request_repaint();
-                            return Ok(());
-                        }
-                        Err(mpsc::TrySendError::Full(back)) => {
-                            item = back;
-                            std::thread::sleep(Duration::from_millis(5));
-                        }
-                        Err(mpsc::TrySendError::Disconnected(_)) => {
-                            anyhow::bail!("Playback stopped")
+    let played = graphics
+        .guard("Playback graphics driver failed", async |g| {
+            let renderer = g.renderer(|| {}).await?;
+            crtsim_media::playback(
+                video,
+                *start,
+                config,
+                options,
+                renderer,
+                cancel,
+                |time, source, crt| {
+                    let mut item = Ok(PlaybackFrame { time, source, crt });
+                    loop {
+                        ensure!(!cancel.load(Ordering::Relaxed), "Playback cancelled");
+                        match frames.try_send(item) {
+                            Ok(()) => {
+                                ctx.request_repaint();
+                                return Ok(());
+                            }
+                            Err(mpsc::TrySendError::Full(back)) => {
+                                item = back;
+                                std::thread::sleep(Duration::from_millis(5));
+                            }
+                            Err(mpsc::TrySendError::Disconnected(_)) => {
+                                anyhow::bail!("Playback stopped")
+                            }
                         }
                     }
-                }
-            },
-        )
-    });
+                },
+            )
+        })
+        .await;
     if let Err(error) = played {
         let error = format!("{error:#}");
         // Keep the terminal error behind already buffered frames without blocking shutdown.
@@ -788,67 +948,159 @@ mod tests {
         assert!(backlog.is_empty());
     }
 
-    /// The point of the second thread: a preview finishes while an export is still running,
-    /// where it used to wait in the queue behind all of it.
+    /// Lanes run as tasks on this thread, the way a browser runs them: `drive` polls every
+    /// task in turn, as the page's event loop would between frames.
+    #[derive(Default)]
+    struct Tasks(Rc<std::cell::RefCell<Vec<Task>>>);
+
+    impl Tasks {
+        fn runtime(&self) -> Runtime {
+            let tasks = self.0.clone();
+            Runtime::Tasks(Rc::new(move |task| tasks.borrow_mut().push(task)))
+        }
+
+        /// Polls the tasks until `event` has an event to give, or the time is up.
+        fn next<T>(&self, events: &mpsc::Receiver<T>) -> T {
+            let started = Instant::now();
+            let mut cx = std::task::Context::from_waker(Waker::noop());
+            loop {
+                if let Ok(event) = events.try_recv() {
+                    return event;
+                }
+                assert!(
+                    started.elapsed() < Duration::from_secs(120),
+                    "worker stalled"
+                );
+                self.0
+                    .borrow_mut()
+                    .retain_mut(|task| task.as_mut().poll(&mut cx).is_pending());
+            }
+        }
+    }
+
+    /// Waits for a worker's next event.
+    type Next = Box<dyn Fn(&Worker) -> Event>;
+
+    /// The same worker on either runtime, and a way to wait for its next event.
+    fn workers() -> Vec<(&'static str, Worker, Next)> {
+        let gpu = Gpu::Own(wgpu::Backends::VULKAN);
+        let threaded = start(egui::Context::default(), gpu.clone(), Runtime::Threads);
+        let tasks = Tasks::default();
+        let tasked = start(egui::Context::default(), gpu, tasks.runtime());
+        vec![
+            (
+                "threads",
+                threaded,
+                Box::new(|worker: &Worker| {
+                    worker
+                        .events
+                        .recv_timeout(Duration::from_secs(120))
+                        .expect("worker stalled")
+                }),
+            ),
+            (
+                "tasks",
+                tasked,
+                Box::new(move |worker: &Worker| tasks.next(&worker.events)),
+            ),
+        ]
+    }
+
+    /// Shuts `worker` down, waiting for its lanes where they have threads.
+    fn stop(worker: Worker) {
+        worker.jobs.shutdown();
+        if let Some(threads) = worker.threads {
+            threads.join().unwrap();
+        }
+    }
+
+    /// A LUT thumbnail needs no GPU, so either runtime can be checked end to end anywhere.
+    #[test]
+    fn a_thumbnail_comes_back_from_either_runtime() {
+        for (runtime, worker, next) in workers() {
+            worker
+                .jobs
+                .preview(PreviewJob::Thumbnail {
+                    generation: 4,
+                    key: ThumbnailKey::Lut(2),
+                    input: Arc::new(RgbaImage::from_pixel(8, 8, image::Rgba([90, 60, 30, 255]))),
+                    look: Look::Lut(2),
+                })
+                .unwrap();
+            match next(&worker) {
+                Event::Thumbnail {
+                    generation: 4,
+                    key: ThumbnailKey::Lut(2),
+                    result: Ok(image),
+                } => assert_eq!(image.dimensions(), (8, 8), "{runtime}"),
+                _ => panic!("{runtime}: expected the thumbnail"),
+            }
+            stop(worker);
+        }
+    }
+
+    /// The point of the second lane: a preview finishes while an export is still running,
+    /// where it used to wait in the queue behind all of it. On threads the lanes run at once;
+    /// as tasks on one thread they take turns between the export's batches.
     #[test]
     #[ignore = "requires a Vulkan adapter"]
     fn a_preview_finishes_while_an_export_is_still_running() {
-        let (jobs, events, thread) =
-            start(egui::Context::default(), Gpu::Own(wgpu::Backends::VULKAN));
-        let dir = tempfile::tempdir().unwrap();
-        let cancel = Arc::new(AtomicBool::new(false));
-        let input = Arc::new(crtsim_core::config::test_card());
-        // Long enough to still be running when the preview is done: the maximum warm-up, at 4K.
-        jobs.send(Job::Export {
-            export: Export::Image {
-                input: input.clone(),
-                config: Config {
-                    output: "4k".into(),
-                    warmup: 240,
-                    ..Config::default()
-                },
-            },
-            path: dir.path().join("export.png"),
-            cancel: cancel.clone(),
-        })
-        .unwrap();
-        jobs.preview(PreviewJob::Preview {
-            revision: 7,
-            input,
-            config: Box::new(Config {
-                output: "320x180".into(),
-                warmup: 0,
-                ..Config::default()
-            }),
-        })
-        .unwrap();
-        let timeout = Duration::from_secs(120);
-        loop {
-            match events.recv_timeout(timeout).expect("worker stalled") {
-                Event::Progress(_) => continue,
-                Event::Preview { revision, result } => {
-                    assert_eq!(revision, 7);
-                    assert!(result.is_ok(), "preview failed");
-                    break;
+        for (runtime, worker, next) in workers() {
+            let dir = tempfile::tempdir().unwrap();
+            let cancel = Arc::new(AtomicBool::new(false));
+            let input = Arc::new(crtsim_core::config::test_card());
+            // Long enough to still be running when the preview is done: the maximum warm-up,
+            // at 4K.
+            worker
+                .jobs
+                .send(Job::Export {
+                    export: Export::Image {
+                        input: input.clone(),
+                        config: Config {
+                            output: "4k".into(),
+                            warmup: 240,
+                            ..Config::default()
+                        },
+                    },
+                    path: dir.path().join("export.png"),
+                    cancel: cancel.clone(),
+                })
+                .unwrap();
+            worker
+                .jobs
+                .preview(PreviewJob::Preview {
+                    revision: 7,
+                    input,
+                    config: Box::new(Config {
+                        output: "320x180".into(),
+                        warmup: 0,
+                        ..Config::default()
+                    }),
+                })
+                .unwrap();
+            loop {
+                match next(&worker) {
+                    Event::Progress(_) => continue,
+                    Event::Preview { revision, result } => {
+                        assert_eq!(revision, 7, "{runtime}");
+                        assert!(result.is_ok(), "{runtime}: preview failed");
+                        break;
+                    }
+                    Event::Exported(_) => panic!("{runtime}: the export finished first"),
+                    _ => panic!("{runtime}: unexpected event"),
                 }
-                Event::Exported(_) => panic!("the export finished before the preview"),
-                _ => panic!("unexpected event"),
             }
-        }
-        cancel.store(true, Ordering::Relaxed);
-        loop {
-            match events.recv_timeout(timeout).expect("worker stalled") {
-                Event::Exported(result) => {
+            cancel.store(true, Ordering::Relaxed);
+            loop {
+                if let Event::Exported(result) = next(&worker) {
                     assert!(
                         matches!(result, Err(Failure::Cancelled)),
-                        "export should have been cancelled"
+                        "{runtime}: export should have been cancelled"
                     );
                     break;
                 }
-                _ => continue,
             }
+            stop(worker);
         }
-        jobs.shutdown();
-        thread.join().unwrap();
     }
 }

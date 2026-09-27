@@ -41,5 +41,6 @@ JavaScript. It is served from the author's Neocities supporter site, as `.wasm`.
 - The renderer may not block. `device.poll(Maintain::Wait)` and waiting on a channel for
   `map_async` never finish on a browser's main thread.
 - The render worker gets two adapters: a thread on the desktop and an async task in the browser.
+  (Done: `worker::Runtime`.)
 - `crtsim-desktop` becomes a library holding the whole app (`crtsim-app`), with a small native
   `main` and a web entry point. (Done for the native side: the executable keeps its name.)

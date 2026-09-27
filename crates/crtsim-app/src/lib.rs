@@ -228,7 +228,11 @@ impl App {
         let original = texture(ctx, "original", &input, 2048);
         let config = Config::general();
         let render_state = gpu.render_state().cloned();
-        let (jobs, events, worker_thread) = worker::start(ctx.clone(), gpu);
+        let worker::Worker {
+            jobs,
+            events,
+            threads: worker_thread,
+        } = worker::start(ctx.clone(), gpu, worker::Runtime::Threads);
         let (dialog_send, dialog_receive) = mpsc::channel();
         let (store, mut storage_error) = match store {
             Ok(s) => (Some(s), None),
@@ -267,7 +271,7 @@ impl App {
             video_options: crtsim_media::Options::default(),
             animation_options: Default::default(),
             work: Work::Idle,
-            worker_thread: Some(worker_thread),
+            worker_thread,
             store,
             theme,
             show_welcome,
@@ -771,9 +775,9 @@ mod tests {
             schedule::Due::Preview,
             "the change is still to be previewed"
         );
-        send.send(Event::Loaded(Err(Failure::Failed(
-            "Cannot decode selected file".into(),
-        ))))
+        send.send(Event::Loaded(Err(Failure::Failed(anyhow::anyhow!(
+            "Cannot decode selected file"
+        )))))
         .unwrap();
         send.send(Event::Preview {
             revision: app.schedule.take().unwrap(),

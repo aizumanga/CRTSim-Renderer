@@ -31,7 +31,7 @@ impl App {
                             self.status = "Preset import cancelled".into();
                         }
                         Err(Failure::Failed(e)) => {
-                            self.error = Some(format!("Cannot import preset: {e}"))
+                            self.error = Some(format!("Cannot import preset: {e:#}"))
                         }
                     }
                 }
@@ -52,7 +52,7 @@ impl App {
                             self.status = "Video loading cancelled".into();
                             self.error = None;
                         }
-                        Err(Failure::Failed(e)) => self.error = Some(e),
+                        Err(Failure::Failed(e)) => self.error = Some(format!("{e:#}")),
                     }
                 }
                 Event::Preview { revision, result } => {
@@ -73,7 +73,7 @@ impl App {
                             }
                             self.preview_error = None;
                         }
-                        Err(e) => self.preview_error = Some(e),
+                        Err(e) => self.preview_error = Some(format!("{e:#}")),
                     }
                 }
                 Event::Thumbnail {
@@ -93,7 +93,7 @@ impl App {
                             self.status = "Export cancelled; destination kept unchanged".into();
                             self.error = None;
                         }
-                        Err(Failure::Failed(e)) => self.error = Some(e),
+                        Err(Failure::Failed(e)) => self.error = Some(format!("{e:#}")),
                     }
                 }
             }

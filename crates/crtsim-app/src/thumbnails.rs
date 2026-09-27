@@ -130,7 +130,7 @@ impl App {
         ctx: &egui::Context,
         generation: u64,
         key: ThumbnailKey,
-        result: Result<RgbaImage, String>,
+        result: anyhow::Result<RgbaImage>,
     ) {
         if generation != self.thumbnails.generation {
             return;
@@ -280,7 +280,12 @@ mod tests {
         app.lut_thumbnail(0);
         assert!(app.thumbnails_pending());
         let generation = app.thumbnails.generation;
-        app.thumbnail_ready(&ctx, generation, ThumbnailKey::Lut(0), Err("bad".into()));
+        app.thumbnail_ready(
+            &ctx,
+            generation,
+            ThumbnailKey::Lut(0),
+            Err(anyhow::anyhow!("bad")),
+        );
         assert!(!app.thumbnails_pending());
     }
 }

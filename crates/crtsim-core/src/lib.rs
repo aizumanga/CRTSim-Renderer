@@ -574,6 +574,7 @@ impl Renderer {
             if (step + 1) % BATCH == 0 || step + 1 == ticks {
                 self.queue.submit(Some(encoder.finish()));
                 gpu::finished(&self.device, &self.queue).await?;
+                gpu::yield_now().await;
                 report(
                     0.05 + 0.75 * (step + 1) as f32 / ticks as f32,
                     Stage::Simulating {

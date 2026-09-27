@@ -182,7 +182,7 @@ impl Queue {
         self.items[index].status = match result {
             Ok(_) => Status::Done,
             Err(Failure::Cancelled) => Status::Cancelled,
-            Err(Failure::Failed(e)) => Status::Failed(e.clone()),
+            Err(Failure::Failed(e)) => Status::Failed(format!("{e:#}")),
         };
         if asked_to_stop || matches!(result, Err(Failure::Cancelled)) {
             self.running = false;
@@ -446,7 +446,7 @@ mod tests {
         assert!(queue.exporting());
         assert!(queue.finished(&Ok(job.output), false));
         assert_eq!(file_name(&queue.next().unwrap().source), "third.png");
-        assert!(queue.finished(&Err(Failure::Failed("full disk".into())), false));
+        assert!(queue.finished(&Err(Failure::Failed(anyhow::anyhow!("full disk"))), false));
         assert_eq!(queue.next().map(|job| job.source), None);
         assert!(!queue.running(), "a queue with nothing left pauses");
         assert_eq!(
