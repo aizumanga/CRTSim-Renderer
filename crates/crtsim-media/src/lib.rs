@@ -291,7 +291,7 @@ struct PresetWire {
 
 /// Container comments survive MP4, Matroska and WebM muxing, unlike arbitrary MP4 keys.
 pub fn import_preset(path: &Path, input: (u32, u32), cancel: &Arc<AtomicBool>) -> Result<Preset> {
-    let mut cmd = command("ffprobe");
+    let mut cmd = Tool::Ffprobe.command();
     cmd.args(["-show_entries", "format_tags=comment", "-of", "json"])
         .arg(path.canonicalize().context("Cannot open video")?);
     let bytes = Process::output(
@@ -331,24 +331,47 @@ pub fn check_cancel(cancel: &AtomicBool) -> Result<()> {
     Ok(())
 }
 
-fn command(program: &str) -> Command {
-    // Explicit executable overrides also support portable FFmpeg installations with spaces.
-    let key = if program == "ffmpeg" {
-        "CRTSIM_FFMPEG"
-    } else {
-        "CRTSIM_FFPROBE"
-    };
-    let mut command = Command::new(std::env::var_os(key).unwrap_or_else(|| program.into()));
-    if std::env::var_os("CRTSIM_APPIMAGE").is_some() {
-        if let Some(original) = std::env::var_os("CRTSIM_HOST_LD_LIBRARY_PATH") {
-            command.env("LD_LIBRARY_PATH", original);
+/// The FFmpeg programs video work runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Tool {
+    /// Decodes, encodes and muxes.
+    Ffmpeg,
+    /// Reads what a file holds.
+    Ffprobe,
+}
+
+impl Tool {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Ffmpeg => "ffmpeg",
+            Self::Ffprobe => "ffprobe",
         }
     }
-    command.args(["-v", "error"]);
-    if program == "ffmpeg" {
-        command.arg("-nostdin");
+
+    /// The environment variable naming its executable, for a portable FFmpeg installation,
+    /// which may have spaces in its path.
+    fn variable(self) -> &'static str {
+        match self {
+            Self::Ffmpeg => "CRTSIM_FFMPEG",
+            Self::Ffprobe => "CRTSIM_FFPROBE",
+        }
     }
-    command
+
+    /// A command running it quietly, with nothing read from the terminal.
+    pub(crate) fn command(self) -> Command {
+        let program = std::env::var_os(self.variable()).unwrap_or_else(|| self.name().into());
+        let mut command = Command::new(program);
+        if std::env::var_os("CRTSIM_APPIMAGE").is_some() {
+            if let Some(original) = std::env::var_os("CRTSIM_HOST_LD_LIBRARY_PATH") {
+                command.env("LD_LIBRARY_PATH", original);
+            }
+        }
+        command.args(["-v", "error"]);
+        if self == Self::Ffmpeg {
+            command.arg("-nostdin");
+        }
+        command
+    }
 }
 
 #[cfg(test)]

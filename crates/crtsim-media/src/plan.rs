@@ -1,11 +1,10 @@
 //! What an export tells FFmpeg, worked out before any process starts, so it can be checked
 //! without FFmpeg installed.
 use crate::{
-    command,
     export::{require_encoder, Encoding, Frames, Step, Work},
     process::Process,
     render_config, Audio, Container, Encoder, EncodingSpeed, Options, Preset, Quality, Rate,
-    Source, TrackKind, Video, PRESET_PREFIX,
+    Source, Tool, TrackKind, Video, PRESET_PREFIX,
 };
 use anyhow::{ensure, Context, Result};
 use crtsim_core::config::Config;
@@ -110,7 +109,7 @@ impl<'a> ExportPlan<'a> {
     /// The encoder: rendered frames in as raw RGBA, one compressed video stream out to
     /// `silent`.
     pub fn encode(&self, silent: &Path) -> Command {
-        let mut cmd = command("ffmpeg");
+        let mut cmd = Tool::Ffmpeg.command();
         cmd.args([
             "-y",
             "-f",
@@ -230,7 +229,7 @@ impl<'a> ExportPlan<'a> {
         let (video, options, container) = (self.video, self.options, self.container);
         // An animation decoded here has no other tracks, and FFmpeg may not read it at all.
         let source = matches!(video.source, Source::Ffmpeg);
-        let mut cmd = command("ffmpeg");
+        let mut cmd = Tool::Ffmpeg.command();
         cmd.args(["-y", "-copyts", "-i"]).arg(silent);
         if source {
             cmd.args(["-itsoffset", &(-video.start).to_string(), "-i"])
@@ -307,7 +306,7 @@ impl Encoding for ExportPlan<'_> {
     fn check(&self, cancel: &Arc<AtomicBool>) -> Result<()> {
         require_encoder(self.codec, cancel)?;
         if self.options.encoder != Encoder::Software {
-            let mut check = command("ffmpeg");
+            let mut check = Tool::Ffmpeg.command();
             check.args([
                 "-f",
                 "lavfi",

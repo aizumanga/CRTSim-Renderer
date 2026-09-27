@@ -6,9 +6,8 @@
 //! mapped to it. FFmpeg can do both in one pass only by holding every frame in memory.
 //! WebP is encoded directly.
 use crate::{
-    command,
     export::{require_encoder, Encoding, Frames, Step, Work},
-    render_config, AnimationFormat, Rate, Timing, Video,
+    render_config, AnimationFormat, Rate, Timing, Tool, Video,
 };
 use anyhow::{ensure, Result};
 use crtsim_core::config::Config;
@@ -262,7 +261,7 @@ impl Encoding for AnimationPlan<'_> {
     }
 
     fn encoder(&self, encoded: &Path) -> Command {
-        let mut cmd = command("ffmpeg");
+        let mut cmd = Tool::Ffmpeg.command();
         self.raw_input(&mut cmd);
         match self.format {
             // Lossless, so the palette is chosen from the frames exactly as rendered.
@@ -307,7 +306,7 @@ impl Encoding for AnimationPlan<'_> {
             return vec![];
         }
         let palette = work.folder.join("palette.png");
-        let mut choose = command("ffmpeg");
+        let mut choose = Tool::Ffmpeg.command();
         choose
             .args(["-y", "-i"])
             .arg(work.encoded)
@@ -318,7 +317,7 @@ impl Encoding for AnimationPlan<'_> {
             Dither::Diffusion => "sierra2_4a",
             Dither::None => "none",
         };
-        let mut write = command("ffmpeg");
+        let mut write = Tool::Ffmpeg.command();
         write
             .args(["-y", "-i"])
             .arg(work.encoded)

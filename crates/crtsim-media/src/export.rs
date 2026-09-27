@@ -2,11 +2,11 @@
 //! file, such as by muxing the source's tracks, and only then replace the output.
 use crate::{
     animation::AnimationPlan,
-    check_cancel, command,
+    check_cancel,
     decode::{Decoder, Request},
     plan::ExportPlan,
     process::Process,
-    AnimationFormat, AnimationOptions, Options, Timing, Video,
+    AnimationFormat, AnimationOptions, Options, Timing, Tool, Video,
 };
 use anyhow::{ensure, Context, Result};
 use crtsim_core::{
@@ -23,7 +23,7 @@ use std::{
 };
 
 pub(crate) fn require_encoder(name: &str, cancel: &Arc<AtomicBool>) -> Result<()> {
-    let mut cmd = command("ffmpeg");
+    let mut cmd = Tool::Ffmpeg.command();
     cmd.args(["-hide_banner", "-encoders"]);
     let bytes = Process::output(
         &mut cmd,
