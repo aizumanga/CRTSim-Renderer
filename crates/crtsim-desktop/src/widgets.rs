@@ -187,6 +187,29 @@ pub(crate) fn format_value(value: f32) -> String {
     let text = format!("{value:.3}");
     text.trim_end_matches('0').trim_end_matches('.').to_owned()
 }
+/// A drop-down that chooses `value` from `options`, each shown by its name, with the chosen
+/// one's name on the closed box too. Whether the choice changed.
+pub(crate) fn choice<T: PartialEq + Clone>(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut T,
+    options: &[(T, &str)],
+) -> bool {
+    let chosen = options
+        .iter()
+        .find(|(option, _)| option == value)
+        .map_or("", |(_, name)| name);
+    let mut changed = false;
+    egui::ComboBox::from_label(label)
+        .selected_text(chosen)
+        .show_ui(ui, |ui| {
+            for (option, name) in options {
+                changed |= ui.selectable_value(value, option.clone(), *name).changed();
+            }
+        });
+    changed
+}
+
 pub(crate) fn resolution(ui: &mut egui::Ui, label: &str, value: &mut String, presets: &[&str]) {
     ui.horizontal(|ui| {
         egui::ComboBox::from_id_source(label)
@@ -289,6 +312,27 @@ mod tests {
         assert_eq!(value.get(), 0.411);
         frame(vec![key(egui::Key::Delete, egui::Modifiers::NONE)]);
         assert_eq!(value.get(), 0.2);
+    }
+
+    #[test]
+    fn a_choice_shows_the_chosen_name_on_the_closed_box() {
+        let ctx = egui::Context::default();
+        let mut value = 2;
+        let output = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let changed = choice(ui, "Number", &mut value, &[(1, "One"), (2, "Two")]);
+                assert!(!changed);
+            });
+        });
+        let texts: Vec<String> = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::epaint::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect();
+        assert!(texts.iter().any(|text| text == "Two"), "{texts:?}");
     }
 
     #[test]

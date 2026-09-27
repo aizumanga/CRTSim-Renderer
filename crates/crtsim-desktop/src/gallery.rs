@@ -159,22 +159,47 @@ pub fn builtins() -> Vec<Entry> {
 
 /// Every preset the gallery lists: the included ones, then the personal ones in `store`, with a
 /// warning for each personal preset that could not be read.
-pub fn entries(store: Option<&app_data::Store>) -> (Vec<Entry>, Vec<String>) {
-    let mut entries = builtins();
-    let warnings = match store.map(app_data::Store::presets) {
-        Some(Ok((personal, warnings))) => {
-            entries.extend(personal.into_iter().map(|preset| Entry {
-                name: preset.name,
-                description: preset.description,
-                config: preset.config,
-                user: true,
-            }));
-            warnings
-        }
-        Some(Err(e)) => vec![format!("{e:#}")],
-        None => vec![],
-    };
-    (entries, warnings)
+/// The preset gallery: the presets it offers, the files skipped while reading them, the name
+/// the next saved preset takes and a description being edited.
+#[derive(Default)]
+pub struct PresetGallery {
+    pub open: bool,
+    /// Included presets, then personal ones.
+    pub entries: Vec<Entry>,
+    /// Why personal preset files were skipped.
+    pub warnings: Vec<String>,
+    /// The name Save current gives the settings in use.
+    pub name: String,
+    /// The personal preset whose description is being edited, and its text so far.
+    pub editing: Option<(String, String)>,
+}
+
+impl PresetGallery {
+    /// The included presets, and the personal ones in `store`.
+    pub fn new(store: Option<&app_data::Store>) -> Self {
+        let mut gallery = Self::default();
+        gallery.refresh(store);
+        gallery
+    }
+
+    /// Reads the personal presets again, which may have changed on disk.
+    pub fn refresh(&mut self, store: Option<&app_data::Store>) {
+        self.entries = builtins();
+        self.warnings = match store.map(app_data::Store::presets) {
+            Some(Ok((personal, warnings))) => {
+                self.entries
+                    .extend(personal.into_iter().map(|preset| Entry {
+                        name: preset.name,
+                        description: preset.description,
+                        config: preset.config,
+                        user: true,
+                    }));
+                warnings
+            }
+            Some(Err(e)) => vec![format!("{e:#}")],
+            None => vec![],
+        };
+    }
 }
 
 #[cfg(test)]

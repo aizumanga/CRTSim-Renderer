@@ -1,13 +1,36 @@
+//! The gallery of included NES LUTs.
 use crate::gallery_ui::EntryResponse;
 use crate::*;
-use crtsim_core::nes_luts;
+use crtsim_core::{nes_luts, workflow::Lut};
+use std::collections::HashMap;
+
+/// The LUT gallery: its search, and the included LUTs decoded so far.
+#[derive(Default)]
+pub struct LutGallery {
+    pub open: bool,
+    pub search: String,
+    decoded: HashMap<usize, Arc<Lut>>,
+}
+
+impl LutGallery {
+    /// An included LUT, decoded once and then shared, so pointing back and forth does not
+    /// decode it again and the renderer's LUT cache sees the same table each time.
+    pub fn lut(&mut self, index: usize) -> anyhow::Result<Arc<Lut>> {
+        if let Some(lut) = self.decoded.get(&index) {
+            return Ok(lut.clone());
+        }
+        let lut = Arc::new(nes_luts::load(index)?);
+        self.decoded.insert(index, lut.clone());
+        Ok(lut)
+    }
+}
 
 impl App {
     pub(crate) fn lut_gallery_window(&mut self, ctx: &egui::Context) {
-        if !self.show_lut_gallery || self.show_welcome {
+        if !self.luts.open || self.show_welcome {
             return;
         }
-        let query = self.lut_gallery_search.trim().to_lowercase();
+        let query = self.luts.search.trim().to_lowercase();
         // Asked for before the window borrows `self`; only for the entries the search shows.
         let pictures: Vec<Option<TextureHandle>> = (0..nes_luts::ENTRIES.len())
             .map(|index| {
@@ -34,12 +57,12 @@ impl App {
                 );
                 ui.horizontal_wrapped(|ui| {
                     ui.label("Search");
-                    ui.text_edit_singleline(&mut self.lut_gallery_search);
+                    ui.text_edit_singleline(&mut self.luts.search);
                     if ui.small_button("Clear").clicked() {
-                        self.lut_gallery_search.clear();
+                        self.luts.search.clear();
                     }
                 });
-                let query = self.lut_gallery_search.trim().to_lowercase();
+                let query = self.luts.search.trim().to_lowercase();
                 let count = nes_luts::ENTRIES
                     .iter()
                     .filter(|e| e.name.to_lowercase().contains(&query))
@@ -105,38 +128,31 @@ impl App {
                 }
             });
         self.store_window_state("LUT gallery", window);
-        self.show_lut_gallery = open;
+        self.luts.open = open;
+        // The settings in use with `lut` in place of their colour table.
+        let with_lut = |config: &Config, lut| {
+            let mut config = config.clone();
+            config.set_lut(lut);
+            config
+        };
         if open && hovered_none {
-            let config = Config {
-                lut: None,
-                ..self.config.clone()
-            };
-            self.offer_audition("no LUT", config);
+            self.offer_audition("no LUT", with_lut(&self.config, None));
         } else if let Some(index) = hovered.filter(|_| open) {
             // A LUT that cannot be decoded is reported when it is clicked, not while pointed at.
-            if let Ok(lut) = self.included_lut(index) {
+            if let Ok(lut) = self.luts.lut(index) {
                 let label = format!("LUT “{}”", lut.name);
-                let config = Config {
-                    lut: Some(lut),
-                    palette: None,
-                    ..self.config.clone()
-                };
-                self.offer_audition(label, config);
+                self.offer_audition(label, with_lut(&self.config, Some(lut)));
             }
         }
         if remove {
-            let mut config = self.config.clone();
-            config.lut = None;
-            self.replace_config(config);
+            self.replace_config(with_lut(&self.config, None));
             self.error = None;
             self.status = "LUT removed".into();
         } else if let Some(index) = selected {
-            match self.included_lut(index) {
+            match self.luts.lut(index) {
                 Ok(lut) => {
                     let name = lut.name.clone();
-                    let mut config = self.config.clone();
-                    config.lut = Some(lut);
-                    config.palette = None;
+                    let config = with_lut(&self.config, Some(lut));
                     if config != self.config {
                         self.replace_config(config);
                     }

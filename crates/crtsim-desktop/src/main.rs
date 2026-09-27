@@ -5,6 +5,7 @@ mod chrome;
 mod dialogs;
 mod events;
 mod export_ui;
+mod ffmpeg_setup;
 mod files;
 mod gallery;
 mod gallery_ui;
@@ -19,6 +20,7 @@ mod settings_ui;
 mod smoke;
 mod theme;
 mod thumbnails;
+mod timeline;
 mod toolbar;
 mod widgets;
 mod worker;
@@ -84,12 +86,8 @@ struct App {
     /// The session saved to recover, and the project files opened in it.
     session: session::Session,
     ui_context: egui::Context,
-    video: Option<crtsim_media::Video>,
-    video_frame: u64,
-    selected_frame: u64,
-    video_frames: u64,
-    /// Where in the video the frame on screen is, in seconds; playing starts from here.
-    play_time: f64,
+    /// Where the editor is in the video open, if one is.
+    timeline: Option<timeline::Timeline>,
     /// The video playing in the preview, if it is.
     playback: Option<playback::Playback>,
     video_options: crtsim_media::Options,
@@ -100,22 +98,18 @@ struct App {
     theme: theme::Theme,
     show_welcome: bool,
     show_credits: bool,
-    show_gallery: bool,
-    show_lut_gallery: bool,
     show_queue: bool,
     /// The batch export queue.
     queue: batch::Queue,
-    lut_gallery_search: String,
-    gallery_entries: Vec<gallery::Entry>,
+    presets: gallery::PresetGallery,
+    luts: lut_gallery::LutGallery,
+    /// Whether FFmpeg is there for video work, and how to install it.
+    ffmpeg: ffmpeg_setup::FfmpegSetup,
     /// A look previewed from a gallery without being applied; see `audition`.
     audition: Option<audition::Audition>,
     /// What a gallery pointed at this frame, for `settle_audition`.
     offered: Option<audition::Audition>,
-    included_luts: std::collections::HashMap<usize, Arc<crtsim_core::workflow::Lut>>,
     thumbnails: thumbnails::Thumbnails,
-    gallery_warnings: Vec<String>,
-    gallery_name: String,
-    description_edit: Option<(String, String)>,
     tool_windows: app_data::Layout,
     tool_windows_saved: app_data::Layout,
     config: Config,
@@ -169,6 +163,16 @@ impl Displayed {
             Self::Frame { id, size, .. } => egui::load::SizedTexture::new(*id, *size),
         }
     }
+}
+
+/// With Ctrl, or Command on macOS: open a file, save the project, export a PNG.
+const SHORTCUT_OPEN: egui::Key = egui::Key::O;
+const SHORTCUT_SAVE: egui::Key = egui::Key::S;
+const SHORTCUT_EXPORT: egui::Key = egui::Key::E;
+
+/// How `key` with Ctrl, or Command on macOS, is written on this computer, for a menu.
+fn shortcut(ctx: &egui::Context, key: egui::Key) -> String {
+    ctx.format_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, key))
 }
 
 /// A path's file name for showing a person, which need not be valid Unicode.
@@ -244,18 +248,15 @@ impl App {
             Some(smoke) => smoke.welcome,
             None => store.as_ref().is_none_or(app_data::Store::welcome_needed),
         };
-        let (show_gallery, show_lut_gallery) = smoke
-            .as_ref()
-            .map_or((false, false), |smoke| (smoke.gallery, smoke.lut_gallery));
-        let (gallery_entries, gallery_warnings) = gallery::entries(store.as_ref());
+        let mut presets = gallery::PresetGallery::new(store.as_ref());
+        let mut luts = lut_gallery::LutGallery::default();
+        if let Some(smoke) = &smoke {
+            (presets.open, luts.open) = (smoke.gallery, smoke.lut_gallery);
+        }
         let mut app = Self {
             session: Default::default(),
             ui_context: ctx.clone(),
-            video: None,
-            video_frame: 0,
-            selected_frame: 0,
-            video_frames: 0,
-            play_time: 0.,
+            timeline: None,
             playback: None,
             video_options: crtsim_media::Options::default(),
             animation_options: Default::default(),
@@ -265,19 +266,14 @@ impl App {
             theme,
             show_welcome,
             show_credits: false,
-            show_gallery,
-            show_lut_gallery,
             show_queue: false,
             queue: Default::default(),
-            lut_gallery_search: String::new(),
-            gallery_entries,
+            presets,
+            luts,
+            ffmpeg: Default::default(),
             audition: None,
             offered: None,
-            included_luts: Default::default(),
             thumbnails: Default::default(),
-            gallery_warnings,
-            gallery_name: String::new(),
-            description_edit: None,
             tool_windows_saved: tool_windows.clone(),
             tool_windows,
             history: model::History::new(config.clone()),
@@ -306,6 +302,7 @@ impl App {
             preview_error: None,
             smoke,
         };
+        app.ffmpeg.start_check(ctx);
         app.load_session(input_path.is_some());
         if let Some(path) = input_path {
             app.load(path);
@@ -387,19 +384,19 @@ impl App {
     fn app_data(&self) -> Option<&app_data::Store> {
         self.store.as_ref().filter(|_| self.smoke.is_none())
     }
-    /// Makes `input` the image being edited: the file at `path`, a frame of `video`, or with
-    /// neither the built-in test card. The original view shows `thumbnail`.
+    /// Makes `input` the image being edited: the file at `path`, a frame of a video at
+    /// `timeline`, or with neither the built-in test card. The original view shows `thumbnail`.
     fn set_source(
         &mut self,
         path: Option<PathBuf>,
         name: String,
-        video: Option<crtsim_media::Video>,
+        timeline: Option<timeline::Timeline>,
         input: RgbaImage,
         thumbnail: &RgbaImage,
     ) {
         self.source_path = path;
         self.source_name = name;
-        self.video = video;
+        self.timeline = timeline;
         self.original = texture(&self.ui_context, "original", thumbnail, 2048);
         self.input = Arc::new(input);
         self.show_preview(None);
@@ -418,9 +415,17 @@ impl App {
             self.open_project(path);
             return;
         }
-        if crtsim_media::MediaKind::of(&path).is_moving() {
-            self.load_video(path, 0, false);
-            return;
+        match crtsim_media::MediaKind::of(&path) {
+            crtsim_media::MediaKind::Video if self.ffmpeg.missing() => {
+                self.status = format!("Opening {} needs FFmpeg", file_name(&path));
+                self.show_ffmpeg_setup();
+                return;
+            }
+            kind if kind.is_moving() => {
+                self.load_video(path, 0, false);
+                return;
+            }
+            _ => {}
         }
         self.work = Work::Loading(None);
         self.status = format!("Loading {}…", path.display());
@@ -434,11 +439,11 @@ impl App {
         self.send(Job::LoadVideo {
             path,
             frame,
-            cached: if reuse {
-                self.video.clone().map(|v| (v, self.video_frames))
-            } else {
-                None
-            },
+            cached: self
+                .timeline
+                .as_ref()
+                .filter(|_| reuse)
+                .map(|t| (t.video.clone(), t.frames)),
             cancel,
         });
     }
@@ -525,6 +530,38 @@ impl App {
             }
         }
     }
+    /// The keyboard shortcuts, with Ctrl or, on macOS, Command: Z undoes and Shift+Z redoes;
+    /// O opens a file, S saves the project and E exports a PNG, when a file dialog could open.
+    fn shortcuts(&mut self, ctx: &egui::Context) {
+        let pressed = |shift: egui::Modifiers, key: egui::Key| {
+            ctx.input_mut(|i| {
+                [egui::Modifiers::CTRL, egui::Modifiers::COMMAND]
+                    .into_iter()
+                    .any(|command| {
+                        i.consume_shortcut(&egui::KeyboardShortcut::new(command | shift, key))
+                    })
+            })
+        };
+        // Redo first: its shortcut would also match undo's.
+        if pressed(egui::Modifiers::SHIFT, egui::Key::Z) {
+            self.redo();
+        } else if pressed(egui::Modifiers::NONE, egui::Key::Z) {
+            self.undo();
+        }
+        if !self.can_start_work() {
+            return;
+        }
+        if pressed(egui::Modifiers::NONE, SHORTCUT_OPEN) {
+            self.dialog(Dialog::File, ctx);
+        } else if pressed(egui::Modifiers::NONE, SHORTCUT_SAVE) {
+            match self.session.project_path().cloned() {
+                Some(path) => self.save_project_file(path),
+                None => self.dialog(Dialog::SaveProject, ctx),
+            }
+        } else if pressed(egui::Modifiers::NONE, SHORTCUT_EXPORT) {
+            self.dialog(Dialog::Export, ctx);
+        }
+    }
     /// Remembered placement for one tool window. Copied out so the window's contents can
     /// still borrow `self`; write it back with `store_window_state` after the window runs.
     fn window_state(&self, title: &str) -> chrome::ToolWindow {
@@ -565,29 +602,7 @@ impl eframe::App for App {
         ctx.request_repaint_after(Duration::from_secs(2));
         self.receive(ctx);
         if !self.modal_open() && !ctx.wants_keyboard_input() {
-            let mut ctrl_shift = egui::Modifiers::CTRL;
-            ctrl_shift.shift = true;
-            let mut command_shift = egui::Modifiers::COMMAND;
-            command_shift.shift = true;
-            let redo = ctx.input_mut(|i| {
-                i.consume_shortcut(&egui::KeyboardShortcut::new(ctrl_shift, egui::Key::Z))
-                    || i.consume_shortcut(&egui::KeyboardShortcut::new(command_shift, egui::Key::Z))
-            });
-            let undo = !redo
-                && ctx.input_mut(|i| {
-                    i.consume_shortcut(&egui::KeyboardShortcut::new(
-                        egui::Modifiers::CTRL,
-                        egui::Key::Z,
-                    )) || i.consume_shortcut(&egui::KeyboardShortcut::new(
-                        egui::Modifiers::COMMAND,
-                        egui::Key::Z,
-                    ))
-                });
-            if redo {
-                self.redo();
-            } else if undo {
-                self.undo();
-            }
+            self.shortcuts(ctx);
         }
         if self.can_start_work() {
             let dropped = ctx.input(|i| i.raw.dropped_files.first().and_then(|f| f.path.clone()));
@@ -674,6 +689,7 @@ impl eframe::App for App {
         self.lut_gallery_window(ctx);
         self.settle_audition();
         self.credits_window(ctx);
+        self.ffmpeg_window(ctx);
         let now = Instant::now();
         match self.schedule.due(now, ctx.input(|i| i.pointer.any_down())) {
             schedule::Due::Nothing => {}
@@ -711,8 +727,8 @@ impl Drop for App {
 fn main() -> eframe::Result<()> {
     let mut input = None;
     let mut smoke = None;
-    let mut backends = wgpu::Backends::PRIMARY;
-    let mut pinned_backend = false;
+    // The backend --backend asks for; none lets wgpu choose among the primary ones.
+    let mut backend = None;
     let mut smoke_welcome = false;
     let mut smoke_gallery = false;
     let mut smoke_lut_gallery = false;
@@ -725,15 +741,11 @@ fn main() -> eframe::Result<()> {
             "--smoke-lut-gallery" => smoke_lut_gallery = true,
             "--smoke-export" => smoke_export = true,
             "--backend" => {
-                pinned_backend = true;
-                backends = match args.next().as_deref() {
-                    Some("vulkan") => wgpu::Backends::VULKAN,
-                    Some("dx12") => wgpu::Backends::DX12,
-                    Some("metal") => wgpu::Backends::METAL,
-                    Some("auto") => {
-                        pinned_backend = false;
-                        wgpu::Backends::PRIMARY
-                    }
+                backend = match args.next().as_deref() {
+                    Some("vulkan") => Some(wgpu::Backends::VULKAN),
+                    Some("dx12") => Some(wgpu::Backends::DX12),
+                    Some("metal") => Some(wgpu::Backends::METAL),
+                    Some("auto") => None,
                     _ => {
                         eprintln!("Expected --backend auto|vulkan|dx12|metal");
                         std::process::exit(2);
@@ -778,11 +790,7 @@ fn main() -> eframe::Result<()> {
                 // pinned, OpenGL stays available so the window still opens on a machine with
                 // no modern backend and can say so, as it could when the interface drew with
                 // GL; rendering there falls back to its own device, exactly as before.
-                supported_backends: if pinned_backend {
-                    backends
-                } else {
-                    backends | wgpu::Backends::GL
-                },
+                supported_backends: backend.unwrap_or(wgpu::Backends::PRIMARY | wgpu::Backends::GL),
                 // The window only needs a device big enough for the window; the renderer needs
                 // one big enough for a full-resolution export, so ask for the larger of the
                 // two. Not of a GL adapter, which cannot meet them -- asking would stop the
@@ -812,7 +820,7 @@ fn main() -> eframe::Result<()> {
                 Some(state) if state.adapter.get_info().backend != wgpu::Backend::Gl => {
                     worker::Gpu::Shared(state.clone())
                 }
-                _ => worker::Gpu::Own(backends),
+                _ => worker::Gpu::Own(backend.unwrap_or(wgpu::Backends::PRIMARY)),
             };
             let smoke = smoke.map(|screenshot| {
                 let mut smoke = Smoke::new(screenshot);
@@ -895,6 +903,34 @@ mod tests {
             _ => panic!("expected a preview while exporting"),
         }
         assert!(app.work.is_exporting() && app.schedule.rendering());
+    }
+
+    #[test]
+    fn ctrl_s_saves_the_open_project() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(
+            &ctx,
+            worker::Gpu::Own(wgpu::Backends::PRIMARY),
+            None,
+            Some(Smoke::new("unused-smoke.png".into())),
+        );
+        app.show_welcome = false;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("look.crtsim");
+        app.session.opened(path.clone(), None).unwrap();
+        let ctrl_s = egui::Event::Key {
+            key: SHORTCUT_SAVE,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::CTRL | egui::Modifiers::COMMAND,
+        };
+        let input = egui::RawInput {
+            events: vec![ctrl_s],
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| app.shortcuts(ctx));
+        assert!(project::read(&path).is_ok(), "{:?}", app.error);
     }
 
     #[test]

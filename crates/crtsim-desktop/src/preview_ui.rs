@@ -1,5 +1,5 @@
 //! The preview area: the rendered picture, its comparison split and the video controls.
-use crate::widgets::{show_image, Keyed};
+use crate::widgets::{choice, show_image, Keyed};
 use crate::*;
 
 impl App {
@@ -21,19 +21,17 @@ impl App {
             }
         });
         ui.horizontal_wrapped(|ui| {
-            let previous = self.preview_limit;
-            egui::ComboBox::from_label("Preview quality")
-                .selected_text(match self.preview_limit {
-                    Some(800) => "Fast (800 px)",
-                    Some(_) => "Balanced (1280 px)",
-                    None => "Export resolution",
-                })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.preview_limit, Some(800), "Fast (800 px)");
-                    ui.selectable_value(&mut self.preview_limit, Some(1280), "Balanced (1280 px)");
-                    ui.selectable_value(&mut self.preview_limit, None, "Export resolution");
-                });
-            if previous != self.preview_limit {
+            let chosen = choice(
+                ui,
+                "Preview quality",
+                &mut self.preview_limit,
+                &[
+                    (Some(800), "Fast (800 px)"),
+                    (Some(1280), "Balanced (1280 px)"),
+                    (None, "Export resolution"),
+                ],
+            );
+            if chosen {
                 self.changed();
             }
             ui.checkbox(&mut self.fit_preview, "Fit view");
@@ -87,7 +85,7 @@ impl App {
         if self.rendered.is_some() && !self.schedule.is_current() {
             ui.colored_label(ui.visuals().warn_fg_color, "Preview is out of date.");
         }
-        let controls_height = if self.video.is_some() { 136. } else { 0. };
+        let controls_height = if self.timeline.is_some() { 136. } else { 0. };
         let available = egui::vec2(
             ui.available_width(),
             (ui.available_height() - controls_height).max(1.),
@@ -129,66 +127,53 @@ impl App {
     }
 
     fn video_controls(&mut self, ui: &mut egui::Ui) {
-        let Some(video) = self.video.clone() else {
-            return;
-        };
-        let last = self.video_frames.saturating_sub(1);
         // A gallery in its own OS window has its own keyboard focus, so it no longer steals
         // the arrow keys below; only the embedded fallback shares this viewport's input.
-        let galleries_overlap =
-            ui.ctx().embed_viewports() && (self.show_gallery || self.show_lut_gallery);
+        let galleries_overlap = ui.ctx().embed_viewports() && (self.presets.open || self.luts.open);
         let enabled = self.can_start_work() && !galleries_overlap;
+        let playing = self.playback.is_some();
+        let Some(timeline) = &mut self.timeline else {
+            return;
+        };
+        let last = timeline.last();
+        let mut toggle = false;
         let mut seek = false;
         ui.separator();
         ui.add_enabled_ui(enabled, |ui| {
             ui.horizontal_wrapped(|ui| {
-                if ui
-                    .button(if self.playback.is_some() {
-                        "Ⅱ Pause"
-                    } else {
-                        "▶ Play"
-                    })
-                    .clicked()
-                {
-                    if self.playback.is_some() {
-                        self.stop_playback();
-                    } else {
-                        self.start_playback();
-                    }
-                }
+                toggle = ui
+                    .button(if playing { "Ⅱ Pause" } else { "▶ Play" })
+                    .clicked();
                 ui.small("Silent preview");
                 ui.monospace(format!(
-                    "{:02}:{:02} / {:02}:{:02}",
-                    self.play_time as u64 / 60,
-                    self.play_time as u64 % 60,
-                    video.duration as u64 / 60,
-                    video.duration as u64 % 60
+                    "{} / {}",
+                    minutes_and_seconds(timeline.time),
+                    minutes_and_seconds(timeline.video.duration)
                 ));
                 if ui
-                    .add_enabled(self.video_frame > 0, egui::Button::new("|◀"))
+                    .add_enabled(timeline.shown > 0, egui::Button::new("|◀"))
                     .clicked()
                 {
-                    self.selected_frame = self.video_frame.saturating_sub(1);
+                    timeline.pick_previous();
                     seek = true;
                 }
                 if ui
-                    .add_enabled(self.video_frame < last, egui::Button::new("▶|"))
+                    .add_enabled(timeline.shown < last, egui::Button::new("▶|"))
                     .clicked()
                 {
-                    self.selected_frame = (self.video_frame + 1).min(last);
+                    timeline.pick_next();
                     seek = true;
                 }
                 ui.label("Frame");
-                let mut display_frame = self.selected_frame + 1;
+                let mut display_frame = timeline.picked + 1;
                 let number = ui.add(
                     egui::DragValue::new(&mut display_frame)
-                        .clamp_range(1..=self.video_frames)
+                        .clamp_range(1..=timeline.frames)
                         .speed(1),
                 );
-                self.selected_frame = display_frame.saturating_sub(1).min(last);
-                seek |= number.drag_stopped()
-                    || (number.lost_focus() && self.selected_frame != self.video_frame);
-                ui.label(format!("/ {}", self.video_frames));
+                timeline.picked = display_frame.saturating_sub(1).min(last);
+                seek |= number.drag_stopped() || (number.lost_focus() && timeline.seeking());
+                ui.label(format!("/ {}", timeline.frames));
                 if ui.button("Go").clicked() {
                     seek = true;
                 }
@@ -196,28 +181,22 @@ impl App {
             ui.scope(|ui| {
                 ui.spacing_mut().slider_width = (ui.available_width() - 20.).max(100.);
                 let response =
-                    ui.add(egui::Slider::new(&mut self.selected_frame, 0..=last).show_value(false));
+                    ui.add(egui::Slider::new(&mut timeline.picked, 0..=last).show_value(false));
                 seek |= response.drag_stopped()
                     || (response.changed() && !ui.input(|i| i.pointer.any_down()));
             });
             if !ui.ctx().wants_keyboard_input() {
-                if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space)) {
-                    if self.playback.is_some() {
-                        self.stop_playback();
-                    } else {
-                        self.start_playback();
-                    }
-                }
+                toggle |= ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space));
                 // A slider that has the keyboard takes the arrows for itself.
                 let stepping = ui.ctx().memory(|m| m.focused().is_none());
                 let arrow =
                     |key| stepping && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, key));
                 if arrow(egui::Key::ArrowLeft) {
-                    self.selected_frame = self.video_frame.saturating_sub(1);
+                    timeline.pick_previous();
                     seek = true;
                 }
                 if arrow(egui::Key::ArrowRight) {
-                    self.selected_frame = (self.video_frame + 1).min(last);
+                    timeline.pick_next();
                     seek = true;
                 }
             }
@@ -225,12 +204,23 @@ impl App {
         ui.small(format!(
             "Showing frame {} · Left/Right arrow keys step frames unless a slider is \
             selected (Esc lets go of it) · Export frame saves this settled CRT still as PNG.",
-            self.video_frame + 1
+            timeline.shown + 1
         ));
-        if seek && enabled && self.selected_frame != self.video_frame {
-            self.load_video(video.path, self.selected_frame, true);
+        let pick = (seek && enabled && timeline.seeking())
+            .then(|| (timeline.video.path.clone(), timeline.picked));
+        if toggle {
+            self.toggle_playback();
+        }
+        if let Some((path, frame)) = pick {
+            self.load_video(path, frame, true);
         }
     }
+}
+
+/// `seconds` as minutes and seconds, as a player shows them.
+fn minutes_and_seconds(seconds: f64) -> String {
+    let whole = seconds as u64;
+    format!("{:02}:{:02}", whole / 60, whole % 60)
 }
 
 pub fn compare(

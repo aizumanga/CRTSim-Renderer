@@ -154,7 +154,7 @@ impl App {
     /// Whether a gallery on screen is still waiting for thumbnails, so the smoke screenshot can
     /// wait for them rather than capture spinners in some places and pictures in others.
     pub(crate) fn thumbnails_pending(&self) -> bool {
-        (self.show_gallery || self.show_lut_gallery)
+        (self.presets.open || self.luts.open)
             && self
                 .thumbnails
                 .entries
@@ -264,7 +264,7 @@ mod tests {
         let mut app = App::new(&ctx, worker::Gpu::Own(wgpu::Backends::PRIMARY), None, None);
         let (captured, _work, _previews) = worker::Jobs::capture();
         app.jobs = captured;
-        app.show_lut_gallery = true;
+        app.luts.open = true;
         app.lut_thumbnail(0);
         assert!(app.thumbnails_pending());
         let generation = app.thumbnails.generation;

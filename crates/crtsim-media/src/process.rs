@@ -36,8 +36,9 @@ impl Process {
         }
         let mut child = command.spawn().with_context(|| {
             format!(
-                "Cannot start {program}. Install FFmpeg and ffprobe, add them to PATH, or \
-                     set CRTSIM_FFMPEG and CRTSIM_FFPROBE"
+                "Cannot start {program}. Video needs FFmpeg and ffprobe: install them, put \
+                 them in a folder named ffmpeg next to this program, or set CRTSIM_FFMPEG and \
+                 CRTSIM_FFPROBE to their paths"
             )
         })?;
         let mut stderr = child.stderr.take().unwrap();

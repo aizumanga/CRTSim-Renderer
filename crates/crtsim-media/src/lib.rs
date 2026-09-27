@@ -6,6 +6,7 @@ mod export;
 mod plan;
 mod probe;
 mod process;
+mod tools;
 
 pub use animated::AnimationFormat;
 pub use animation::{AnimationOptions, AnimationSummary, Dither};
@@ -13,6 +14,7 @@ pub use decode::{playback, preview, preview_frame};
 pub(crate) use export::Rate;
 pub use export::{export, export_animation, export_animation_with, export_with, render_config};
 pub use probe::{frame_count, probe, Source, Track, TrackKind, Video};
+pub use tools::{Found, Tool, ToolCheck};
 
 use anyhow::{ensure, Context, Result};
 use crtsim_core::config::Config;
@@ -21,7 +23,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     path::Path,
-    process::Command,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -291,7 +292,7 @@ struct PresetWire {
 
 /// Container comments survive MP4, Matroska and WebM muxing, unlike arbitrary MP4 keys.
 pub fn import_preset(path: &Path, input: (u32, u32), cancel: &Arc<AtomicBool>) -> Result<Preset> {
-    let mut cmd = command("ffprobe");
+    let mut cmd = Tool::Ffprobe.command();
     cmd.args(["-show_entries", "format_tags=comment", "-of", "json"])
         .arg(path.canonicalize().context("Cannot open video")?);
     let bytes = Process::output(
@@ -329,26 +330,6 @@ fn parse_preset(root: &Value, input: (u32, u32)) -> Result<Preset> {
 pub fn check_cancel(cancel: &AtomicBool) -> Result<()> {
     ensure!(!cancel.load(Ordering::Relaxed), "Export cancelled");
     Ok(())
-}
-
-fn command(program: &str) -> Command {
-    // Explicit executable overrides also support portable FFmpeg installations with spaces.
-    let key = if program == "ffmpeg" {
-        "CRTSIM_FFMPEG"
-    } else {
-        "CRTSIM_FFPROBE"
-    };
-    let mut command = Command::new(std::env::var_os(key).unwrap_or_else(|| program.into()));
-    if std::env::var_os("CRTSIM_APPIMAGE").is_some() {
-        if let Some(original) = std::env::var_os("CRTSIM_HOST_LD_LIBRARY_PATH") {
-            command.env("LD_LIBRARY_PATH", original);
-        }
-    }
-    command.args(["-v", "error"]);
-    if program == "ffmpeg" {
-        command.arg("-nostdin");
-    }
-    command
 }
 
 #[cfg(test)]

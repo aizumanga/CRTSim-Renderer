@@ -237,6 +237,23 @@ impl Config {
         }
     }
 
+    /// Maps colours through `lut`, which replaces the NES palette: a look uses one colour
+    /// table at most.
+    pub fn set_lut(&mut self, lut: Option<std::sync::Arc<crate::workflow::Lut>>) {
+        if lut.is_some() {
+            self.palette = None;
+        }
+        self.lut = lut;
+    }
+
+    /// Makes the NES palette from its composite signal, which replaces any LUT.
+    pub fn set_palette(&mut self, palette: Option<crate::palette::NesPalette>) {
+        if palette.is_some() {
+            self.lut = None;
+        }
+        self.palette = palette;
+    }
+
     /// One version-aware entry point for presets. Future migrations belong here instead of
     /// being duplicated across the CLI, desktop JSON loader and embedded metadata readers.
     pub fn from_json_slice(bytes: &[u8]) -> Result<Self> {
@@ -454,6 +471,19 @@ mod tests {
         .unwrap();
         assert!(gray.pixels().all(|p| p[0] == p[1] && p[1] == p[2]));
         assert_ne!(prepare(&src, &Config { hue: 30., ..c }).unwrap(), src);
+    }
+
+    #[test]
+    fn a_lut_and_the_nes_palette_replace_each_other() {
+        let lut = std::sync::Arc::new(crate::nes_luts::load(0).unwrap());
+        let mut c = Config::default();
+        c.set_palette(Some(Default::default()));
+        c.set_lut(Some(lut.clone()));
+        assert!(c.palette.is_none() && c.validate().is_ok());
+        c.set_palette(Some(Default::default()));
+        assert!(c.lut.is_none() && c.validate().is_ok());
+        c.set_lut(None);
+        assert!(c.palette.is_some(), "removing no LUT keeps the palette");
     }
 
     #[test]

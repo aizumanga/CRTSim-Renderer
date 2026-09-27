@@ -95,6 +95,8 @@ already exists; after confirmation, the app writes a complete temporary file and
 - **Load / Save preset** uses the same version-1 JSON format as the CLI. **Undo / Redo / Reset** acts on settings, not source files or exported files.
   `Ctrl+Z` and `Ctrl+Shift+Z` provide undo and redo shortcuts (`Command` equivalents are also accepted on macOS).
 - Signal and export size boxes accept named presets or custom `WIDTHxHEIGHT`. Resolved dimensions and crop/mask warnings are shown in the window.
+- `Ctrl+O` opens a file, `Ctrl+S` saves the project (asking where, the first time) and `Ctrl+E` exports a PNG;
+  the menus show them, with `Command` on macOS.
 - Click or drag a slider to give it the keyboard: **←/→** step it by 1% of its range, **Shift** by 10%, **Alt** by 0.1%, and **Delete** returns it to its default. **Esc** or a click elsewhere lets go.
 
 The original-image display is limited to a 2048-pixel thumbnail; export always uses the loaded source.
@@ -133,11 +135,16 @@ Vulkan/DX12/Metal implementation will show a compatible-adapter error; it is not
 
 ### Video
 
-Install `ffmpeg` and `ffprobe` on PATH (on Arch: `sudo pacman -S ffmpeg`). The image renderer does not need them.
-For a portable installation, set `CRTSIM_FFMPEG` and `CRTSIM_FFPROBE` to the respective executable paths.
+Video needs `ffmpeg` and `ffprobe`; the image renderer does not. **Export → FFmpeg setup…** shows whether they
+were found, which export formats they can write, and the install command for your system with a Copy button
+(`winget install --id Gyan.FFmpeg -e` on Windows, `brew install ffmpeg` on macOS, your package manager on Linux).
+Opening a video without FFmpeg opens that window instead of failing.
+The app looks for the programs, in order, where `CRTSIM_FFMPEG` and `CRTSIM_FFPROBE` point; beside the app, or in an
+`ffmpeg` or `ffmpeg/bin` folder next to it; in Homebrew's and MacPorts' folders on macOS, and winget's, Scoop's and
+Chocolatey's on Windows, which apps started from the desktop may not have on their PATH; and finally on PATH.
 FFmpeg must include `libx264` for MP4/MKV, `libvpx-vp9` for WebM, `libwebp` for animated WebP export, and AAC/Opus encoders when converting audio.
 Animated GIF and WebP open and play without FFmpeg; exporting any video or animation needs it.
-Missing executables/codecs produce an error in the window; nothing is downloaded automatically.
+Nothing is downloaded automatically.
 
 1. Choose **Open File…**, drop a video or an animated GIF/WebP, or pass its path on the command line.
    A GIF or WebP with a single frame opens as a still image. Batches keep turning animated WebP into a PNG of its first frame, as before; animated GIFs batch as MKV video.

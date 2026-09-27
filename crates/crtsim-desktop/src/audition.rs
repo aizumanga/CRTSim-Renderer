@@ -2,7 +2,6 @@
 //! image with it, and moving away returns to the settings in use. Nothing about the auditioned
 //! look reaches the settings, their undo history or an export until it is clicked.
 use crate::*;
-use crtsim_core::{nes_luts, workflow::Lut};
 
 /// A look being previewed from a gallery without being applied.
 #[derive(Clone, PartialEq)]
@@ -38,17 +37,6 @@ impl App {
         self.audition = offered;
         // Like an edit, but without stopping playback or touching the settings.
         self.schedule.changed(Change::Audition, Instant::now());
-    }
-
-    /// An included LUT, decoded once and then shared, so hovering back and forth does not
-    /// decode it again and the renderer's LUT cache sees the same table each time.
-    pub(crate) fn included_lut(&mut self, index: usize) -> anyhow::Result<Arc<Lut>> {
-        if let Some(lut) = self.included_luts.get(&index) {
-            return Ok(lut.clone());
-        }
-        let lut = Arc::new(nes_luts::load(index)?);
-        self.included_luts.insert(index, lut.clone());
-        Ok(lut)
     }
 }
 

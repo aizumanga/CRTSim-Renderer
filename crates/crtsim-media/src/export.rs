@@ -2,7 +2,7 @@
 //! file, such as by muxing the source's tracks, and only then replace the output.
 use crate::{
     animation::AnimationPlan,
-    check_cancel, command,
+    check_cancel,
     decode::{Decoder, Request},
     plan::ExportPlan,
     process::Process,
@@ -21,25 +21,6 @@ use std::{
     sync::{atomic::AtomicBool, mpsc, Arc},
     time::Instant,
 };
-
-pub(crate) fn require_encoder(name: &str, cancel: &Arc<AtomicBool>) -> Result<()> {
-    let mut cmd = command("ffmpeg");
-    cmd.args(["-hide_banner", "-encoders"]);
-    let bytes = Process::output(
-        &mut cmd,
-        cancel,
-        2 * 1024 * 1024,
-        "FFmpeg encoder list is too large",
-    )?;
-    let available = String::from_utf8_lossy(&bytes)
-        .lines()
-        .any(|line| line.split_whitespace().nth(1) == Some(name));
-    ensure!(
-        available,
-        "This FFmpeg installation does not provide the required {name} video encoder"
-    );
-    Ok(())
-}
 
 /// The settings frames are rendered with at `fps` frames per second under `timing`.
 pub fn render_config(config: &Config, timing: Timing, fps: f64) -> Config {

@@ -1,5 +1,5 @@
 //! What a video file holds, as ffprobe reports it.
-use crate::{animated, check_cancel, command, process::Process, AnimationFormat, MediaKind};
+use crate::{animated, check_cancel, process::Process, AnimationFormat, MediaKind, Tool};
 use anyhow::{ensure, Context, Result};
 use crtsim_core::config;
 use serde_json::Value;
@@ -99,7 +99,7 @@ pub fn frame_count(video: &Video, cancel: &Arc<AtomicBool>) -> Result<u64> {
     if let Some(frames) = video.frames.filter(|frames| *frames > 0) {
         return Ok(frames);
     }
-    let mut cmd = command("ffprobe");
+    let mut cmd = Tool::Ffprobe.command();
     cmd.args([
         "-select_streams",
         &video.stream.to_string(),
@@ -146,7 +146,7 @@ pub fn probe(path: &Path, cancel: &Arc<AtomicBool>) -> Result<Video> {
     if let MediaKind::Animation(format) = MediaKind::of(&path) {
         return animated::probe(path, format, cancel);
     }
-    let mut cmd = command("ffprobe");
+    let mut cmd = Tool::Ffprobe.command();
     cmd.args(["-show_streams", "-show_format", "-of", "json"])
         .arg(&path);
     let bytes = Process::output(

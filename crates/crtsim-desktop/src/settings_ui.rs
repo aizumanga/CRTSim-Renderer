@@ -1,10 +1,10 @@
 //! The settings panel: CRT settings by section, then source framing and color.
-use crate::widgets::{numbers, resolution, Keyed};
+use crate::widgets::{choice, numbers, resolution, Keyed};
 use crate::*;
 
 impl App {
     pub(crate) fn settings(&mut self, ui: &mut egui::Ui) {
-        if let Some(video) = &self.video {
+        if let Some(video) = self.timeline.as_ref().map(|t| &t.video) {
             ui.heading("Video");
             ui.label(format!(
                 "{:.2}s · {:.3} FPS · {}",
@@ -79,32 +79,26 @@ impl App {
                 &mut self.config.output,
                 &["720p", "1080p", "1440p", "4k", "reference", "match-input"],
             );
-            egui::ComboBox::from_label("Fit on 4:3 tube")
-                .selected_text(format!("{:?}", self.config.fit))
-                .show_ui(ui, |ui| {
-                    for (value, name) in [
-                        (Fit::Contain, "Contain"),
-                        (Fit::Cover, "Cover (crop)"),
-                        (Fit::Stretch, "Stretch"),
-                        (Fit::Reference, "Reference"),
-                    ] {
-                        ui.selectable_value(&mut self.config.fit, value, name);
-                    }
-                });
-            egui::ComboBox::from_label("Resize filter")
-                .selected_text(format!("{:?}", self.config.filter))
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut self.config.filter,
-                        Filter::Lanczos,
-                        "Lanczos (smooth)",
-                    );
-                    ui.selectable_value(
-                        &mut self.config.filter,
-                        Filter::Nearest,
-                        "Nearest (pixel art)",
-                    );
-                });
+            choice(
+                ui,
+                "Fit on 4:3 tube",
+                &mut self.config.fit,
+                &[
+                    (Fit::Contain, "Contain"),
+                    (Fit::Cover, "Cover (crop)"),
+                    (Fit::Stretch, "Stretch"),
+                    (Fit::Reference, "Reference"),
+                ],
+            );
+            choice(
+                ui,
+                "Resize filter",
+                &mut self.config.filter,
+                &[
+                    (Filter::Lanczos, "Lanczos (smooth)"),
+                    (Filter::Nearest, "Nearest (pixel art)"),
+                ],
+            );
             numbers(ui, &mut self.config, &defaults, settings::Section::Image);
             if let (Ok(signal), Ok(output)) = (
                 self.config.signal_size(self.input.dimensions()),
@@ -139,23 +133,15 @@ impl App {
         });
         self.framing_and_color(ui);
         chrome::Section::new("Color processing").show(ui, |ui| {
-            egui::ComboBox::from_label("Color processing")
-                .selected_text(match self.config.color_mode {
-                    ColorMode::Reference => "Original gamma",
-                    ColorMode::LinearLight => "Linear light (experimental)",
-                })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut self.config.color_mode,
-                        ColorMode::Reference,
-                        "Original gamma",
-                    );
-                    ui.selectable_value(
-                        &mut self.config.color_mode,
-                        ColorMode::LinearLight,
-                        "Linear light (experimental)",
-                    );
-                });
+            choice(
+                ui,
+                "Color processing",
+                &mut self.config.color_mode,
+                &[
+                    (ColorMode::Reference, "Original gamma"),
+                    (ColorMode::LinearLight, "Linear light (experimental)"),
+                ],
+            );
             if self.config.color_mode == ColorMode::LinearLight {
                 ui.small(
                     "Linear-light glass, lighting and bloom; SDR output. The analog signal \
@@ -221,13 +207,17 @@ impl App {
                     |s| s.text("Warm-up ticks"),
                 );
             });
-            egui::ComboBox::from_label("Phase")
-                .selected_text(format!("{:?}", self.config.phase))
-                .show_ui(ui, |ui| {
-                    for phase in [Phase::Stable, Phase::A, Phase::B, Phase::Alternating] {
-                        ui.selectable_value(&mut self.config.phase, phase, format!("{phase:?}"));
-                    }
-                });
+            choice(
+                ui,
+                "Phase",
+                &mut self.config.phase,
+                &[
+                    (Phase::Stable, "Stable"),
+                    (Phase::A, "A"),
+                    (Phase::B, "B"),
+                    (Phase::Alternating, "Alternating"),
+                ],
+            );
             ui.checkbox(&mut self.config.interlace, "Interlaced fields")
                 .on_hover_text(
                     "Each tick scans every other row, alternating fields; the rows it skips \
@@ -345,13 +335,13 @@ impl App {
             });
             if ui.button("LUT gallery…").clicked() {
                 self.stop_playback();
-                self.show_lut_gallery = true;
+                self.luts.open = true;
             }
             if ui.button("Import 3D .cube…").clicked() {
                 self.dialog(Dialog::Lut, &ui.ctx().clone());
             }
             if self.config.lut.is_some() && ui.button("Remove LUT").clicked() {
-                self.config.lut = None;
+                self.config.set_lut(None);
             }
             let mut generated = self.config.palette.is_some();
             let toggled = ui
@@ -363,10 +353,7 @@ impl App {
                 )
                 .changed();
             if toggled {
-                self.config.palette = generated.then(Default::default);
-                if generated {
-                    self.config.lut = None;
-                }
+                self.config.set_palette(generated.then(Default::default));
             }
             if self.config.lut.is_some() || self.config.palette.is_some() {
                 let defaults = Config {

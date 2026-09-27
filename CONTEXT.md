@@ -21,6 +21,10 @@ it becomes an undo step and, with live preview on, is previewed.
 An audition is previewed whether or not live preview is on, and never reaches the settings,
 their undo history or an export.
 
+**Timeline**: where the editor is in an open video: the frame on screen, the frame the
+controls have picked to go to, and the time playing starts from
+(`crates/crtsim-desktop/src/timeline.rs`). There is one only while a video or animation is open.
+
 **Playback**: playing a video in the preview (`crates/crtsim-desktop/src/playback.rs`). The
 worker renders frames ahead into a small buffer, and each is shown when its time comes. Frames
 already overdue are skipped rather than shown late.
@@ -28,6 +32,13 @@ already overdue are skipped rather than shown late.
 **Preroll**: the frames playback waits for before its clock starts: three, or all the buffer
 holds when large frames make it smaller. When the renderer falls behind, the clock stops and
 playback prerolls again.
+
+**Colour table**: the LUT or the NES palette a look maps colours through before the CRT. A look
+has one at most; choosing either replaces the other (`Config::set_lut`, `Config::set_palette`).
+
+**Preset gallery** and **LUT gallery**: the windows offering looks to audition and apply
+(`gallery.rs` and `lut_gallery.rs`). The preset gallery also saves the settings in use as a
+personal preset; the LUT gallery decodes each included LUT once and shares it.
 
 **Batch queue**: exports that each render one file with the settings in use when they were
 added, one at a time and in order (`crates/crtsim-desktop/src/batch.rs`). Each output is named
@@ -44,3 +55,8 @@ load or a project being restored leaves the settings half applied.
 **App data**: the folder holding everything the app remembers between runs: the welcome
 acknowledged, the theme, tool window placement, personal presets, recent projects and the
 session (`crates/crtsim-desktop/src/app_data.rs`). Only that module knows the files in it.
+
+**FFmpeg setup**: whether the FFmpeg programs video work needs start, which export formats
+they can write, and how to install them (`crates/crtsim-desktop/src/ffmpeg_setup.rs`). The
+programs are found, never downloaded (`crates/crtsim-media/src/tools.rs`); see
+[the decision](docs/adr/0001-find-ffmpeg-never-download-it.md).

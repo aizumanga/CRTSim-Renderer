@@ -143,10 +143,20 @@ impl App {
         }
     }
 
+    /// Plays the video from the frame on screen, or pauses it where it is.
+    pub fn toggle_playback(&mut self) {
+        if self.playback.is_some() {
+            self.stop_playback();
+        } else {
+            self.start_playback();
+        }
+    }
+
     pub fn start_playback(&mut self) {
-        let Some(video) = self.video.clone() else {
+        let Some(timeline) = &self.timeline else {
             return;
         };
+        let (video, time) = (timeline.video.clone(), timeline.time);
         self.stop_playback();
         let config = match self
             .config
@@ -159,7 +169,7 @@ impl App {
             }
         };
         let output = config.output_size(video.size).unwrap_or(video.size);
-        let (playback, feed) = Playback::new(&video, self.play_time, output);
+        let (playback, feed) = Playback::new(&video, time, output);
         self.playback = Some(playback);
         self.schedule.drop_pending();
         self.status = "Buffering · warming CRT history…".into();
@@ -200,18 +210,15 @@ impl App {
     /// Shows a frame that has come due: its source as the original, and its CRT picture as the
     /// preview.
     fn show_playing(&mut self, ctx: &egui::Context, frame: PlaybackFrame) {
-        self.play_time = frame.time;
+        if let Some(timeline) = &mut self.timeline {
+            timeline.played(frame.time);
+        }
         self.original = texture(ctx, "playing-source", &frame.source, 2048);
         let limit = ctx.input(|i| i.max_texture_side) as u32;
         let crt = texture(ctx, "playing-crt", &frame.crt, limit);
         self.show_preview(Some(Displayed::Uploaded(crt)));
         self.schedule.show_current();
         self.input = Arc::new(frame.source);
-        if let Some(video) = &self.video {
-            let number = (frame.time * video.fps).round() as u64;
-            self.video_frame = number.min(self.video_frames.saturating_sub(1));
-            self.selected_frame = self.video_frame;
-        }
     }
 }
 
@@ -390,15 +397,16 @@ mod tests {
             assert!(started.elapsed() < Duration::from_secs(120), "stalled");
             std::thread::sleep(5 * MS);
         };
-        while app.video.is_none() {
+        while app.timeline.is_none() {
             waited(&mut app);
         }
         app.start_playback();
         let mut times = vec![];
         while app.playback.is_some() {
             app.tick_playback(&ctx);
-            if times.last() != Some(&app.play_time) {
-                times.push(app.play_time);
+            let time = app.timeline.as_ref().unwrap().time;
+            if times.last() != Some(&time) {
+                times.push(time);
             }
             waited(&mut app);
         }

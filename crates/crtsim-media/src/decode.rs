@@ -3,8 +3,8 @@
 //! FFmpeg decodes videos. Animated GIF and WebP are decoded by `animated` instead; both come
 //! out as the same stream of packed RGBA frames at the video's size.
 use crate::{
-    animated, check_cancel, command, export::QUEUED_FRAMES, probe::Source, process::Process,
-    render_config, Options, Rate, Video,
+    animated, check_cancel, export::QUEUED_FRAMES, probe::Source, process::Process, render_config,
+    Options, Rate, Tool, Video,
 };
 use anyhow::{ensure, Context, Result};
 use crtsim_core::{config::Config, Renderer, Sequence};
@@ -86,7 +86,7 @@ impl Decoder {
 }
 
 fn decode_command(video: &Video, request: &Request) -> Command {
-    let mut cmd = command("ffmpeg");
+    let mut cmd = Tool::Ffmpeg.command();
     // Seeking is input-relative and preview-only; full exports always start at zero.
     if request.start > 0. {
         cmd.args(["-ss", &request.start.to_string()]);

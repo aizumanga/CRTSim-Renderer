@@ -67,7 +67,9 @@ A Windows installer, Intel/universal Mac builds and Apple signing are deferred.
 
 ### Video setup and user data
 
-Install FFmpeg and ffprobe separately and add both to PATH, or set `CRTSIM_FFMPEG` and `CRTSIM_FFPROBE` to their full paths.
+Install FFmpeg and ffprobe separately; **Export → FFmpeg setup…** gives the command for your system. Put both on PATH,
+in a folder named `ffmpeg` next to the app (the Windows ZIP and Linux tarball), or set `CRTSIM_FFMPEG` and
+`CRTSIM_FFPROBE` to their full paths. On macOS, Homebrew's folders are searched even when the app is opened from Finder.
 They must include the codecs described in [VIDEO_PIPELINE.md](VIDEO_PIPELINE.md). Image rendering works without FFmpeg.
 There are no automatic runtime downloads. Personal presets remain in the normal per-user app-data directory;
 updating or replacing a portable package does not delete them. Use `CRTSIM_DATA_DIR` for an explicit alternate directory.
