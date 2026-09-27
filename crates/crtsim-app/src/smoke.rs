@@ -51,7 +51,10 @@ impl App {
             return;
         };
         if smoke.started.elapsed() > Duration::from_secs(120) {
-            eprintln!("Desktop smoke test timed out: {error:?}; {preview_error:?}");
+            eprintln!(
+                "Desktop smoke test timed out: {error:?}; {preview_error:?}; preview rendering {}",
+                self.schedule.rendering()
+            );
             std::process::exit(1);
         }
         if (smoke.welcome || ready && !thumbnails_pending) && !smoke.requested {

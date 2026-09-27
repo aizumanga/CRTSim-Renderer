@@ -1,12 +1,12 @@
-//! Everything the app remembers between runs, in one folder: the welcome acknowledged, the
-//! interface theme, where tool windows were, personal presets, recent projects and the session
-//! to recover. Each file has a size it may not exceed, and each is replaced only once the whole
-//! of its new contents is written.
+//! Everything the app remembers between runs: the welcome acknowledged, the interface theme,
+//! where tool windows were, personal presets, recent projects and the session to recover. On
+//! the desktop they are files in one folder, each replaced only once the whole of its new
+//! contents is written; in a browser, entries in its storage for the site. Each has a size it
+//! may not exceed.
 use crate::{project, theme::Theme};
 use anyhow::{ensure, Context, Result};
 use crtsim_core::config::Config;
 use std::{
-    fs::File,
     io::Write,
     path::{Path, PathBuf},
 };
@@ -35,16 +35,26 @@ pub struct Preset {
 
 #[derive(Clone)]
 pub struct Store {
-    root: PathBuf,
+    place: Place,
     /// The temporary folder a test's store is in, removed with the store's last clone.
     #[cfg(test)]
     _temporary: Option<std::sync::Arc<tempfile::TempDir>>,
 }
 
+/// Where the files are.
+#[derive(Clone)]
+enum Place {
+    /// A folder on disk: the desktop.
+    Folder(PathBuf),
+    /// A browser's storage for this site.
+    #[cfg(target_arch = "wasm32")]
+    Browser(std::rc::Rc<crate::web::Files>),
+}
+
 impl Store {
-    fn at(root: PathBuf) -> Self {
+    fn at(place: Place) -> Self {
         Self {
-            root,
+            place,
             #[cfg(test)]
             _temporary: None,
         }
@@ -53,7 +63,7 @@ impl Store {
     /// A store in `root`, for tests.
     #[cfg(test)]
     pub fn in_folder(root: &Path) -> Self {
-        Self::at(root.to_path_buf())
+        Self::at(Place::Folder(root.to_path_buf()))
     }
 
     /// A store in a new, empty temporary folder, so a test never reads or writes a person's
@@ -62,7 +72,7 @@ impl Store {
     pub fn temporary() -> Self {
         let folder = tempfile::tempdir().expect("a temporary app data folder");
         Self {
-            root: folder.path().to_path_buf(),
+            place: Place::Folder(folder.path().to_path_buf()),
             _temporary: Some(std::sync::Arc::new(folder)),
         }
     }
@@ -74,41 +84,89 @@ impl Store {
                 !path.is_empty() && Path::new(&path).is_absolute(),
                 "CRTSIM_DATA_DIR must be an absolute directory"
             );
-            return Ok(Self::at(path.into()));
+            return Ok(Self::at(Place::Folder(path.into())));
         }
         let dirs = directories::ProjectDirs::from("", "", "CRTSim-Renderer")
             .context("Cannot locate app data directory")?;
-        Ok(Self::at(dirs.data_dir().to_path_buf()))
+        Ok(Self::at(Place::Folder(dirs.data_dir().to_path_buf())))
+    }
+
+    /// The store kept in this browser's storage for the site, read whole now.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn browser() -> Result<Self> {
+        let files = crate::web::Files::open().await?;
+        Ok(Self::at(Place::Browser(std::rc::Rc::new(files))))
     }
 
     /// The contents of `file`, or `None` when there is none. A file larger than `limit` bytes
     /// is refused with `too_large`.
-    fn read(&self, file: impl AsRef<Path>, limit: u64, too_large: &str) -> Result<Option<Vec<u8>>> {
-        let path = self.root.join(file);
-        if !path.exists() {
-            return Ok(None);
+    fn read(&self, file: &str, limit: u64, too_large: &str) -> Result<Option<Vec<u8>>> {
+        match &self.place {
+            Place::Folder(root) => {
+                let path = root.join(file);
+                if !path.exists() {
+                    return Ok(None);
+                }
+                ensure!(path.metadata()?.len() <= limit, "{too_large}");
+                Ok(Some(std::fs::read(path)?))
+            }
+            #[cfg(target_arch = "wasm32")]
+            Place::Browser(files) => match files.read(file) {
+                Some(bytes) => {
+                    ensure!(bytes.len() as u64 <= limit, "{too_large}");
+                    Ok(Some(bytes))
+                }
+                None => Ok(None),
+            },
         }
-        ensure!(path.metadata()?.len() <= limit, "{too_large}");
-        Ok(Some(std::fs::read(path)?))
     }
 
-    /// Replaces `file` with what `write` writes, making the folders it goes in if needed.
-    fn replace(
-        &self,
-        file: impl AsRef<Path>,
-        write: impl FnOnce(&mut File) -> Result<()>,
-    ) -> Result<()> {
-        let path = self.root.join(file);
-        std::fs::create_dir_all(path.parent().unwrap_or(&self.root))?;
-        crate::files::save_atomic(&path, write)
+    /// Replaces `file` with `bytes`, making the folders it goes in if needed. A file on disk
+    /// is replaced only once the whole of it is written.
+    fn write(&self, file: &str, bytes: &[u8]) -> Result<()> {
+        match &self.place {
+            Place::Folder(root) => {
+                let path = root.join(file);
+                std::fs::create_dir_all(path.parent().unwrap_or(root))?;
+                crate::files::save_atomic(&path, |out| Ok(out.write_all(bytes)?))
+            }
+            #[cfg(target_arch = "wasm32")]
+            Place::Browser(files) => {
+                files.write(file, bytes);
+                Ok(())
+            }
+        }
+    }
+
+    /// The names of the files in `folder`, sorted.
+    fn names(&self, folder: &str) -> Result<Vec<String>> {
+        match &self.place {
+            Place::Folder(root) => {
+                let dir = root.join(folder);
+                if !dir.exists() {
+                    return Ok(vec![]);
+                }
+                let mut names = vec![];
+                for item in std::fs::read_dir(dir)? {
+                    let item = item?;
+                    if item.file_type()?.is_file() {
+                        names.push(item.file_name().to_string_lossy().into_owned());
+                    }
+                }
+                names.sort();
+                Ok(names)
+            }
+            #[cfg(target_arch = "wasm32")]
+            Place::Browser(files) => Ok(files.names(&format!("{folder}/"))),
+        }
     }
 
     pub fn welcome_needed(&self) -> bool {
-        std::fs::read(self.root.join(WELCOME)).ok().as_deref() != Some(b"acknowledged\n")
+        self.read(WELCOME, 64, "").ok().flatten().as_deref() != Some(b"acknowledged\n")
     }
 
     pub fn acknowledge(&self) -> Result<()> {
-        self.replace(WELCOME, |file| Ok(file.write_all(b"acknowledged\n")?))
+        self.write(WELCOME, b"acknowledged\n")
     }
 
     pub fn theme(&self) -> Result<Option<Theme>> {
@@ -123,7 +181,7 @@ impl Store {
     }
 
     pub fn set_theme(&self, theme: Theme) -> Result<()> {
-        self.replace(THEME, |file| Ok(writeln!(file, "{}", theme.id())?))
+        self.write(THEME, format!("{}\n", theme.id()).as_bytes())
     }
 
     /// Tool window placements from the last run, keyed by window title.
@@ -135,9 +193,7 @@ impl Store {
     }
 
     pub fn set_tool_windows(&self, windows: &Layout) -> Result<()> {
-        self.replace(WINDOWS, |file| {
-            Ok(serde_json::to_writer_pretty(file, windows)?)
-        })
+        self.write(WINDOWS, &serde_json::to_vec_pretty(windows)?)
     }
 
     /// The projects opened or saved most recently, newest first.
@@ -151,47 +207,57 @@ impl Store {
     }
 
     pub fn set_recent_projects(&self, paths: &[PathBuf]) -> Result<()> {
-        let bytes = serde_json::to_vec(paths)?;
-        self.replace(RECENT, |file| Ok(file.write_all(&bytes)?))
+        self.write(RECENT, &serde_json::to_vec(paths)?)
     }
 
     /// The session saved when the app last ran, to offer to recover.
     pub fn session(&self) -> Result<Option<project::Project>> {
-        let path = self.root.join(SESSION);
-        path.exists().then(|| project::read(&path)).transpose()
+        let root = match &self.place {
+            Place::Folder(root) => root.as_path(),
+            #[cfg(target_arch = "wasm32")]
+            Place::Browser(_) => Path::new("."),
+        };
+        self.read(SESSION, 64 * 1024 * 1024, "Project exceeds 64 MB")?
+            .map(|bytes| project::parse(&bytes, root))
+            .transpose()
     }
 
     pub fn set_session(&self, session: &project::Project) -> Result<()> {
-        std::fs::create_dir_all(&self.root)?;
-        project::save(&self.root.join(SESSION), session)
+        self.write(SESSION, &project::to_bytes(session)?)
     }
 
-    /// Where personal presets are saved, for showing a person.
-    pub fn presets_folder(&self) -> PathBuf {
-        self.root.join(PRESETS)
+    /// Where personal presets are kept, for telling a person.
+    pub fn presets_location(&self) -> String {
+        match &self.place {
+            Place::Folder(root) => root.join(PRESETS).display().to_string(),
+            #[cfg(target_arch = "wasm32")]
+            Place::Browser(_) => "kept in this browser".into(),
+        }
     }
 
     /// The personal presets, by name, with a warning for each file that could not be read.
     pub fn presets(&self) -> Result<(Vec<Preset>, Vec<String>)> {
-        let dir = self.presets_folder();
-        if !dir.exists() {
-            return Ok((vec![], vec![]));
-        }
         let mut presets = vec![];
         let mut warnings = vec![];
-        let mut paths = std::fs::read_dir(dir)?.collect::<std::io::Result<Vec<_>>>()?;
-        paths.sort_by_key(|p| p.file_name());
-        for item in paths {
-            if !item.file_type()?.is_file()
-                || !item
-                    .path()
-                    .extension()
-                    .is_some_and(|e| e.eq_ignore_ascii_case("json"))
-            {
+        for file in self.names(PRESETS)? {
+            let Some(name) = file
+                .rsplit_once('.')
+                .filter(|(_, extension)| extension.eq_ignore_ascii_case("json"))
+                .map(|(name, _)| name.to_owned())
+            else {
                 continue;
-            }
-            let name = crate::file_stem(&item.path());
-            match crate::files::load_preset(&item.path(), (256, 224)) {
+            };
+            let read = self
+                .read(
+                    &format!("{PRESETS}/{file}"),
+                    32 * 1024 * 1024,
+                    "Preset exceeds 32 MB",
+                )
+                .and_then(|bytes| {
+                    let bytes = bytes.context("Preset no longer exists")?;
+                    crate::files::preset_from_json(&bytes, (256, 224))
+                });
+            match read {
                 Ok(config) => presets.push(Preset {
                     description: self.description(&name).unwrap_or_default(),
                     name,
@@ -204,9 +270,12 @@ impl Store {
     }
 
     fn description(&self, name: &str) -> Result<String> {
-        let file = Path::new(PRESETS).join(format!("{name}.txt"));
         let too_large = format!("Description exceeds {DESCRIPTION_BYTES} bytes");
-        match self.read(file, DESCRIPTION_BYTES, &too_large)? {
+        match self.read(
+            &format!("{PRESETS}/{name}.txt"),
+            DESCRIPTION_BYTES,
+            &too_large,
+        )? {
             Some(bytes) => Ok(String::from_utf8(bytes)?),
             None => Ok(String::new()),
         }
@@ -219,12 +288,11 @@ impl Store {
             "Description exceeds {DESCRIPTION_BYTES} bytes"
         );
         ensure!(
-            self.presets_folder().join(format!("{name}.json")).is_file(),
+            self.names(PRESETS)?.contains(&format!("{name}.json")),
             "Preset no longer exists"
         );
         // Kept beside the preset, so its JSON stays readable by older versions and the CLI.
-        let file = Path::new(PRESETS).join(format!("{name}.txt"));
-        self.replace(file, |file| Ok(file.write_all(description.as_bytes())?))
+        self.write(&format!("{PRESETS}/{name}.txt"), description.as_bytes())
     }
 
     /// Saves `config` as a new personal preset. A name already taken, in any letter case, is
@@ -232,17 +300,18 @@ impl Store {
     pub fn save_preset(&self, name: &str, config: &Config, input: (u32, u32)) -> Result<()> {
         validate_name(name)?;
         config.validate_for(input)?;
-        let dir = self.presets_folder();
-        std::fs::create_dir_all(&dir)?;
         // Case-insensitive collisions are refused on every OS for portable galleries.
-        for item in std::fs::read_dir(&dir)? {
+        let file = format!("{name}.json");
+        for taken in self.names(PRESETS)? {
             ensure!(
-                item?.file_name().to_string_lossy().to_lowercase()
-                    != format!("{name}.json").to_lowercase(),
+                taken.to_lowercase() != file.to_lowercase(),
                 "A preset with this name already exists. Choose another name."
             );
         }
-        crate::files::save_preset(&dir.join(format!("{name}.json")), config)
+        self.write(
+            &format!("{PRESETS}/{file}"),
+            &crate::files::preset_json(config)?,
+        )
     }
 }
 
@@ -333,14 +402,18 @@ mod tests {
         assert!(s.set_description("My CRT", &"x".repeat(4097)).is_err());
         s.set_description("My CRT", "").unwrap();
         assert_eq!(reopened.presets().unwrap().0[0].description, "");
-        assert_eq!(s.presets_folder(), temp.path().join("presets"));
+        assert_eq!(
+            s.presets_location(),
+            temp.path().join("presets").display().to_string()
+        );
     }
 
     #[test]
     fn recent_projects_and_the_session_persist_before_the_folder_exists() {
         let temp = tempfile::tempdir().unwrap();
         // A first run: nothing has made the folder yet, since the welcome is still showing.
-        let s = store(&temp.path().join("not yet made"));
+        let folder = temp.path().join("not yet made");
+        let s = store(&folder);
         assert!(s.recent_projects().unwrap().is_empty());
         assert!(s.session().unwrap().is_none());
         let paths: Vec<PathBuf> = (0..12).map(|n| format!("{n}.crtsim").into()).collect();
@@ -356,9 +429,9 @@ mod tests {
         };
         s.set_session(&session).unwrap();
         assert_eq!(s.session().unwrap(), Some(session));
-        std::fs::write(s.root.join(RECENT), "x".repeat(64 * 1024 + 1)).unwrap();
+        std::fs::write(folder.join(RECENT), "x".repeat(64 * 1024 + 1)).unwrap();
         assert!(s.recent_projects().is_err());
-        std::fs::write(s.root.join(SESSION), "not a project").unwrap();
+        std::fs::write(folder.join(SESSION), "not a project").unwrap();
         assert!(s.session().is_err());
     }
 }

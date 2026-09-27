@@ -412,8 +412,8 @@ impl Renderer {
         Ok(Self {
             artifacts: gpu::artifacts(&device, &queue)?,
             mask: gpu::shadow_mask(&device, &queue)?,
-            screen: GpuMesh::new(&device, mesh::SCREEN)?,
-            frame: GpuMesh::new(&device, mesh::FRAME)?,
+            screen: GpuMesh::new(&device, &queue, mesh::SCREEN)?,
+            frame: GpuMesh::new(&device, &queue, mesh::FRAME)?,
             device,
             queue,
             layout,
@@ -749,6 +749,14 @@ impl Renderer {
             && height <= limit
             && estimated + u64::from(width) * (u64::from(height) * 4 + u64::from(signal.1) * 16)
                 <= BUDGET;
+        // In a browser, preparing here would hold the page's only thread for seconds.
+        #[cfg(target_arch = "wasm32")]
+        ensure!(
+            prepare_on_gpu || self.prepare == PrepareOn::Cpu,
+            "This image is larger than this browser's graphics allow ({limit} pixels a side, \
+             within {} MB). The desktop app can open it.",
+            BUDGET / 1_000_000
+        );
         Ok(Plan {
             signal,
             output,

@@ -62,10 +62,7 @@ impl App {
                 );
                 match &self.store {
                     Some(store) => {
-                        ui.small(format!(
-                            "Personal presets: {}",
-                            store.presets_folder().display()
-                        ));
+                        ui.small(format!("Personal presets: {}", store.presets_location()));
                     }
                     None => {
                         ui.colored_label(

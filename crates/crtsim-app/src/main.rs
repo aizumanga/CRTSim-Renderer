@@ -1,10 +1,16 @@
-//! The desktop app's command line.
+//! The desktop app's command line. The web app starts from `crtsim_app::web` instead.
+#[cfg(not(target_arch = "wasm32"))]
 use crtsim_app::{
     native::{self, Launch},
     Smoke,
 };
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
 
+#[cfg(target_arch = "wasm32")]
+fn main() {}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result<()> {
     let mut input = None;
     let mut smoke = None;

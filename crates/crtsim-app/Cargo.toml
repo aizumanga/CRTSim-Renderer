@@ -21,7 +21,46 @@ serde_json.workspace = true
 serde.workspace = true
 wgpu.workspace = true
 eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
-rfd = "0.14.1"
 pollster = "0.3"
 tempfile = "3"
 directories = "5"
+# Instant as std's on the desktop, and one that works in a browser, where std's panics.
+web-time = "1"
+
+# The desktop's native file dialogs. A browser page shows its own picker instead.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rfd = "0.14.1"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2.128"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "Blob",
+    "BlobPropertyBag",
+    "CustomEvent",
+    "CustomEventInit",
+    "Document",
+    "DomException",
+    "Element",
+    "Event",
+    "EventTarget",
+    "File",
+    "FileList",
+    "HtmlAnchorElement",
+    "HtmlCanvasElement",
+    "HtmlElement",
+    "HtmlInputElement",
+    "IdbCursorWithValue",
+    "IdbDatabase",
+    "IdbFactory",
+    "IdbObjectStore",
+    "IdbOpenDbRequest",
+    "IdbRequest",
+    "IdbTransaction",
+    "IdbTransactionMode",
+    "IdbVersionChangeEvent",
+    "Url",
+    "Window",
+    "console",
+] }

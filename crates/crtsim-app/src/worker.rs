@@ -16,8 +16,9 @@ use std::{
         mpsc, Arc, Mutex,
     },
     task::{Poll, Waker},
-    time::{Duration, Instant},
+    time::Duration,
 };
+use web_time::Instant;
 
 /// Where the worker's renderer gets its device.
 #[derive(Clone)]
@@ -224,13 +225,20 @@ pub enum Runtime {
     /// Each lane a task on the host's own thread, handed to this to run. The browser has no
     /// threads; the lanes take turns there, at every await.
     #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the web entry point runs the lanes as tasks (web plan, step 6)"
-        )
+        all(not(test), not(target_arch = "wasm32")),
+        expect(dead_code, reason = "the desktop runs its lanes on threads")
     )]
     Tasks(Rc<dyn Fn(Task)>),
+}
+
+impl Runtime {
+    /// Threads on the desktop; tasks in the browser, which has only the page's thread.
+    pub fn host() -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        return Self::Threads;
+        #[cfg(target_arch = "wasm32")]
+        return Self::Tasks(Rc::new(wasm_bindgen_futures::spawn_local));
+    }
 }
 
 /// The worker a running interface talks to.
@@ -262,6 +270,15 @@ pub enum PreviewJob {
 /// Work for the other thread: loading, exports and playback, one at a time.
 pub enum Job {
     Load(PathBuf),
+    /// An image handed over by name and contents, as a browser gives a file picked or dropped.
+    #[cfg_attr(
+        all(not(test), not(target_arch = "wasm32")),
+        expect(dead_code, reason = "the desktop opens files by path")
+    )]
+    LoadBytes {
+        name: String,
+        bytes: Vec<u8>,
+    },
     LoadVideo {
         path: PathBuf,
         frame: u64,
@@ -646,6 +663,11 @@ async fn work_lane(ctx: egui::Context, gpu: Gpu, jobs: Inbox<Job>, events: mpsc:
             }
             // Loading an image cannot be cancelled.
             Job::Load(path) => Event::Loaded(load_image(path).map_err(Failure::Failed)),
+            Job::LoadBytes { name, bytes } => Event::Loaded(
+                crtsim_core::input::decode_image(&bytes)
+                    .map(|image| loaded(PathBuf::from(&name), name, image))
+                    .map_err(Failure::Failed),
+            ),
             Job::LoadVideo {
                 path,
                 frame,
@@ -684,19 +706,25 @@ async fn work_lane(ctx: egui::Context, gpu: Gpu, jobs: Inbox<Job>, events: mpsc:
 
 fn load_image(path: PathBuf) -> Result<Loaded> {
     let image = crtsim_core::input::load_image(&path)?;
-    // Keep thumbnail processing off the UI thread, including alpha before resizing.
+    let name = file_name(&path);
+    Ok(loaded(path.canonicalize().unwrap_or(path), name, image))
+}
+
+/// An image opened for editing, with the thumbnail that shows the original.
+fn loaded(path: PathBuf, name: String, image: RgbaImage) -> Loaded {
+    // Keep thumbnail processing off the interface's turn, including alpha before resizing.
     let mut opaque = image.clone();
     crtsim_core::config::flatten_alpha(&mut opaque, [0; 3]);
     let thumbnail = image::DynamicImage::ImageRgba8(opaque)
         .thumbnail(2048, 2048)
         .to_rgba8();
-    Ok(Loaded {
-        name: file_name(&path),
-        path: path.canonicalize().unwrap_or(path),
+    Loaded {
+        name,
+        path,
         image,
         thumbnail,
         timeline: None,
-    })
+    }
 }
 
 fn load_video(
@@ -827,7 +855,15 @@ async fn export_image(
         fraction: 0.95,
         stage: "Encoding and saving PNG".into(),
     });
-    files::save_png(path, image, Some(config))
+    #[cfg(not(target_arch = "wasm32"))]
+    return files::save_png(path, image, Some(config));
+    // A browser saves by downloading, under the name the path gives.
+    #[cfg(target_arch = "wasm32")]
+    return crate::web::download(
+        &file_name(path),
+        &files::png_bytes(image, Some(config))?,
+        "image/png",
+    );
 }
 
 /// A whole video rendered and encoded, with its audio and other tracks.
@@ -1035,6 +1071,40 @@ mod tests {
                 } => assert_eq!(image.dimensions(), (8, 8), "{runtime}"),
                 _ => panic!("{runtime}: expected the thumbnail"),
             }
+            stop(worker);
+        }
+    }
+
+    /// A browser hands files over as bytes; either runtime decodes them into a source.
+    #[test]
+    fn an_image_handed_over_as_bytes_opens_on_either_runtime() {
+        let png = crate::files::png_bytes(RgbaImage::new(6, 4), None).unwrap();
+        for (runtime, worker, next) in workers() {
+            worker
+                .jobs
+                .send(Job::LoadBytes {
+                    name: "picked.png".into(),
+                    bytes: png.clone(),
+                })
+                .unwrap();
+            match next(&worker) {
+                Event::Loaded(Ok(loaded)) => {
+                    assert_eq!(loaded.name, "picked.png", "{runtime}");
+                    assert_eq!(loaded.image.dimensions(), (6, 4), "{runtime}");
+                }
+                _ => panic!("{runtime}: expected the image"),
+            }
+            worker
+                .jobs
+                .send(Job::LoadBytes {
+                    name: "broken.png".into(),
+                    bytes: b"not a picture".to_vec(),
+                })
+                .unwrap();
+            assert!(
+                matches!(next(&worker), Event::Loaded(Err(Failure::Failed(_)))),
+                "{runtime}: a broken file is refused"
+            );
             stop(worker);
         }
     }

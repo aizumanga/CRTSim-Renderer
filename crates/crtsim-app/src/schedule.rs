@@ -1,7 +1,8 @@
 //! The preview schedule: whether the preview on screen is out of date, and when to render the
 //! next one. Edits and gallery auditions are rendered once they settle, one preview at a time,
 //! and a preview that comes back for settings since replaced is never shown.
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 /// How long a change must stay unchanged before it becomes an undo step and is previewed, so a
 /// burst of edits, such as arrow-key steps, renders once.

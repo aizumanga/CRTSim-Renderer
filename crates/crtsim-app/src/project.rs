@@ -31,7 +31,17 @@ pub fn read(path: &Path) -> Result<Project> {
         std::fs::metadata(path)?.len() <= MAX_BYTES,
         "Project exceeds 64 MB"
     );
-    let mut p: Project = serde_json::from_slice(&std::fs::read(path)?)?;
+    parse(
+        &std::fs::read(path)?,
+        path.parent().unwrap_or_else(|| Path::new(".")),
+    )
+}
+
+/// A project from its file's contents. Relative paths in it are resolved against `root`, the
+/// folder the file is in.
+pub fn parse(bytes: &[u8], root: &Path) -> Result<Project> {
+    ensure!(bytes.len() as u64 <= MAX_BYTES, "Project exceeds 64 MB");
+    let mut p: Project = serde_json::from_slice(bytes)?;
     ensure!(p.version == 1, "Unsupported project version");
     p.config.validate()?;
     p.options.validate()?;
@@ -40,7 +50,6 @@ pub fn read(path: &Path) -> Result<Project> {
         "Queue exceeds {} jobs",
         batch::MAX_JOBS
     );
-    let root = path.parent().unwrap_or_else(|| Path::new("."));
     if let Some(source) = p.source.as_mut().filter(|source| source.is_relative()) {
         *source = root.join(&*source);
     }
@@ -52,12 +61,18 @@ pub fn read(path: &Path) -> Result<Project> {
 
 /// Saves `project` to `path`, replacing it only once the whole file is written.
 pub fn save(path: &Path, project: &Project) -> Result<()> {
+    let bytes = to_bytes(project)?;
+    files::save_atomic(path, |f| Ok(f.write_all(&bytes)?))
+}
+
+/// `project` as its file's contents.
+pub fn to_bytes(project: &Project) -> Result<Vec<u8>> {
     let bytes = serde_json::to_vec_pretty(project)?;
     ensure!(
         bytes.len() as u64 <= MAX_BYTES,
         "Project with embedded LUTs exceeds 64 MB"
     );
-    files::save_atomic(path, |f| Ok(f.write_all(&bytes)?))
+    Ok(bytes)
 }
 
 #[cfg(test)]

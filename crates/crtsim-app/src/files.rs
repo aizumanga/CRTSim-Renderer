@@ -22,7 +22,13 @@ pub fn load_preset(path: &Path, input: (u32, u32)) -> Result<Config> {
         path.metadata()?.len() <= 32 * 1024 * 1024,
         "Preset exceeds 32 MB"
     );
-    let c = Config::from_json_slice(&std::fs::read(path)?)?;
+    preset_from_json(&std::fs::read(path)?, input)
+}
+
+/// A preset from its JSON, checked against a source of size `input`.
+pub fn preset_from_json(bytes: &[u8], input: (u32, u32)) -> Result<Config> {
+    ensure!(bytes.len() <= 32 * 1024 * 1024, "Preset exceeds 32 MB");
+    let c = Config::from_json_slice(bytes)?;
     c.validate_for(input)?;
     Ok(c)
 }
@@ -49,21 +55,24 @@ pub fn save_png(path: &Path, image: RgbaImage, preset: Option<&Config>) -> Resul
             .is_some_and(|e| e.eq_ignore_ascii_case("png")),
         "Export filename must end in .png"
     );
-    save_atomic(path, |file| {
-        let mut encoded = Cursor::new(Vec::new());
-        DynamicImage::ImageRgba8(image).write_to(&mut encoded, ImageOutputFormat::Png)?;
-        let mut bytes = encoded.into_inner();
-        if let Some(config) = preset {
-            let json = serde_json::to_vec(config)?;
-            ensure!(
-                json.len() <= 32 * 1024 * 1024,
-                "Preset metadata exceeds 32 MB"
-            );
-            add_text_chunk(&mut bytes, PRESET_KEYWORD, &json)?;
-        }
-        file.write_all(&bytes)?;
-        Ok(())
-    })
+    let bytes = png_bytes(image, preset)?;
+    save_atomic(path, |file| Ok(file.write_all(&bytes)?))
+}
+
+/// `image` as a PNG, carrying `preset` when there is one.
+pub fn png_bytes(image: RgbaImage, preset: Option<&Config>) -> Result<Vec<u8>> {
+    let mut encoded = Cursor::new(Vec::new());
+    DynamicImage::ImageRgba8(image).write_to(&mut encoded, ImageOutputFormat::Png)?;
+    let mut bytes = encoded.into_inner();
+    if let Some(config) = preset {
+        let json = serde_json::to_vec(config)?;
+        ensure!(
+            json.len() <= 32 * 1024 * 1024,
+            "Preset metadata exceeds 32 MB"
+        );
+        add_text_chunk(&mut bytes, PRESET_KEYWORD, &json)?;
+    }
+    Ok(bytes)
 }
 
 /// Read the embedded settings from a PNG produced by this application.
@@ -75,11 +84,16 @@ pub fn load_preset_from_image(path: &Path, input: (u32, u32)) -> Result<Config> 
     );
     let mut bytes = Vec::new();
     file.take(512 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
+    preset_from_png(&bytes, input)
+}
+
+/// The settings a PNG this application made carries, checked against a source of size `input`.
+pub fn preset_from_png(bytes: &[u8], input: (u32, u32)) -> Result<Config> {
     ensure!(
         bytes.len() <= 512 * 1024 * 1024,
         "Image file exceeds 512 MB"
     );
-    let json = find_text_chunk(&bytes, PRESET_KEYWORD)
+    let json = find_text_chunk(bytes, PRESET_KEYWORD)
         .context("This image does not contain a CRTSim-Renderer preset")?;
     ensure!(
         json.len() <= 32 * 1024 * 1024,
@@ -161,11 +175,18 @@ fn crc32(bytes: &[u8]) -> u32 {
     !crc
 }
 pub fn save_preset(path: &Path, c: &Config) -> Result<()> {
+    let bytes = preset_json(c)?;
+    #[cfg(not(target_arch = "wasm32"))]
+    return save_atomic(path, |f| Ok(f.write_all(&bytes)?));
+    // A browser saves by downloading, under the name the path gives.
+    #[cfg(target_arch = "wasm32")]
+    return crate::web::download(&crate::file_name(path), &bytes, "application/json");
+}
+
+/// `c` as a preset file's JSON.
+pub fn preset_json(c: &Config) -> Result<Vec<u8>> {
     c.validate()?;
-    save_atomic(path, |f| {
-        f.write_all(serde_json::to_string_pretty(c)?.as_bytes())?;
-        Ok(())
-    })
+    Ok(serde_json::to_string_pretty(c)?.into_bytes())
 }
 
 #[cfg(test)]

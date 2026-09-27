@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CRTSim Renderer</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #a9c4dc; }
+  canvas { display: block; width: 100%; height: 100%; outline: none; }
+  #notice {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    padding: 16px; font: 15px/1.55 Verdana, "DejaVu Sans", sans-serif; color: #1b314d;
+  }
+  #notice section {
+    max-width: 560px; background: #cadded; border: 1px solid #6085ae; border-radius: 6px;
+    box-shadow: 0 5px 14px #0003; overflow: hidden;
+  }
+  #notice h1 {
+    margin: 0; padding: 8px 14px; font-size: 16px; font-weight: normal; text-align: center;
+    background: #d8aacc; color: #1b314d;
+  }
+  #notice div { padding: 12px 18px 16px; }
+  #notice code { background: #e1ebf5; padding: 1px 4px; border-radius: 3px; }
+  #notice a { color: #3277ba; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<canvas id="crtsim" hidden></canvas>
+<div id="notice">
+  <section>
+    <h1 id="notice-title">CRTSim Renderer</h1>
+    <div id="notice-body"><p>Starting…</p></div>
+  </section>
+</div>
+<script type="module">
+  const notice = document.getElementById("notice");
+  const say = (title, html) => {
+    document.getElementById("notice-title").textContent = title;
+    document.getElementById("notice-body").innerHTML = html;
+    notice.hidden = false;
+  };
+  const downloads = "https://github.com/aizumanga/CRTSim-Renderer/releases/latest";
+  const desktop = `<p>Or <a href="${downloads}">download the desktop app</a>, which needs no browser.</p>`;
+  const needsWebGpu = () => say("This browser has no WebGPU", `
+    <p>This browser does not offer WebGPU to pages. The web app draws its CRT with WebGPU,
+    which it needs to run.</p>
+    <p><b>Firefox or LibreWolf on Linux:</b> open <code>about:config</code>, set
+    <code>dom.webgpu.enabled</code> to <code>true</code>, and restart the browser.</p>
+    <p><b>Chrome, Edge and Safari:</b> update to the latest version.</p>${desktop}`);
+  const needsAdapter = () => say("WebGPU found no graphics card", `
+    <p>This browser has WebGPU, but did not give the page a graphics card to draw with. It may
+    not support this card or its driver yet, or graphics acceleration may be off.</p>
+    <p>Check that hardware or graphics acceleration is on in the browser's settings, update the
+    browser and the graphics driver, or try another browser.</p>${desktop}`);
+
+  async function run() {
+    if (!navigator.gpu) {
+      return needsWebGpu();
+    }
+    if (!(await navigator.gpu.requestAdapter())) {
+      return needsAdapter();
+    }
+    const { default: init, start } = await import("./crtsim_app.js");
+    await init();
+    const canvas = document.getElementById("crtsim");
+    canvas.hidden = false;
+    notice.hidden = true;
+    await start(canvas);
+  }
+
+  const escape = (text) => String(text).replace(/[<>&]/g, (c) => `&#${c.charCodeAt(0)};`);
+  // The app says when the browser takes its graphics device away, as after a driver reset.
+  addEventListener("crtsim-lost", (event) => say("CRTSim Renderer stopped drawing", `
+    <p>The browser took the graphics card away from the page:</p>
+    <p><code>${escape(event.detail)}</code></p>
+    <p>Reload the page to start again. Your settings are kept.</p>${desktop}`));
+
+  run().catch((error) => {
+    console.error(error);
+    say("CRTSim Renderer stopped", `<p>Something went wrong while starting:</p>
+      <p><code>${escape(error)}</code></p>
+      <p>Reloading the page may help, or <a href="${downloads}">download the desktop app</a>.</p>`);
+  });
+</script>
+</body>
+</html>

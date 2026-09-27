@@ -131,6 +131,23 @@ CI compiles the application for Windows, Linux and macOS and executes the GPU pi
 do not depend on one vendor, but it is not a substitute for runtime tests on several physical GPUs and drivers. Older hardware without a usable
 Vulkan/DX12/Metal implementation will show a compatible-adapter error; it is not silently switched to a CPU renderer.
 
+## Web app
+
+The same app runs in a browser with WebGPU, as the web app. It opens images you pick or drop
+on the page, previews them, and saves PNGs and presets as downloads; its settings, presets and
+session stay in the browser. Video, projects and batch export are desktop-only for now (see
+[the web plan](docs/WEB_PLAN.md)).
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.128 --locked   # the version Cargo.lock pins
+python3 tools/build_web.py                                  # writes web/dist
+python3 -m http.server --directory web/dist 8000            # then open http://localhost:8000
+```
+
+Browsers without WebGPU get a page that says how to turn it on. Firefox and LibreWolf on Linux
+need `dom.webgpu.enabled` set to `true` in `about:config`.
+
 ## Build and try
 
 ### Video

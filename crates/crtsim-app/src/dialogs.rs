@@ -1,8 +1,10 @@
-//! Native file dialogs: what each one offers, and what happens with what is chosen. Every
-//! dialog opens on a thread of its own and answers on one channel.
+//! File dialogs: what each one offers, and what happens with what is chosen. Every dialog
+//! answers on one channel. On the desktop each opens on a thread of its own, since native
+//! dialogs block; in a browser, files are picked as a name and bytes, and saves download.
 use crate::export_ui::ExportFormat;
 use crate::worker::Export;
 use crate::*;
+#[cfg(not(target_arch = "wasm32"))]
 use std::panic::AssertUnwindSafe;
 
 #[derive(Clone, Copy)]
@@ -38,8 +40,16 @@ pub(crate) enum Answer {
     },
     /// The dialog closed without answering, as when it fails to open.
     Failed,
+    /// A file a browser handed over: its name and contents, never a path.
+    #[cfg(target_arch = "wasm32")]
+    Picked {
+        kind: Dialog,
+        name: String,
+        bytes: Vec<u8>,
+    },
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Request {
     /// Shows the dialog and waits for its answer.
     fn ask(self, export: ExportFormat) -> Answer {
@@ -117,6 +127,7 @@ impl Dialog {
 
 /// Native dialogs confirm the path they return. Where it lacks the extension and one is appended,
 /// the actual destination is confirmed too, rather than silently replacing another file.
+#[cfg(not(target_arch = "wasm32"))]
 fn with_extension_confirmed(mut path: PathBuf, extension: &str) -> Option<PathBuf> {
     if path.extension().is_some() {
         return Some(path);
@@ -141,6 +152,7 @@ impl App {
     /// Opens the dialog `request` asks for, on a thread of its own, since native dialogs block.
     /// Edits are frozen while it is open, so its answer is applied to the settings that were on
     /// screen.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn ask(&mut self, request: Request, ctx: &egui::Context) {
         self.stop_playback();
         self.dialog_open = true;
@@ -169,6 +181,8 @@ impl App {
                     folder,
                 } => self.add_batch_jobs(&settings, sources, &folder),
                 Answer::Failed => self.error = Some("File chooser closed unexpectedly".into()),
+                #[cfg(target_arch = "wasm32")]
+                Answer::Picked { kind, name, bytes } => self.picked(kind, name, bytes),
             }
         }
     }
@@ -272,5 +286,120 @@ impl App {
             ),
         };
         self.start_export(export, path, status, Some("Queued for video export"));
+    }
+}
+
+/// The browser's side of the dialogs. Opening shows the browser's own file picker, which gives a
+/// name and bytes; saving shows nothing, since the file is downloaded under the suggested name.
+#[cfg(target_arch = "wasm32")]
+impl App {
+    /// Opens the dialog `request` asks for. Edits are frozen while a picker is open, so its
+    /// answer is applied to the settings that were on screen.
+    pub(crate) fn ask(&mut self, request: Request, ctx: &egui::Context) {
+        self.stop_playback();
+        let kind = match request {
+            Request::File(kind) => kind,
+            Request::Batch(_) => return self.not_yet("Batch export"),
+        };
+        let chooser = kind.chooser(self.export_format);
+        match kind {
+            Dialog::OpenProject | Dialog::SaveProject => return self.not_yet("Projects"),
+            Dialog::ExportVideo => return self.not_yet("Video export"),
+            _ => {}
+        }
+        if let Some(name) = chooser.save_as {
+            let file = format!("{name}.{}", chooser.extensions[0]);
+            return self.chosen(kind, PathBuf::from(file));
+        }
+        // Only images open here until the browser can decode video.
+        let extensions = match kind {
+            Dialog::File | Dialog::ImportPreset => crtsim_core::input::IMAGE_EXTENSIONS.to_vec(),
+            _ => chooser.extensions,
+        };
+        self.dialog_open = true;
+        let send = self.dialog_send.clone();
+        let ctx = ctx.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let answer = match crate::web::pick(&extensions).await {
+                Ok(Some((name, bytes))) => Answer::Picked { kind, name, bytes },
+                Ok(None) => Answer::Cancelled,
+                Err(e) => {
+                    web_sys::console::error_1(&format!("{e:#}").into());
+                    Answer::Failed
+                }
+            };
+            let _ = send.send(answer);
+            ctx.request_repaint();
+        });
+    }
+
+    /// A file dropped on the page, read as the picker would have given it.
+    pub(crate) fn dropped(&mut self, file: Arc<dyn egui::DroppedFile + Send + Sync>) {
+        let send = self.dialog_send.clone();
+        let ctx = self.ui_context.clone();
+        self.dialog_open = true;
+        wasm_bindgen_futures::spawn_local(async move {
+            let answer = match file.bytes_async().await {
+                Ok(bytes) => Answer::Picked {
+                    kind: Dialog::File,
+                    name: file.path().to_string_lossy().into_owned(),
+                    bytes,
+                },
+                Err(_) => Answer::Failed,
+            };
+            let _ = send.send(answer);
+            ctx.request_repaint();
+        });
+    }
+
+    /// Applies a file the browser handed over.
+    fn picked(&mut self, kind: Dialog, name: String, bytes: Vec<u8>) {
+        let input = self.input.dimensions();
+        match kind {
+            Dialog::File => {
+                if crtsim_media::MediaKind::of(Path::new(&name)).is_moving() {
+                    return self.not_yet("Video");
+                }
+                self.stop_playback();
+                self.work = Work::Loading(None);
+                self.status = format!("Loading {name}…");
+                self.send(Job::LoadBytes { name, bytes });
+            }
+            Dialog::Lut => {
+                let lut = String::from_utf8(bytes)
+                    .map_err(anyhow::Error::from)
+                    .and_then(|text| crtsim_core::workflow::Lut::parse_cube(name, &text));
+                match lut {
+                    Ok(lut) => {
+                        let mut c = self.config.clone();
+                        c.set_lut(Some(Arc::new(lut)));
+                        self.replace_config(c);
+                        self.status = "LUT imported".into();
+                    }
+                    Err(e) => self.error = Some(format!("Cannot import LUT: {e:#}")),
+                }
+            }
+            Dialog::LoadPreset | Dialog::ImportPreset => {
+                let preset = match kind {
+                    Dialog::LoadPreset => files::preset_from_json(&bytes, input),
+                    _ => files::preset_from_png(&bytes, input),
+                };
+                match preset {
+                    Ok(c) => {
+                        self.presets.name = file_stem(Path::new(&name));
+                        self.replace_config(c);
+                        self.status = format!("Loaded preset {name}");
+                        self.error = None;
+                    }
+                    Err(e) => self.error = Some(format!("Cannot load preset: {e:#}")),
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Says that something the desktop app does is not in the web app yet.
+    fn not_yet(&mut self, what: &str) {
+        self.status = format!("{what} arrives in the web app in a later version");
     }
 }

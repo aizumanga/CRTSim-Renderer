@@ -4,7 +4,6 @@
 use crate::mesh;
 use anyhow::{ensure, Context, Result};
 use image::RgbaImage;
-use wgpu::util::DeviceExt;
 
 /// The 8-bit format of the signal, its history and the final image.
 pub(crate) const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -158,22 +157,52 @@ pub(crate) struct GpuMesh {
 }
 
 impl GpuMesh {
-    pub fn new(device: &wgpu::Device, bytes: &[u8]) -> Result<Self> {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, bytes: &[u8]) -> Result<Self> {
         let m = mesh::Mesh::read(bytes)?;
         Ok(Self {
-            vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("mesh vertices"),
-                contents: bytemuck::cast_slice(&m.vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            }),
-            indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("mesh indices"),
-                contents: bytemuck::cast_slice(&m.indices),
-                usage: wgpu::BufferUsages::INDEX,
-            }),
+            vertices: filled(
+                device,
+                queue,
+                "mesh vertices",
+                bytemuck::cast_slice(&m.vertices),
+                wgpu::BufferUsages::VERTEX,
+            ),
+            indices: filled(
+                device,
+                queue,
+                "mesh indices",
+                bytemuck::cast_slice(&m.indices),
+                wgpu::BufferUsages::INDEX,
+            ),
             count: m.indices.len() as u32,
         })
     }
+}
+
+/// A buffer holding `contents`, made unmapped and written through the queue. Chrome can refuse
+/// to make a buffer mapped, even a small one (a Dawn bug that has hit PlayCanvas and Pixi.js
+/// too), which is how `create_buffer_init` fills one. Padded with zeros to the size copies need.
+pub(crate) fn filled(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &str,
+    contents: &[u8],
+    usage: wgpu::BufferUsages,
+) -> wgpu::Buffer {
+    let size = (contents.len() as u64)
+        .div_ceil(wgpu::COPY_BUFFER_ALIGNMENT)
+        .max(1)
+        * wgpu::COPY_BUFFER_ALIGNMENT;
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size,
+        usage: usage | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut padded = contents.to_vec();
+    padded.resize(size as usize, 0);
+    queue.write_buffer(&buffer, 0, &padded);
+    buffer
 }
 
 /// An attachment that starts the pass by clearing `view` to black.

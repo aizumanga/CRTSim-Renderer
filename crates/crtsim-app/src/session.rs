@@ -5,10 +5,8 @@ use anyhow::Result;
 use app_data::Store;
 use eframe::egui;
 use project::Project;
-use std::{
-    path::PathBuf,
-    time::{Duration, Instant},
-};
+use std::{path::PathBuf, time::Duration};
+use web_time::Instant;
 
 /// How often the session is saved.
 const AUTOSAVE: Duration = Duration::from_secs(2);
@@ -136,7 +134,12 @@ impl App {
     fn snapshot(&self) -> Project {
         Project {
             version: 1,
-            source: self.source_path.clone(),
+            // A browser cannot open a file again by name, so its session keeps the settings
+            // and leaves the picture to be picked again.
+            source: self
+                .source_path
+                .clone()
+                .filter(|_| !cfg!(target_arch = "wasm32")),
             frame: self.timeline.as_ref().map_or(0, |t| t.shown),
             config: self.config.clone(),
             options: self.video_options.clone(),

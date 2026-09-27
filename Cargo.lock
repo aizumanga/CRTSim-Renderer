@@ -725,11 +725,16 @@ dependencies = [
  "directories",
  "eframe",
  "image 0.24.9",
+ "js-sys",
  "pollster 0.3.0",
  "rfd",
  "serde",
  "serde_json",
  "tempfile",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "web-time",
  "wgpu",
 ]
 

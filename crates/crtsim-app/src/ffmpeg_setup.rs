@@ -15,7 +15,13 @@ pub struct FfmpegSetup {
 }
 
 impl FfmpegSetup {
+    /// Checks the programs again, on a thread of its own. A browser runs no programs, so there
+    /// it checks nothing.
+    #[cfg(target_arch = "wasm32")]
+    pub fn start_check(&mut self, _ctx: &egui::Context) {}
+
     /// Checks the programs again, on a thread of its own.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn start_check(&mut self, ctx: &egui::Context) {
         let (send, receive) = mpsc::channel();
         let ctx = ctx.clone();

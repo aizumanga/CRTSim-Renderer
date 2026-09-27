@@ -21,6 +21,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
       # Pull requests start from main's build cache; only main saves one, so branches do not
       # crowd each other out of the repository's cache space.
       - uses: Swatinem/rust-cache@v2
@@ -31,6 +32,11 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y libxkbcommon-dev libwayland-dev libegl1-mesa-dev
       - run: cargo test --workspace --locked
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # The web app: core and the app, as a browser builds them. Media's FFmpeg code compiles
+      # there too but never runs, so it is left out.
+      - name: Web app compiles for the browser
+        if: runner.os == 'Linux'
+        run: cargo clippy --locked --target wasm32-unknown-unknown -p crtsim-core -p crtsim-app --no-deps -- -D warnings
       - run: cargo run --locked -p crtsim-cli -- inspect-meshes
       - run: python tools/verify_assets.py
       - name: Check formatting

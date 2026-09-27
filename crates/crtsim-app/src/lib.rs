@@ -1,5 +1,8 @@
 //! The CRTSim Renderer app: editing a look, the galleries, playback and exports, whichever
 //! host it runs in.
+// A browser build still compiles the desktop's folders, threads and native dialogs, which it
+// never reaches.
+#![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 mod app_data;
 mod audition;
 mod batch;
@@ -13,6 +16,7 @@ mod gallery;
 mod gallery_ui;
 mod lut_gallery;
 mod model;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod native;
 mod playback;
 mod preview_ui;
@@ -25,6 +29,8 @@ mod theme;
 mod thumbnails;
 mod timeline;
 mod toolbar;
+#[cfg(target_arch = "wasm32")]
+pub mod web;
 mod widgets;
 mod worker;
 
@@ -41,8 +47,9 @@ use std::{
         atomic::{AtomicBool, Ordering},
         mpsc, Arc,
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
+use web_time::Instant;
 use worker::{Event, Failure, Job, PreviewJob};
 
 #[derive(Clone, Copy, PartialEq)]
@@ -232,7 +239,7 @@ impl App {
             jobs,
             events,
             threads: worker_thread,
-        } = worker::start(ctx.clone(), gpu, worker::Runtime::Threads);
+        } = worker::start(ctx.clone(), gpu, worker::Runtime::host());
         let (dialog_send, dialog_receive) = mpsc::channel();
         let (store, mut storage_error) = match store {
             Ok(s) => (Some(s), None),
@@ -616,14 +623,17 @@ impl eframe::App for App {
             self.shortcuts(ctx);
         }
         if self.can_start_work() {
-            let dropped = ctx.input(|i| {
-                i.raw
-                    .dropped_files
-                    .first()
-                    .map(|f| f.path().to_path_buf())
-                    .filter(|path| !path.as_os_str().is_empty())
-            });
-            if let Some(path) = dropped {
+            let dropped = ctx.input(|i| i.raw.dropped_files.first().cloned());
+            // A browser gives a dropped file's name and bytes; the desktop, its path.
+            #[cfg(target_arch = "wasm32")]
+            if let Some(file) = dropped {
+                self.dropped(file);
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(path) = dropped
+                .map(|f| f.path().to_path_buf())
+                .filter(|path| !path.as_os_str().is_empty())
+            {
                 self.load(path);
             }
         }

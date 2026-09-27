@@ -13,7 +13,7 @@ order; the polish track can run alongside.
 | 3 ✓ | One frame interface for the renderer: callers drive a sequence, which knows its timing; a still is a sequence of one frame; nothing blocks inside. | The golden images, reached through the new interface. |
 | 4 ✓ | `crtsim-desktop` becomes `crtsim-app`, a library, with a small native `main` (the executable keeps its name). | The desktop builds and behaves as before. |
 | 5 ✓ | The render worker speaks renders and typed failures on one stream, with two adapters: a thread and an async task. | The worker's tests run against both adapters. |
-| 6 | The web entry point: WebGPU check, files by picker and drop, downloads, app data in IndexedDB. | Opens, previews and saves a PNG in Chrome and Firefox. |
+| 6 ✓ | The web entry point: WebGPU check, files by picker and drop, downloads, app data in IndexedDB. | Opens, previews and saves a PNG in Chrome and Firefox. (Chromium checked; Firefox by hand.) |
 | 7 | Web encoders: WebCodecs for MP4 and WebM with a muxer, and Rust encoders for GIF and animated WebP. | Each format opens in the browser that wrote it. |
 | 8 | Release and site workflows (below). | A published release reaches the site through a pull request. |
 
@@ -36,7 +36,7 @@ order; the polish track can run alongside.
 - **The CLI asks for the signal and clean images only with `--debug-dir`.**
 - **The web app declines an image larger than the GPU allows**, with a notice naming the limit.
   The desktop keeps preparing such images on the CPU, which one browser thread cannot afford.
-  This belongs to the web entry point (step 6).
+  (Done with the web entry point, step 6.)
 
 ## The worker's two runtimes (step 5, done)
 
@@ -54,6 +54,38 @@ order; the polish track can run alongside.
 - **No lock around building a renderer.** wgpu 30 keeps error scopes per thread, and a renderer
   opens and closes its scope with no await between. A blocking lock held across awaits could
   have deadlocked the browser's one thread.
+
+## The web entry point (step 6, done)
+
+- **One app, two hosts.** `crtsim_app::web::start` runs the same `App` in a page with eframe's
+  web runner, on WebGPU only, with the worker's lanes as tasks. Clocks are `web_time`'s, which
+  are std's on the desktop.
+- **Files in as bytes, out as downloads.** The browser's own picker, opened straight from the
+  click or key press that asked for it, and drops give a name and bytes: images open
+  (`Job::LoadBytes`), presets and LUTs load, and a PNG's embedded preset imports. Exported PNGs
+  and saved presets download under the name the save would have used. rfd stays the desktop's:
+  on the web it shows its own overlay with a second button to press.
+- **App data in IndexedDB.** The store has two places: the desktop's folder, and the browser's
+  storage for the site, read whole when the page starts and written through on each change.
+  A browser session keeps the settings; the picture is picked again.
+- **Not in the browser yet**, and saying so: video (step 7), projects and batch export. Nothing
+  is downloaded but the page itself.
+- **The page** checks for WebGPU and for a graphics adapter first, and explains what to do for
+  each, or to get the desktop app. If the browser takes the device away later, the app tells
+  the page, which says so and offers a reload. `tools/build_web.py` builds it into `web/dist`;
+  CI checks the browser build with clippy.
+- **Checked in headless Chromium** on its software WebGPU (with `--use-angle=swiftshader`;
+  without it, this container's Chromium loses any device that draws to a canvas, a plain
+  WebGPU page included): the test card previews and exports a PNG within a few levels of the
+  desktop's render of the same preset (PSNR 55 dB; the rim's edge pixels differ between the two
+  software rasterisers); an image opens through the picker and another by dropping it, each
+  exporting; a cancelled picker leaves the app usable; the app data is found again after a
+  reload; the notices without WebGPU and after a lost device show. Firefox is not available in
+  the build container, so it still needs a check by hand, with `dom.webgpu.enabled` on Linux.
+- **Images larger than the browser's GPU allows are declined**, naming the limit and pointing to
+  the desktop app, instead of being prepared on the page's only thread.
+- **Still to do for the web:** the module is 20 MB, 7 MB of it the embedded NES LUTs, which
+  could be fetched when first used.
 
 ## Polish track
 

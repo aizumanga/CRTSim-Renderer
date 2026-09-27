@@ -394,11 +394,13 @@ impl Pipelines {
             }
             None => &self.no_lut,
         };
-        let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("prepare settings"),
-            contents: bytemuck::bytes_of(&Params::new(size, signal_size, c)),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let uniform = gpu::filled(
+            device,
+            queue,
+            "prepare settings",
+            bytemuck::bytes_of(&Params::new(size, signal_size, c)),
+            wgpu::BufferUsages::UNIFORM,
+        );
         let bind = |input: &Target, kernel: &KernelTextures| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None,
