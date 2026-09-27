@@ -14,7 +14,7 @@ use std::{
 #[derive(Parser)]
 #[command(
     version,
-    about = "Phase 0: headless CRTSim still-image renderer (no GUI/video yet)"
+    about = "Headless CRTSim still-image renderer. The desktop app renders video."
 )]
 struct Args {
     #[command(subcommand)]
