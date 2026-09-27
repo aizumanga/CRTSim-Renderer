@@ -74,7 +74,7 @@ impl App {
                 return entry.texture();
             }
         }
-        let small = model::preview_config(config, self.input.dimensions(), Some(PRESET_SIDE));
+        let small = config.with_max_output_side(self.input.dimensions(), Some(PRESET_SIDE));
         self.thumbnails.entries.insert(
             key.clone(),
             Thumbnail {

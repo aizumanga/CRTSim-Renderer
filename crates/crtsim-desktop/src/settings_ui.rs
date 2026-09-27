@@ -137,7 +137,7 @@ impl App {
                  selected background. SDR output; no ICC color management.",
             );
         });
-        self.workflow_settings(ui);
+        self.framing_and_color(ui);
         chrome::Section::new("Color processing").show(ui, |ui| {
             egui::ComboBox::from_label("Color processing")
                 .selected_text(match self.config.color_mode {
@@ -267,7 +267,8 @@ impl App {
             };
         }
     }
-    pub fn workflow_settings(&mut self, ui: &mut egui::Ui) {
+    /// The source's framing, and its colour mapping before the CRT.
+    fn framing_and_color(&mut self, ui: &mut egui::Ui) {
         crate::chrome::Section::new("Source & framing")
             .default_open(true)
             .show(ui, |ui| {

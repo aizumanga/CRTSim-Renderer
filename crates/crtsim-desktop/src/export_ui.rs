@@ -103,13 +103,13 @@ pub struct ExportDialog {
 impl App {
     pub fn open_video_export(&mut self, batch: bool) {
         self.stop_playback();
-        self.workflow.export_dialog = Some(ExportDialog {
+        self.export_dialog = Some(ExportDialog {
             options: self.video_options.clone(),
             animation: self.animation_options.clone(),
             format: if batch {
                 ExportFormat::Video(Container::Mkv)
             } else {
-                self.workflow.export_format
+                self.export_format
             },
             batch,
             from_current_frame: false,
@@ -117,7 +117,7 @@ impl App {
         });
     }
     pub fn video_export_window(&mut self, ctx: &egui::Context) {
-        let Some(mut draft) = self.workflow.export_dialog.take() else {
+        let Some(mut draft) = self.export_dialog.take() else {
             return;
         };
         let mut open = true;
@@ -231,24 +231,24 @@ impl App {
             };
             if let Err(e) = valid {
                 self.error = Some(e.to_string());
-                self.workflow.export_dialog = Some(draft);
+                self.export_dialog = Some(draft);
                 return;
             }
             if let (ExportFormat::Animation(_), Some(summary)) = (draft.format, summary) {
                 if summary.bytes.1 > LARGE_ANIMATION && draft.confirming.is_none() {
                     draft.confirming = Some(summary.bytes.1);
-                    self.workflow.export_dialog = Some(draft);
+                    self.export_dialog = Some(draft);
                     return;
                 }
             }
             self.video_options = draft.options;
             self.animation_options = draft.animation;
             if !draft.batch {
-                self.workflow.export_format = draft.format;
+                self.export_format = draft.format;
                 self.dialog(Dialog::ExportVideo, ctx);
             }
         } else if open && !cancel {
-            self.workflow.export_dialog = Some(draft);
+            self.export_dialog = Some(draft);
         }
     }
 }
@@ -613,22 +613,32 @@ mod tests {
         drop(encoder);
         let cancel = Arc::new(AtomicBool::new(false));
         app.video = Some(crtsim_media::probe(&source, &cancel).unwrap());
-        app.workflow.export_format = ExportFormat::Animation(AnimationFormat::Gif);
+        app.export_format = ExportFormat::Animation(AnimationFormat::Gif);
         app.animation_options.fps = 12;
 
         app.dialog_send
-            .send((Dialog::ExportVideo, Some(dir.path().join("out.mp4"))))
+            .send(crate::dialogs::Answer::File(
+                Dialog::ExportVideo,
+                dir.path().join("out.mp4"),
+            ))
             .unwrap();
         app.receive(&ctx);
         assert!(app.error.take().unwrap().contains(".gif"));
         assert!(receive.try_recv().is_err());
 
         app.dialog_send
-            .send((Dialog::ExportVideo, Some(dir.path().join("out.GIF"))))
+            .send(crate::dialogs::Answer::File(
+                Dialog::ExportVideo,
+                dir.path().join("out.GIF"),
+            ))
             .unwrap();
         app.receive(&ctx);
         match receive.try_recv() {
-            Ok(Job::ExportAnimation { options, path, .. }) => {
+            Ok(Job::Export {
+                export: worker::Export::Animation { options, .. },
+                path,
+                ..
+            }) => {
                 assert_eq!(options.fps, 12);
                 assert_eq!(path, dir.path().join("out.GIF"));
             }

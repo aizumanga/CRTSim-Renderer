@@ -321,9 +321,8 @@ fn parse_preset(root: &Value, input: (u32, u32)) -> Result<Preset> {
         config: Config::from_json_slice(&serde_json::to_vec(&wire.config)?)?,
         video_options: wire.video_options,
     };
-    preset.config.signal_size(input)?;
+    preset.config.validate_for(input)?;
     preset.video_options.validate()?;
-    preset.config.output_size(input)?;
     Ok(preset)
 }
 

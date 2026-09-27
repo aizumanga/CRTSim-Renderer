@@ -9,10 +9,10 @@ impl App {
             ui.selectable_value(&mut self.view, View::Crt, "CRT");
             ui.selectable_value(&mut self.view, View::Compare, "Compare");
             ui.separator();
-            ui.checkbox(&mut self.live, "Live preview");
+            ui.checkbox(&mut self.schedule.live, "Live preview");
             if ui
                 .add_enabled(
-                    !self.rendering && !self.work.is_loading(),
+                    !self.schedule.rendering() && !self.work.is_loading(),
                     egui::Button::new("Refresh"),
                 )
                 .clicked()
@@ -48,8 +48,9 @@ impl App {
             export resolution. Inspect mask detail at Export resolution \
             and 1× zoom.",
         );
-        if let Ok(c) =
-            model::preview_config(&self.config, self.input.dimensions(), self.preview_limit)
+        if let Ok(c) = self
+            .config
+            .with_max_output_side(self.input.dimensions(), self.preview_limit)
         {
             let input = self.input.dimensions();
             if let (Ok((w, h)), Ok(signal)) = (c.output_size(input), c.signal_size(input)) {
@@ -64,7 +65,7 @@ impl App {
                 }
             }
         }
-        if self.rendering || !self.work.is_idle() {
+        if self.schedule.rendering() || !self.work.is_idle() {
             ui.horizontal(|ui| {
                 ui.spinner();
                 ui.label(match self.work {
@@ -83,7 +84,7 @@ impl App {
                 ),
             );
         }
-        if self.rendered.is_some() && self.rendered_revision != Some(self.revision) {
+        if self.rendered.is_some() && !self.schedule.is_current() {
             ui.colored_label(ui.visuals().warn_fg_color, "Preview is out of date.");
         }
         let controls_height = if self.video.is_some() { 136. } else { 0. };
@@ -104,7 +105,7 @@ impl App {
                             available,
                             self.fit_preview,
                             self.zoom,
-                            &mut self.workflow.comparison,
+                            &mut self.comparison,
                         );
                     }
                 } else if self.view == View::Original {
@@ -142,14 +143,14 @@ impl App {
         ui.add_enabled_ui(enabled, |ui| {
             ui.horizontal_wrapped(|ui| {
                 if ui
-                    .button(if self.workflow.playback.is_some() {
+                    .button(if self.playback.is_some() {
                         "Ⅱ Pause"
                     } else {
                         "▶ Play"
                     })
                     .clicked()
                 {
-                    if self.workflow.playback.is_some() {
+                    if self.playback.is_some() {
                         self.stop_playback();
                     } else {
                         self.start_playback();
@@ -158,8 +159,8 @@ impl App {
                 ui.small("Silent preview");
                 ui.monospace(format!(
                     "{:02}:{:02} / {:02}:{:02}",
-                    self.workflow.play_time as u64 / 60,
-                    self.workflow.play_time as u64 % 60,
+                    self.play_time as u64 / 60,
+                    self.play_time as u64 % 60,
                     video.duration as u64 / 60,
                     video.duration as u64 % 60
                 ));
@@ -201,7 +202,7 @@ impl App {
             });
             if !ui.ctx().wants_keyboard_input() {
                 if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space)) {
-                    if self.workflow.playback.is_some() {
+                    if self.playback.is_some() {
                         self.stop_playback();
                     } else {
                         self.start_playback();
