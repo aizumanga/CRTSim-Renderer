@@ -672,7 +672,7 @@ async fn work_lane(ctx: egui::Context, gpu: Gpu, jobs: Inbox<Job>, events: mpsc:
             // Loading an image cannot be cancelled.
             Job::Load(path) => Event::Loaded(load_image(path).map_err(Failure::Failed)),
             Job::LoadBytes { name, bytes } => {
-                Event::Loaded(load_bytes(name, bytes).map_err(Failure::Failed))
+                Event::Loaded(load_bytes(name, bytes).await.map_err(Failure::Failed))
             }
             Job::LoadVideo {
                 path,
@@ -680,7 +680,9 @@ async fn work_lane(ctx: egui::Context, gpu: Gpu, jobs: Inbox<Job>, events: mpsc:
                 cached,
                 cancel,
             } => Event::Loaded(
-                load_video(&path, frame, cached, &cancel).map_err(|e| Failure::of(e, &cancel)),
+                load_video(&path, frame, cached, &cancel)
+                    .await
+                    .map_err(|e| Failure::of(e, &cancel)),
             ),
             Job::ImportPreset {
                 path,
@@ -733,23 +735,34 @@ fn loaded(path: PathBuf, name: String, image: RgbaImage) -> Loaded {
     }
 }
 
-/// A file a browser handed over: an animation opens with its frames, anything else as an
-/// image.
-fn load_bytes(name: String, bytes: Vec<u8>) -> Result<Loaded> {
+/// A file a browser handed over: a video or animation opens with its frames, anything else
+/// as an image.
+async fn load_bytes(name: String, bytes: Vec<u8>) -> Result<Loaded> {
     let path = PathBuf::from(&name);
     let contents = crtsim_media::Contents(bytes.into());
-    if let Some(format) = crtsim_media::detect_bytes(&path, &contents) {
+    let video = if crtsim_media::MediaKind::of(&path) == crtsim_media::MediaKind::Video {
+        Some(crtsim_media::probe_demuxed(path.clone(), contents.clone())?)
+    } else if let Some(format) = crtsim_media::detect_bytes(&path, &contents) {
         let cancel = Arc::new(AtomicBool::new(false));
-        let video = crtsim_media::probe_bytes(path, contents, format, &cancel)?;
+        Some(crtsim_media::probe_bytes(
+            path.clone(),
+            contents.clone(),
+            format,
+            &cancel,
+        )?)
+    } else {
+        None
+    };
+    if let Some(video) = video {
         let frames = video.frames.unwrap_or(1);
-        let image = crtsim_media::page::frame(&video, 0)?;
+        let image = crate::frames::frame(&video, 0).await?;
         return Ok(opened(video, 0, frames, image));
     }
     let image = crtsim_core::input::decode_image(contents.as_ref())?;
     Ok(loaded(path, name, image))
 }
 
-fn load_video(
+async fn load_video(
     path: &Path,
     frame: u64,
     cached: Option<(Video, u64)>,
@@ -766,7 +779,7 @@ fn load_video(
     ensure!(frame < frames, "Frame is outside the video");
     // A video handed over as bytes is decoded here; one found by its path, by FFmpeg.
     let image = if video.contents.is_some() {
-        crtsim_media::page::frame(&video, frame)?
+        crate::frames::frame(&video, frame).await?
     } else {
         crtsim_media::preview_frame(&video, frame, cancel)?
     };
@@ -918,7 +931,7 @@ async fn export_animation_here(
         format,
         config,
         options,
-        async |span| page::decoded(video, span),
+        async |span| crate::frames::open(video, span).await,
         async |sequence, frame, config| {
             renderer
                 .frame(sequence, frame, config, Some(cancel), |_| {})
@@ -1008,7 +1021,7 @@ async fn play(
                     config,
                     options,
                     renderer,
-                    async |span| page::decoded(video, span),
+                    async |span| crate::frames::open(video, span).await,
                     cancel,
                     async |time, source, crt| {
                         let mut item = Ok(PlaybackFrame { time, source, crt });

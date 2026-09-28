@@ -133,10 +133,11 @@ Vulkan/DX12/Metal implementation will show a compatible-adapter error; it is not
 
 ## Web app
 
-The same app runs in a browser with WebGPU, as the web app. It opens images and animated
-GIF or WebP you pick or drop on the page, previews and plays them, and saves PNGs, GIF and
+The same app runs in a browser with WebGPU, as the web app. It opens images, animated GIF or
+WebP, and MP4, MOV, WebM or MKV videos you pick or drop on the page (the videos decoded by the
+browser, so the codecs are the browser's), previews and plays them, and saves PNGs, GIF and
 animated WebP exports and presets as downloads; its settings, presets and session stay in the
-browser. Video files, projects and batch export are desktop-only for now (see
+browser. Video export, projects and batch export are desktop-only for now (see
 [the web plan](docs/WEB_PLAN.md)).
 
 ```sh

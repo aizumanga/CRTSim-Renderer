@@ -12,6 +12,7 @@ mod events;
 mod export_ui;
 mod ffmpeg_setup;
 mod files;
+mod frames;
 mod gallery;
 mod gallery_ui;
 mod lut_gallery;
@@ -31,6 +32,8 @@ mod timeline;
 mod toolbar;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
+#[cfg(target_arch = "wasm32")]
+mod web_video;
 mod widgets;
 mod worker;
 

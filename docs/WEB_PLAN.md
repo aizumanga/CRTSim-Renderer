@@ -116,8 +116,28 @@ on its own.
      timeline, plays, and exports as a GIF and as a lossy WebP; Chromium's `ImageDecoder`
      reads both back with every frame and the full two seconds. An animated WebP opens and
      plays. (FFmpeg reads the GIF; it has no decoder for animated WebP.)
-2. **Video in.** MP4 and WebM demuxed in Rust, decoded by WebCodecs, drawn to RGBA through an
-   `OffscreenCanvas`; a `FrameSource` that seeks from the keyframe before a frame.
+2. **Video in (done).** MP4, MOV, WebM and MKV open in the browser, scrub, play and export
+   as GIF or WebP.
+   - `crtsim_media::demux` reads the container in Rust: every frame's place in the file, when
+     it shows and whether it is a keyframe, the codec as WebCodecs names it and the decoder's
+     configuration, the track's rotation, and the audio track for step 3. MP4 and MOV are
+     read by `re_mp4`; WebM and Matroska by a small EBML reader here, which keeps frames in
+     place rather than copying them and follows clusters written without their size, as a
+     recording browser writes them. VP9's profile and bit depth come from its first keyframe.
+   - `Source::Demuxed` is a video whose frames the host decodes. In the browser, `web_video`
+     feeds WebCodecs' `VideoDecoder` from the keyframe before the wanted time, a few samples
+     ahead, and draws each frame upright into an `OffscreenCanvas` to read it as RGBA.
+     WebCodecs is bound by hand, since web-sys has it only behind an unstable flag.
+   - `page::Ticks` picks, from frames in showing order, the one each tick of a constant rate
+     takes, by the same rule as the animation schedule and FFmpeg's `fps` filter.
+   - A codec the browser cannot decode is refused by name, pointing to the desktop app.
+   - Checked in headless Chromium, with clips whose frames each code their number in full
+     red, green and blue: VP9 in WebM and in MP4 open; frames 1 and 4 export as PNGs showing
+     those frames; a GIF of the whole clip at 24 per second holds each frame for exactly the
+     ticks the rule gives; a clip rotated by its MP4 matrix shows upright as FFmpeg shows it;
+     playback runs to the end. This Chromium build has no H.264 decoder (open-source builds
+     leave it out), so H.264 was checked only as far as the refusal naming it; Chrome, Edge,
+     Safari and Firefox decode it.
 3. **Video out.** WebCodecs encodes H.264 for MP4 and VP9 for WebM, muxed in Rust. Sound is
    copied when the container takes its codec, and otherwise re-encoded as Opus. The window
    offers only what `VideoEncoder.isConfigSupported` accepts.

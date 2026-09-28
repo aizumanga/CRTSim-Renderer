@@ -2,6 +2,7 @@
 mod animated;
 mod animation;
 mod decode;
+pub mod demux;
 mod export;
 mod gif_writer;
 pub mod page;
@@ -17,7 +18,7 @@ pub use crtsim_core::Timing;
 pub use decode::{playback, preview, preview_frame};
 pub(crate) use export::Rate;
 pub use export::{export, export_animation, export_animation_with, export_with, Progress};
-pub use probe::{frame_count, probe, Contents, Source, Track, TrackKind, Video};
+pub use probe::{frame_count, probe, probe_demuxed, Contents, Source, Track, TrackKind, Video};
 pub use tools::{Found, Tool, ToolCheck};
 
 use anyhow::{ensure, Context, Result};

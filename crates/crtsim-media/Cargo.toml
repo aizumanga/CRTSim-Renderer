@@ -14,6 +14,8 @@ tempfile = "3"
 image-webp = "0.2"
 # GIFs written without FFmpeg, as a browser page writes them.
 gif = "0.13"
+# MP4 and MOV read without FFmpeg, as a browser page reads them.
+re_mp4 = "0.5"
 pollster = "0.3"
 # A clock that works in a browser, where std's panics; std's elsewhere.
 web-time = "1"

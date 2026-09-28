@@ -52,6 +52,7 @@ impl Decoder {
                     work: Work::Ffmpeg(process),
                 }
             }
+            Source::Demuxed(_) => anyhow::bail!("This video is decoded by the browser"),
             Source::Animated { format, delays } => {
                 let plan = animated::schedule(delays, request)?;
                 let origin = animated::Origin::of(video);

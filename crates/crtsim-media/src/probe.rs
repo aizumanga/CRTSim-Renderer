@@ -56,6 +56,9 @@ pub enum Source {
         format: AnimationFormat,
         delays: std::sync::Arc<[u32]>,
     },
+    /// A video whose container is read here and whose frames the host decodes, as a
+    /// browser does with WebCodecs.
+    Demuxed(std::sync::Arc<crate::demux::Demuxed>),
 }
 
 impl Video {
@@ -71,6 +74,13 @@ impl Video {
             Source::Animated { delays, .. } => {
                 let shown = delays.iter().take(frame as usize);
                 shown.map(|&delay| f64::from(delay)).sum::<f64>() / 1000.
+            }
+            Source::Demuxed(demuxed) => {
+                let video = &demuxed.video;
+                video
+                    .shown
+                    .get(frame as usize)
+                    .map_or(self.duration, |&sample| video.samples[sample].time)
             }
             Source::Ffmpeg => frame as f64 / self.fps,
         }
@@ -268,6 +278,76 @@ fn parse_probe(path: PathBuf, root: &Value) -> Result<Video> {
         source: Source::Ffmpeg,
         contents: None,
     })
+}
+
+/// The video called `name`, from the `contents` a browser handed over: its container read
+/// here, its frames left for the browser to decode.
+pub fn probe_demuxed(name: PathBuf, contents: Contents) -> Result<Video> {
+    let demuxed = crate::demux::demux(&name, contents.as_ref())?;
+    let size = demuxed.video.upright();
+    config::validate_size(size)?;
+    let frames = demuxed.video.samples.len() as u64;
+    let duration = demuxed.duration;
+    ensure!(duration > 0., "The video has no length");
+    let (fps, rate) = usual_rate(frames as f64 / duration);
+    let mut tracks = vec![Track {
+        index: 0,
+        kind: TrackKind::Video,
+        codec: demuxed.video.codec.clone(),
+        offset: 0.,
+    }];
+    if let Some(audio) = &demuxed.audio {
+        tracks.push(Track {
+            index: 1,
+            kind: TrackKind::Audio,
+            codec: audio.codec.clone(),
+            offset: 0.,
+        });
+    }
+    Ok(Video {
+        metadata: Default::default(),
+        tracks,
+        start: 0.,
+        path: name,
+        size,
+        fps,
+        rate,
+        duration,
+        audio: demuxed.audio.is_some(),
+        audio_offset: 0.,
+        hdr: false,
+        stream: 0,
+        frames: Some(frames),
+        source: Source::Demuxed(Arc::new(demuxed)),
+        contents: Some(contents),
+    })
+}
+
+/// A measured frame rate, as the usual rate it is within 0.5% of, exactly and as a number.
+pub(crate) fn usual_rate(measured: f64) -> (f64, String) {
+    const USUAL: [(u32, u32); 9] = [
+        (24000, 1001),
+        (24, 1),
+        (25, 1),
+        (30000, 1001),
+        (30, 1),
+        (50, 1),
+        (60000, 1001),
+        (60, 1),
+        (120, 1),
+    ];
+    for (numerator, denominator) in USUAL {
+        let rate = f64::from(numerator) / f64::from(denominator);
+        if (measured / rate - 1.).abs() < 0.005 {
+            return (rate, format!("{numerator}/{denominator}"));
+        }
+    }
+    let fps = measured.clamp(1., 240.);
+    if (fps / fps.round() - 1.).abs() < 0.005 {
+        return (fps.round(), format!("{}/1", fps.round()));
+    }
+    let thousandths = (fps * 1000.).round() as u64;
+    (fps, format!("{thousandths}/1000"))
 }
 
 #[cfg(test)]

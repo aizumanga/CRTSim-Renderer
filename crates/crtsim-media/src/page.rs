@@ -39,6 +39,59 @@ pub struct Span {
     pub limit: Option<f64>,
 }
 
+/// Which of a video's frames, arriving in the order they show, a span at a constant rate
+/// takes: for each tick, the last frame that starts less than half a tick after it, as the
+/// animation schedule and FFmpeg's `fps` filter take them. Frames hold and drop but are
+/// never blended.
+#[derive(Clone, Debug)]
+pub struct Ticks {
+    start: f64,
+    fps: f64,
+    count: u64,
+    next: u64,
+}
+
+impl Ticks {
+    /// The ticks of `span`, which must have a rate, in a video lasting `duration` seconds.
+    pub fn new(span: &Span, fps: f64, duration: f64) -> Self {
+        let end = span
+            .limit
+            .map_or(duration, |limit| duration.min(span.start + limit));
+        let count = ((end - span.start) * fps - 1e-6).ceil().max(1.) as u64;
+        Self {
+            start: span.start,
+            fps,
+            count,
+            next: 0,
+        }
+    }
+
+    /// How many of the ticks to come take the latest frame, now that the next one is known
+    /// to start at `next_start`.
+    pub fn before(&mut self, next_start: f64) -> u64 {
+        let mut taken = 0;
+        while self.next < self.count
+            && self.start + (self.next as f64 + 0.5) / self.fps <= next_start + 1e-9
+        {
+            self.next += 1;
+            taken += 1;
+        }
+        taken
+    }
+
+    /// How many ticks the last frame takes, which is all those left.
+    pub fn rest(&mut self) -> u64 {
+        let left = self.count - self.next;
+        self.next = self.count;
+        left
+    }
+
+    /// Whether every tick has its frame.
+    pub fn done(&self) -> bool {
+        self.next == self.count
+    }
+}
+
 /// Frames of an animated GIF or WebP, decoded here.
 pub struct Decoded(Planned);
 
@@ -79,7 +132,7 @@ pub fn frame(video: &Video, number: u64) -> Result<RgbaImage> {
 
 fn planned(video: &Video, request: &Request) -> Result<Decoded> {
     let Source::Animated { format, delays } = &video.source else {
-        bail!("This video is decoded by the browser");
+        bail!("Only animations are decoded here");
     };
     let plan = animated::schedule(delays, request)?;
     Ok(Decoded(Planned::open(
@@ -320,6 +373,35 @@ mod tests {
         }
         // From 50 ms at 20 per second: each 100 ms frame shows twice, the first from its middle.
         assert_eq!(levels, vec![0, 60, 60, 120, 120]);
+    }
+
+    #[test]
+    fn ticks_take_the_frames_the_animation_schedule_takes() {
+        // Frames of 100, 200 and 100 ms, as the schedule's own test has them.
+        let starts = [0., 0.1, 0.3];
+        let taken = |span: Span, fps: f64| {
+            let mut ticks = Ticks::new(&span, fps, 0.4);
+            let mut shown = vec![];
+            for (frame, next) in starts.iter().skip(1).enumerate() {
+                shown.extend(std::iter::repeat_n(frame, ticks.before(*next) as usize));
+            }
+            shown.extend(std::iter::repeat_n(starts.len() - 1, ticks.rest() as usize));
+            assert!(ticks.done());
+            shown
+        };
+        let from = |start| Span {
+            start,
+            fps: None,
+            limit: None,
+        };
+        assert_eq!(taken(from(0.), 10.), vec![0, 1, 1, 2]);
+        assert_eq!(taken(from(0.), 5.), vec![0, 1]);
+        assert_eq!(taken(from(0.1), 10.), vec![1, 1, 2]);
+        let limited = Span {
+            limit: Some(0.2),
+            ..from(0.1)
+        };
+        assert_eq!(taken(limited, 10.), vec![1, 1]);
     }
 
     #[test]

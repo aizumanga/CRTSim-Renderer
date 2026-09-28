@@ -289,6 +289,10 @@ impl App {
     }
 }
 
+/// Video files the web app opens: those `crtsim_media::demux` reads.
+#[cfg(target_arch = "wasm32")]
+const WEB_VIDEO_EXTENSIONS: &[&str] = &["mp4", "m4v", "mov", "webm", "mkv"];
+
 /// The browser's side of the dialogs. Opening shows the browser's own file picker, which gives a
 /// name and bytes; saving shows nothing, since the file is downloaded under the suggested name.
 #[cfg(target_arch = "wasm32")]
@@ -313,9 +317,10 @@ impl App {
             let file = format!("{name}.{}", chooser.extensions[0]);
             return self.chosen(kind, PathBuf::from(file));
         }
-        // Images and animations open here until the browser can decode video.
+        // The videos a browser opens are those its container reader knows.
         let extensions = match kind {
-            Dialog::File | Dialog::ImportPreset => crtsim_core::input::IMAGE_EXTENSIONS.to_vec(),
+            Dialog::File => [crtsim_core::input::IMAGE_EXTENSIONS, WEB_VIDEO_EXTENSIONS].concat(),
+            Dialog::ImportPreset => crtsim_core::input::IMAGE_EXTENSIONS.to_vec(),
             _ => chooser.extensions,
         };
         self.dialog_open = true;
@@ -359,10 +364,7 @@ impl App {
         let input = self.input.dimensions();
         match kind {
             Dialog::File => {
-                // Animated GIF and WebP open with their frames; the worker tells them apart.
-                if crtsim_media::MediaKind::of(Path::new(&name)) == crtsim_media::MediaKind::Video {
-                    return self.not_yet("Video");
-                }
+                // Videos and animations open with their frames; the worker tells them apart.
                 self.stop_playback();
                 self.work = Work::Loading(None);
                 self.status = format!("Loading {name}…");
