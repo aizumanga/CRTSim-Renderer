@@ -5,6 +5,7 @@ mod decode;
 pub mod demux;
 mod export;
 mod gif_writer;
+pub mod mux;
 pub mod page;
 mod plan;
 mod probe;

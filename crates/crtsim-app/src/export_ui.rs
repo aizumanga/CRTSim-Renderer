@@ -4,7 +4,7 @@ use crate::{
 };
 use crtsim_media::{
     AnimationFormat, AnimationOptions, AnimationSummary, Audio, Container, Dither, Encoder,
-    EncodingSpeed, Options, Quality, Timing,
+    Options, Quality, Timing,
 };
 use eframe::egui;
 
@@ -23,11 +23,15 @@ impl Default for ExportFormat {
 
 impl ExportFormat {
     /// The formats this host writes: all of them on the desktop, with FFmpeg; in a browser,
-    /// the animations, until it encodes video too.
+    /// the animations, and MP4 and WebM where its WebCodecs encodes H.264 and VP9.
     fn offered() -> Vec<Self> {
         let animations = AnimationFormat::ALL.map(Self::Animation);
         #[cfg(target_arch = "wasm32")]
-        return animations.to_vec();
+        return crate::web_encode::containers()
+            .into_iter()
+            .map(Self::Video)
+            .chain(animations)
+            .collect();
         #[cfg(not(target_arch = "wasm32"))]
         Container::ALL
             .map(Self::Video)
@@ -65,6 +69,19 @@ impl ExportFormat {
     }
 
     fn description(self) -> &'static str {
+        // A browser writes the picture and the sound only, with its own encoders.
+        #[cfg(target_arch = "wasm32")]
+        match self {
+            Self::Video(Container::Mp4) => {
+                return "H.264 plays on nearly every device and editing app. Your browser \
+                        encodes it; sound is kept as AAC or Opus, or converted to Opus.";
+            }
+            Self::Video(Container::Webm) => {
+                return "VP9, for web playback. Your browser encodes it; sound is kept as \
+                        Opus or Vorbis, or converted to Opus.";
+            }
+            _ => {}
+        }
         match self {
             Self::Video(Container::Mp4) => {
                 "H.264 plays on most devices and editing apps. MP4 is the simplest choice for \
@@ -327,10 +344,40 @@ fn video_settings(
         &mut options.audio,
         &[
             (Audio::Auto, "Preserve when compatible"),
-            (Audio::Encode, "Re-encode AAC / Opus"),
+            (
+                Audio::Encode,
+                if cfg!(target_arch = "wasm32") {
+                    "Convert to Opus"
+                } else {
+                    "Re-encode AAC / Opus"
+                },
+            ),
             (Audio::Mute, "No audio"),
         ],
     );
+    // A browser encodes with its own WebCodecs: the quality sets the bit rate, and only the
+    // picture and sound are written.
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = notes;
+        ui.small(
+            "Encoded by your browser. Sound is kept as it is when the format holds it, \
+            and otherwise converted to Opus.",
+        );
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    desktop_settings(ui, options, container, notes);
+}
+
+/// What the desktop's FFmpeg adds: other tracks, and the encoder's own settings.
+#[cfg(not(target_arch = "wasm32"))]
+fn desktop_settings(
+    ui: &mut egui::Ui,
+    options: &mut Options,
+    container: Container,
+    notes: &[String],
+) {
+    use crtsim_media::EncodingSpeed;
     ui.checkbox(
         &mut options.preserve_streams,
         "Keep additional tracks, subtitles, chapters & metadata",

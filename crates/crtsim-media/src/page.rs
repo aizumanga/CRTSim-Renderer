@@ -11,8 +11,9 @@ use crate::{
     decode::Request,
     export::Encoding,
     gif_writer::{GifWriter, Histogram},
+    mux,
     webp_writer::{self, WebpWriter},
-    AnimationFormat, AnimationOptions, Options, Progress, Rate, Source, Video,
+    AnimationFormat, AnimationOptions, Audio, Container, Options, Progress, Rate, Source, Video,
 };
 use anyhow::{bail, ensure, Result};
 use crtsim_core::{config::Config, Renderer, Sequence};
@@ -182,6 +183,182 @@ pub async fn playback<S: FrameSource>(
         }
     }
     Ok(())
+}
+
+/// What a host encodes a video's frames with, such as a browser's WebCodecs.
+#[allow(async_fn_in_trait, reason = "a page's futures stay on its one thread")]
+pub trait VideoEncoding {
+    /// Encodes the next frame, which shows at `time` seconds for `duration`.
+    async fn encode(
+        &mut self,
+        frame: &RgbaImage,
+        time: f64,
+        duration: f64,
+        key: bool,
+    ) -> Result<()>;
+    /// The encoded frames, once every one is done.
+    async fn finish(self) -> Result<mux::EncodedVideo>;
+}
+
+/// How a host is asked to encode a video's frames.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EncoderSettings {
+    /// As WebCodecs names it.
+    pub codec: &'static str,
+    pub size: (u32, u32),
+    pub fps: f64,
+    /// Bits per second the encoder aims for.
+    pub bitrate: u64,
+}
+
+impl EncoderSettings {
+    /// The codec `container` is written with here, and a bit rate for `quality` that leaves
+    /// the mask's fine pattern visible.
+    pub fn new(
+        container: Container,
+        size: (u32, u32),
+        fps: f64,
+        quality: crate::Quality,
+    ) -> Result<Self> {
+        let codec = match container {
+            // High profile, level 5.1: up to 4K.
+            Container::Mp4 => "avc1.640033",
+            Container::Webm => "vp09.00.51.08",
+            Container::Mkv => bail!("MKV is written by FFmpeg"),
+        };
+        let bits_per_pixel = match quality {
+            crate::Quality::Draft => 0.05,
+            crate::Quality::Balanced => 0.1,
+            crate::Quality::High => 0.16,
+            crate::Quality::Archival => 0.3,
+        } * if container == Container::Webm {
+            0.75
+        } else {
+            1.
+        };
+        let pixels = f64::from(size.0) * f64::from(size.1);
+        let bitrate = (pixels * fps * bits_per_pixel).max(500_000.) as u64;
+        Ok(Self {
+            codec,
+            size,
+            fps,
+            bitrate,
+        })
+    }
+}
+
+/// Exports `video` as an MP4 or WebM, returning the file.
+///
+/// `open` and `render` are as for an animation. `encoder` makes the host's encoder for the
+/// settings it is given. Sound the container holds as it is, is copied; otherwise, or when
+/// the options ask for it, `reencode` turns it into Opus, which both containers hold.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each is one part the host supplies"
+)]
+pub async fn export_video<S: FrameSource, E: VideoEncoding>(
+    video: &Video,
+    container: Container,
+    config: &Config,
+    options: &Options,
+    mut open: impl AsyncFnMut(&Span) -> Result<S>,
+    mut render: impl AsyncFnMut(&mut Sequence, &RgbaImage, &Config) -> Result<RgbaImage>,
+    encoder: impl AsyncFnOnce(&EncoderSettings) -> Result<E>,
+    reencode: impl AsyncFnOnce(&mux::EncodedAudio) -> Result<mux::EncodedAudio>,
+    cancel: &AtomicBool,
+    progress: &dyn Fn(Progress),
+) -> Result<Vec<u8>> {
+    options.validate()?;
+    let rate = Rate::of(video, options);
+    let size = config.output_size(video.size)?;
+    let settings = EncoderSettings::new(container, size, rate.fps, options.quality)?;
+    let mut encoder = encoder(&settings).await?;
+    let span = Span {
+        start: 0.,
+        fps: Some(rate.fps),
+        limit: None,
+    };
+    let expected = Ticks::new(&span, rate.fps, video.duration).rest();
+    // A keyframe every two seconds, for seeking.
+    let group = (rate.fps * 2.).round().max(1.) as u64;
+    let mut source = open(&span).await?;
+    let mut sequence = Sequence::video(options.timing, rate.fps);
+    let started = Instant::now();
+    let mut count = 0u64;
+    while let Some(frame) = source.next().await? {
+        check_cancel(cancel)?;
+        let output = render(&mut sequence, &frame, config).await?;
+        ensure!(
+            output.dimensions() == size,
+            "Renderer returned the wrong video dimensions"
+        );
+        let time = count as f64 / rate.fps;
+        encoder
+            .encode(&output, time, 1. / rate.fps, count.is_multiple_of(group))
+            .await?;
+        count += 1;
+        let done = (count as f64 / expected as f64).min(1.);
+        let elapsed = started.elapsed().as_secs_f64();
+        progress(Progress {
+            fraction: (done * 0.9) as f32,
+            stage: format!(
+                "Frame {count} of {expected} · {:.1} FPS · approximately {:.0}s remaining",
+                count as f64 / elapsed.max(0.001),
+                elapsed * (1. - done) / done
+            ),
+        });
+    }
+    ensure!(count > 0, "No frames decoded");
+    progress(Progress {
+        fraction: 0.92,
+        stage: "Finishing encoding".into(),
+    });
+    let encoded = encoder.finish().await?;
+    let audio = match (&video.source, &video.contents) {
+        (Source::Demuxed(demuxed), Some(contents)) if options.audio != Audio::Mute => {
+            demuxed.audio.as_ref().map(|track| mux::EncodedAudio {
+                codec: track.codec.clone(),
+                description: track.description.clone(),
+                sample_rate: track.sample_rate,
+                channels: track.channels,
+                packets: track
+                    .samples
+                    .iter()
+                    .map(|sample| mux::Packet {
+                        data: contents.as_ref()[sample.range.clone()].to_vec(),
+                        time: sample.time,
+                        duration: sample.duration,
+                        key: true,
+                    })
+                    .collect(),
+            })
+        }
+        _ => None,
+    };
+    let audio = match audio {
+        Some(audio)
+            if options.audio == Audio::Encode || !mux::takes_audio(container, &audio.codec) =>
+        {
+            progress(Progress {
+                fraction: 0.95,
+                stage: "Converting the sound to Opus".into(),
+            });
+            Some(reencode(&audio).await.map_err(|error| {
+                anyhow::anyhow!(
+                    "Cannot convert the sound ({}) to Opus for {}: {error:#}. Choose No audio, \
+                     or another format.",
+                    audio.codec,
+                    container.extension().to_uppercase()
+                )
+            })?)
+        }
+        audio => audio,
+    };
+    progress(Progress {
+        fraction: 0.98,
+        stage: "Writing the file".into(),
+    });
+    mux::write(container, &encoded, audio.as_ref())
 }
 
 /// Exports `video` as an animated GIF or WebP, returning the file.
@@ -373,6 +550,144 @@ mod tests {
         }
         // From 50 ms at 20 per second: each 100 ms frame shows twice, the first from its middle.
         assert_eq!(levels, vec![0, 60, 60, 120, 120]);
+    }
+
+    /// Frames of one gray level after another, as a decoder would hand them over.
+    struct Grays(u8, u8);
+
+    impl FrameSource for Grays {
+        async fn next(&mut self) -> Result<Option<RgbaImage>> {
+            if self.0 == self.1 {
+                return Ok(None);
+            }
+            self.0 += 1;
+            Ok(Some(RgbaImage::from_pixel(
+                8,
+                6,
+                Rgba([self.0, self.0, self.0, 255]),
+            )))
+        }
+    }
+
+    /// Stands in for WebCodecs: each frame becomes a packet holding its gray level.
+    #[derive(Default)]
+    struct Encoder(Vec<mux::Packet>, (u32, u32));
+
+    impl VideoEncoding for Encoder {
+        async fn encode(
+            &mut self,
+            frame: &RgbaImage,
+            time: f64,
+            duration: f64,
+            key: bool,
+        ) -> Result<()> {
+            let data = vec![frame.get_pixel(0, 0)[0]; 4];
+            self.0.push(mux::Packet {
+                data,
+                time,
+                duration,
+                key,
+            });
+            Ok(())
+        }
+
+        async fn finish(self) -> Result<mux::EncodedVideo> {
+            Ok(mux::EncodedVideo {
+                codec: "vp09.00.51.08".into(),
+                description: None,
+                size: self.1,
+                packets: self.0,
+            })
+        }
+    }
+
+    fn fixture_video(name: &str) -> Video {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(name);
+        crate::probe_demuxed(name.into(), Contents(std::fs::read(path).unwrap().into())).unwrap()
+    }
+
+    /// Exports `video` through the stand-ins, returning the file read back and whether the
+    /// sound was handed over to be converted.
+    fn export_video_as(
+        video: &Video,
+        container: Container,
+        audio: Audio,
+    ) -> (crate::demux::Demuxed, bool) {
+        let config = Config {
+            output: "64x48".into(),
+            ..Config::default()
+        };
+        let options = Options {
+            audio,
+            ..Options::default()
+        };
+        let frames = video.frames.unwrap() as u8;
+        let converted = std::cell::Cell::new(false);
+        let file = pollster::block_on(export_video(
+            video,
+            container,
+            &config,
+            &options,
+            async |_| Ok(Grays(0, frames)),
+            async |sequence, frame, config| render(sequence, frame, config).await,
+            async |settings| {
+                assert_eq!(settings.size, (64, 48));
+                Ok(Encoder(vec![], settings.size))
+            },
+            async |audio| {
+                converted.set(true);
+                // Stands in for Opus: the packets as they are, under Opus's name.
+                Ok(mux::EncodedAudio {
+                    codec: "opus".into(),
+                    description: Some(b"OpusHead\x01\x01\x38\x01\x80\xbb\0\0\0\0\0".to_vec()),
+                    ..audio.clone()
+                })
+            },
+            &AtomicBool::new(false),
+            &|_| {},
+        ))
+        .unwrap();
+        let name = format!("out.{}", container.extension());
+        (
+            crate::demux::demux(std::path::Path::new(&name), &file).unwrap(),
+            converted.get(),
+        )
+    }
+
+    #[test]
+    fn videos_export_through_the_hosts_encoder_with_their_sound() {
+        // VP9 and Opus into WebM: the sound is copied.
+        let video = fixture_video("vp9-opus.webm");
+        let (webm, converted) = export_video_as(&video, Container::Webm, Audio::Auto);
+        assert!(!converted);
+        let samples = &webm.video.samples;
+        assert_eq!(samples.len(), 10);
+        let times: Vec<u32> = samples
+            .iter()
+            .map(|s| (s.time * 1000.).round() as u32)
+            .collect();
+        assert_eq!(times, (0..10).map(|i| i * 100).collect::<Vec<_>>());
+        // A keyframe every two seconds: only the first, in one second.
+        assert_eq!(samples.iter().filter(|s| s.key).count(), 1);
+        let source = video.source.clone();
+        let Source::Demuxed(demuxed) = source else {
+            unreachable!()
+        };
+        assert_eq!(
+            webm.audio.unwrap().samples.len(),
+            demuxed.audio.as_ref().unwrap().samples.len()
+        );
+        // Asked for, the sound is converted even where it could be copied.
+        assert!(export_video_as(&video, Container::Mp4, Audio::Encode).1);
+        // AAC cannot go into WebM, so it is converted; and without sound, nothing is.
+        let aac = fixture_video("h264-aac.mp4");
+        let (webm, converted) = export_video_as(&aac, Container::Webm, Audio::Auto);
+        assert!(converted);
+        assert_eq!(webm.audio.unwrap().codec, "opus");
+        let (silent, converted) = export_video_as(&aac, Container::Webm, Audio::Mute);
+        assert!(!converted && silent.audio.is_none());
     }
 
     #[test]

@@ -135,10 +135,10 @@ Vulkan/DX12/Metal implementation will show a compatible-adapter error; it is not
 
 The same app runs in a browser with WebGPU, as the web app. It opens images, animated GIF or
 WebP, and MP4, MOV, WebM or MKV videos you pick or drop on the page (the videos decoded by the
-browser, so the codecs are the browser's), previews and plays them, and saves PNGs, GIF and
-animated WebP exports and presets as downloads; its settings, presets and session stay in the
-browser. Video export, projects and batch export are desktop-only for now (see
-[the web plan](docs/WEB_PLAN.md)).
+browser, so the codecs are the browser's), previews and plays them, and saves PNGs, MP4 and WebM videos (encoded by the browser, so the
+formats offered are those it can write), GIF and animated WebP exports and presets as downloads;
+its settings, presets and session stay in the browser. Projects and batch export are
+desktop-only for now (see [the web plan](docs/WEB_PLAN.md)).
 
 ```sh
 rustup target add wasm32-unknown-unknown

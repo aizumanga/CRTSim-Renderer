@@ -308,9 +308,6 @@ impl App {
         let chooser = kind.chooser(self.export_format);
         match kind {
             Dialog::OpenProject | Dialog::SaveProject => return self.not_yet("Projects"),
-            Dialog::ExportVideo if matches!(self.export_format, ExportFormat::Video(_)) => {
-                return self.not_yet("Video export")
-            }
             _ => {}
         }
         if let Some(name) = chooser.save_as {

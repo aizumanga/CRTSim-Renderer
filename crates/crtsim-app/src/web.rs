@@ -10,6 +10,8 @@ use wasm_bindgen_futures::JsFuture;
 #[wasm_bindgen]
 pub async fn start(canvas: web_sys::HtmlCanvasElement) -> Result<(), JsValue> {
     let store = app_data::Store::browser().await;
+    // Which video formats the export window can offer.
+    crate::web_encode::check_containers().await;
     let options = eframe::WebOptions {
         wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
             wgpu_setup: eframe::egui_wgpu::WgpuSetup::CreateNew(

@@ -33,6 +33,8 @@ mod toolbar;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
 #[cfg(target_arch = "wasm32")]
+mod web_encode;
+#[cfg(target_arch = "wasm32")]
 mod web_video;
 mod widgets;
 mod worker;

@@ -14,7 +14,7 @@ order; the polish track can run alongside.
 | 4 ✓ | `crtsim-desktop` becomes `crtsim-app`, a library, with a small native `main` (the executable keeps its name). | The desktop builds and behaves as before. |
 | 5 ✓ | The render worker speaks renders and typed failures on one stream, with two adapters: a thread and an async task. | The worker's tests run against both adapters. |
 | 6 ✓ | The web entry point: WebGPU check, files by picker and drop, downloads, app data in IndexedDB. | Opens, previews and saves a PNG in Chrome and Firefox. (Chromium checked; Firefox by hand.) |
-| 7 | Web encoders: WebCodecs for MP4 and WebM with a muxer, and Rust encoders for GIF and animated WebP. | Each format opens in the browser that wrote it. |
+| 7 ✓ | Web encoders: WebCodecs for MP4 and WebM with a muxer, and Rust encoders for GIF and animated WebP. | Each format opens in the browser that wrote it. (Chromium checked for GIF, WebP and WebM; MP4 needs a browser with H.264, by hand.) |
 | 8 | Release and site workflows (below). | A published release reaches the site through a pull request. |
 
 ## The frame interface (step 3, done)
@@ -87,7 +87,7 @@ order; the polish track can run alongside.
 - **Still to do for the web:** the module is 20 MB, 7 MB of it the embedded NES LUTs, which
   could be fetched when first used.
 
-## Video in the browser (step 7)
+## Video in the browser (step 7, done)
 
 Every video path on the desktop runs through FFmpeg processes, so the browser needs its own
 way in as well as out: exporting needs a video to export. Step 7 is three parts, each shipped
@@ -138,9 +138,32 @@ on its own.
      playback runs to the end. This Chromium build has no H.264 decoder (open-source builds
      leave it out), so H.264 was checked only as far as the refusal naming it; Chrome, Edge,
      Safari and Firefox decode it.
-3. **Video out.** WebCodecs encodes H.264 for MP4 and VP9 for WebM, muxed in Rust. Sound is
-   copied when the container takes its codec, and otherwise re-encoded as Opus. The window
-   offers only what `VideoEncoder.isConfigSupported` accepts.
+3. **Video out (done).** MP4 and WebM export in the browser, with their sound.
+   - `crtsim_media::mux` writes MP4 (H.264 or VP9; AAC or Opus) with its index before the
+     frames, in half-second chunks of picture and sound in turn, and WebM (VP8 or VP9; Opus or
+     Vorbis) with a cluster per keyframe, cues and a seek head, so both play and seek as they
+     load. Decoding times are the showing times in order, with signed offsets if an encoder
+     reorders frames.
+   - `page::export_video` renders at the export's rate into the host's `VideoEncoding`, with a
+     keyframe every two seconds and a bit rate from the quality, then adds the sound: copied
+     when the container holds its codec, and otherwise, or when asked, converted to Opus by
+     the host. A browser that cannot convert it says so and suggests No audio or another
+     format, rather than dropping the sound.
+   - `web_encode` binds WebCodecs' `VideoEncoder`, `AudioDecoder` and `AudioEncoder` by hand.
+     When the page starts it asks which of H.264 and VP9 the browser encodes, and the export
+     window offers MP4 and WebM only where it can. The desktop's encoder, CRF and track
+     settings are not shown in a browser.
+   - The MP4 reader now finds Opus sound, which `re_mp4` leaves unnamed, and sound in WebM
+     keeps in step with a video that does not start at zero.
+   - Checked natively: the fixtures' frames and sound written as MP4 and WebM read back byte
+     for byte, and FFmpeg decodes each file without an error. Checked in headless Chromium:
+     VP9 clips without sound, with Opus and with Vorbis export as WebM at 1920x1080 with every
+     frame (10 and 50) and the sound copied; FFmpeg decodes them cleanly; Chromium plays each to
+     the end showing every frame and decoding its sound, and seeks in them as in FFmpeg's own
+     WebM. Asked to convert, Vorbis became 48 kHz Opus. AAC, which this Chromium cannot decode,
+     stopped the export with the message above. This Chromium has no H.264 encoder, so it
+     offered WebM only, as it should; MP4 from a browser needs a check by hand in Chrome, Edge,
+     Safari or Firefox.
 
 ## Polish track
 

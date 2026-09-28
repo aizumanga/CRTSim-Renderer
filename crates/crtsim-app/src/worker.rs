@@ -951,6 +951,54 @@ async fn export_animation_here(
     save(path, &bytes, mime)
 }
 
+/// A video handed over as bytes, exported here without FFmpeg and saved, which in a browser
+/// is a download. Its frames and sound are encoded by the browser.
+async fn export_video_here(
+    graphics: &mut Graphics,
+    video: &Video,
+    config: &Config,
+    options: &Options,
+    path: &Path,
+    cancel: &AtomicBool,
+    progress: &dyn Fn(Progress),
+) -> Result<()> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (graphics, video, config, options, path, cancel, progress);
+        anyhow::bail!("Videos handed over as bytes are encoded only in a browser")
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let container = crtsim_media::Container::of(path)
+            .ok_or_else(|| anyhow::anyhow!("Choose an MP4 or WebM filename"))?;
+        let renderer = graphics.renderer(|| {}).await?;
+        let bytes = crtsim_media::page::export_video(
+            video,
+            container,
+            config,
+            options,
+            async |span| crate::frames::open(video, span).await,
+            async |sequence, frame, config| {
+                renderer
+                    .frame(sequence, frame, config, Some(cancel), |_| {})
+                    .await?;
+                renderer.read(sequence).await
+            },
+            async |settings| crate::web_encode::Encoder::open(settings).await,
+            async |audio| crate::web_encode::opus(audio).await,
+            cancel,
+            progress,
+        )
+        .await?;
+        ensure!(!cancel.load(Ordering::Relaxed), "Render cancelled");
+        let mime = match container {
+            crtsim_media::Container::Webm => "video/webm",
+            _ => "video/mp4",
+        };
+        save(path, &bytes, mime)
+    }
+}
+
 /// A frame as a lossy still WebP, which only a browser's own encoder writes here.
 async fn lossy_webp(frame: &RgbaImage, quality: u8) -> Result<Vec<u8>> {
     #[cfg(target_arch = "wasm32")]
@@ -985,10 +1033,9 @@ async fn export_video(
     cancel: &Arc<AtomicBool>,
     progress: &dyn Fn(Progress),
 ) -> Result<()> {
-    ensure!(
-        video.contents.is_none(),
-        "Video export arrives in the web app in a later version"
-    );
+    if video.contents.is_some() {
+        return export_video_here(graphics, video, config, options, path, cancel, progress).await;
+    }
     let renderer = graphics.renderer(|| {}).await?;
     crtsim_media::export(video, path, config, options, renderer, cancel, progress)
 }

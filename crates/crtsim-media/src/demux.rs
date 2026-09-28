@@ -113,8 +113,9 @@ fn is_mp4(kind: &[u8]) -> bool {
     )
 }
 
-/// The samples' order of showing, and their times moved to start from the first one shown.
-fn shown(samples: &mut [Sample]) -> Vec<usize> {
+/// The samples' order of showing, with their times moved to start from the first one shown,
+/// and how far they moved, which other tracks move by too to stay in step.
+fn shown(samples: &mut [Sample]) -> (Vec<usize>, f64) {
     let first = samples
         .iter()
         .map(|sample| sample.time)
@@ -124,7 +125,15 @@ fn shown(samples: &mut [Sample]) -> Vec<usize> {
     }
     let mut order: Vec<usize> = (0..samples.len()).collect();
     order.sort_by(|&a, &b| samples[a].time.total_cmp(&samples[b].time));
-    order
+    (order, first)
+}
+
+/// Moves `samples` back by `by` seconds, as the video's were.
+fn moved(mut samples: Vec<Sample>, by: f64) -> Vec<Sample> {
+    for sample in &mut samples {
+        sample.time -= by;
+    }
+    samples
 }
 
 fn last_end(samples: &[Sample]) -> f64 {
@@ -195,11 +204,16 @@ fn mp4(bytes: &[u8]) -> Result<Demuxed> {
         _ => 0,
     };
     let mut video_samples = samples(track);
-    let shown_order = shown(&mut video_samples);
+    let (shown_order, first) = shown(&mut video_samples);
     let audio = mp4
         .tracks()
         .values()
-        .find(|track| track.kind == Some(TrackKind::Audio))
+        // re_mp4 knows a track's kind by its codec, so it leaves Opus's unknown.
+        .find(|track| {
+            let opus = matches!(&track.trak(&mp4).mdia.minf.stbl.stsd.contents,
+                StsdBoxContent::Unknown(kind) if kind.to_string() == "Opus");
+            track.kind == Some(TrackKind::Audio) || opus
+        })
         .and_then(
             |track| match &track.trak(&mp4).mdia.minf.stbl.stsd.contents {
                 StsdBoxContent::Mp4a(mp4a) => {
@@ -213,7 +227,17 @@ fn mp4(bytes: &[u8]) -> Result<Demuxed> {
                         description: Some(packed.to_be_bytes().to_vec()),
                         sample_rate: u32::from(mp4a.samplerate.value()),
                         channels: u32::from(mp4a.channelcount),
-                        samples: samples(track),
+                        samples: moved(samples(track), first),
+                    })
+                }
+                StsdBoxContent::Unknown(kind) if kind.to_string() == "Opus" => {
+                    let head = opus_head(bytes)?;
+                    Some(AudioTrack {
+                        codec: "opus".into(),
+                        channels: u32::from(head[9]),
+                        description: Some(head),
+                        sample_rate: 48_000,
+                        samples: moved(samples(track), first),
                     })
                 }
                 _ => None,
@@ -234,6 +258,42 @@ fn mp4(bytes: &[u8]) -> Result<Demuxed> {
         duration,
         container: "mp4",
     })
+}
+
+/// Opus's `OpusHead`, from the `dOps` box an MP4's index holds, which `re_mp4` leaves unread.
+fn opus_head(bytes: &[u8]) -> Option<Vec<u8>> {
+    // The index box, found among the top-level boxes so a frame's bytes are never searched.
+    let mut at = 0usize;
+    let moov = loop {
+        let size = u32::from_be_bytes(bytes.get(at..at + 4)?.try_into().ok()?) as usize;
+        let kind = bytes.get(at + 4..at + 8)?;
+        let size = match size {
+            1 => usize::try_from(u64::from_be_bytes(
+                bytes.get(at + 8..at + 16)?.try_into().ok()?,
+            ))
+            .ok()?,
+            0 => bytes.len() - at,
+            size => size,
+        };
+        if kind == b"moov" {
+            break bytes.get(at..at.checked_add(size)?)?;
+        }
+        at = at.checked_add(size.max(8))?;
+    };
+    let found = moov.windows(4).position(|w| w == b"dOps")?;
+    let size = u32::from_be_bytes(moov.get(found - 4..found)?.try_into().ok()?) as usize;
+    let dops = moov.get(found + 4..found - 4 + size)?;
+    // dOps is OpusHead's fields after its magic, big-endian where OpusHead is little-endian.
+    let [_, channels, skip0, skip1, rate0, rate1, rate2, rate3, gain0, gain1, rest @ ..] = dops
+    else {
+        return None;
+    };
+    let mut head = b"OpusHead".to_vec();
+    head.extend_from_slice(&[
+        1, *channels, *skip1, *skip0, *rate3, *rate2, *rate1, *rate0, *gain1, *gain0,
+    ]);
+    head.extend_from_slice(rest);
+    Some(head)
 }
 
 /// Matroska's element ids, as they are written.
@@ -583,7 +643,7 @@ fn matroska(bytes: &[u8]) -> Result<Demuxed> {
         entry.pixels
     };
     let mut samples = entry.samples;
-    let shown_order = shown(&mut samples);
+    let (shown_order, first) = shown(&mut samples);
     let audio = entries
         .iter_mut()
         .find(|entry| entry.kind == 2 && !entry.encoded)
@@ -600,7 +660,7 @@ fn matroska(bytes: &[u8]) -> Result<Demuxed> {
                 description: audio.private.clone(),
                 sample_rate: audio.sample_rate.round() as u32,
                 channels: audio.channels,
-                samples: std::mem::take(&mut audio.samples),
+                samples: moved(std::mem::take(&mut audio.samples), first),
             })
         });
     let duration = last_end(&samples);
