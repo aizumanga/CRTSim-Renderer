@@ -21,7 +21,7 @@
 
 The preset schema remains version 1 and is compatible with v0.1.0 files.
 
-The **Portable packages** workflow builds each pull request and manual workflow run into downloadable Actions artifacts.
+The **Portable packages** workflow builds downloadable Actions artifacts for each manual workflow run, and for pull requests that change packaging: the workflow itself, `tools/package.py`, `tools/build_web.py`, `packaging/`, `web/` or `Cargo.lock`. Other pull requests are built and tested by the validation workflow only.
 A `v*` tag builds the same packages and creates a **draft** GitHub release after all three packaging jobs succeed.
 Review and publish the draft manually. This workflow does not create tags or merge pull requests.
 The same workflow builds the web app into `CRTSim-Renderer-vX.Y.Z-web.zip` and `SHA256SUMS-web.txt`. Running it by

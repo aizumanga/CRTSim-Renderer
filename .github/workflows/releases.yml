@@ -1,6 +1,16 @@
 name: Portable packages
 on:
+  # Pull requests are built, tested and linted on every system by the validation workflow, so
+  # packages are built for one only when it changes how they are made or what goes into them.
+  # A preview of any commit can still be built by running this workflow by hand.
   pull_request:
+    paths:
+      - .github/workflows/releases.yml
+      - tools/package.py
+      - tools/build_web.py
+      - packaging/**
+      - web/**
+      - Cargo.lock
   push:
     tags: ['v*']
   workflow_dispatch:
