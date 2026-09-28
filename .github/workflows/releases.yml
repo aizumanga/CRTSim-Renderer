@@ -108,6 +108,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.release_tag }}
+      # A release published before its web package existed has an older tools/package.py, so
+      # the package is made with this workflow's own tools from the tag's build.
+      - uses: actions/checkout@v4
+        with:
+          path: workflow-tools
+          sparse-checkout: tools/
+          sparse-checkout-cone-mode: false
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -135,7 +142,7 @@ jobs:
           else
             version="preview-${GITHUB_SHA:0:8}"
           fi
-          python tools/package.py --platform web --version "$version"
+          python workflow-tools/tools/package.py --platform web --version "$version"
           cd dist && sha256sum -- *-web.zip > SHA256SUMS-web.txt && cat SHA256SUMS-web.txt
       - uses: actions/upload-artifact@v4
         with:
