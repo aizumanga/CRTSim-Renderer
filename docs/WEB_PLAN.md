@@ -15,7 +15,7 @@ order; the polish track can run alongside.
 | 5 ✓ | The render worker speaks renders and typed failures on one stream, with two adapters: a thread and an async task. | The worker's tests run against both adapters. |
 | 6 ✓ | The web entry point: WebGPU check, files by picker and drop, downloads, app data in IndexedDB. | Opens, previews and saves a PNG in Chrome and Firefox. (Chromium checked; Firefox by hand.) |
 | 7 ✓ | Web encoders: WebCodecs for MP4 and WebM with a muxer, and Rust encoders for GIF and animated WebP. | Each format opens in the browser that wrote it. (Chromium checked for GIF, WebP and WebM; MP4 needs a browser with H.264, by hand.) |
-| 8 | Release and site workflows (below). | A published release reaches the site through a pull request. |
+| 8 ✓ | Release and site workflows (below). | A published release reaches the site through a pull request. |
 
 ## The frame interface (step 3, done)
 
@@ -175,20 +175,35 @@ These help both hosts, so they are worth doing before or during steps 4 to 6:
   This fixes playback ignoring an audition.
 - **Settings drawn from core's description**, so a setting is added in one place.
 
-## From a release to the site
+## From a release to the site (step 8, done)
 
-1. Tagging `vX.Y.Z` runs `releases.yml`. Besides the desktop packages, a web job builds
-   `CRTSim-Renderer-vX.Y.Z-web.zip` and `SHA256SUMS-web.txt` into the draft release.
+1. Tagging `vX.Y.Z` runs `releases.yml`. Besides the desktop packages, its `web` job builds
+   the web app with `tools/build_web.py` and packages it with `tools/package.py --platform web`
+   as `CRTSim-Renderer-vX.Y.Z-web.zip` and `SHA256SUMS-web.txt`, which go into the draft
+   release. The zip holds the page, its module and the module's JavaScript at its root, with
+   the licenses and notices; the dependencies' license texts are one file, each text once.
+   Running the workflow by hand with `release_tag` adds the web app to a release published
+   before it existed, as v0.7.0 was, and leaves the desktop packages alone.
 2. The maintainer publishes the draft.
-3. In `aizumanga/aizumanga-neocities`, an **Update CRTSim** workflow runs daily and on demand.
-   When the latest published release is newer than the one on the site, it downloads the web
-   zip and checks its checksum. It then replaces the web app's folder, sets `VERSION` in
-   `scripts/crtsim-downloads.js` to match, and opens a pull request.
+3. In `aizumanga/aizumanga-neocities`, the **Update CRTSim** workflow runs daily and on demand.
+   When the latest published release is newer than the one on the site,
+   `tools/update-crtsim.mjs` downloads the web zip and checks its checksum. It refuses a zip
+   holding folders or missing the app's files before touching anything. It then replaces
+   `crtsim/`, sets `VERSION` and turns on `WEB_APP` in `scripts/crtsim-downloads.js`, and the
+   workflow opens a pull request.
 4. Merging the pull request runs the site's existing **Deploy to Neocities**, which uploads the
    changed files. The downloads dialog and the web app then name the same release.
 
 The web app lives at `aizumanga.neocities.org/crtsim/`. The downloads dialog behind the site's
-**CRTSim** button offers **Open in your browser** first, above the platform downloads.
+**CRTSim** button offers **Open in your browser** first, above the platform downloads. Neocities
+accepts the `.wasm` module only from Supporter accounts, which the site is. The dialog's
+no-JavaScript fallback links point at the latest release, so they need no edit per version.
+
+Checked: the web zip built and packaged here, installed by the site's updater into a copy of
+the site, served the app from `/crtsim/`, which rendered and exported the test pattern in
+headless Chromium; the dialog offered it first and named the release. The updater run against
+GitHub found v0.7.0 without a web zip, warned, and changed nothing. The site's own validation
+passes with the workflow's test added to it.
 
 ## Home page showcase
 

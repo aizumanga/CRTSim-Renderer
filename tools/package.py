@@ -8,7 +8,8 @@ import tarfile
 import zipfile
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--platform', choices=['linux-x86_64', 'windows-x86_64', 'macos-arm64'], required=True)
+# `web` packages the web app that tools/build_web.py left in web/dist, for a website to serve.
+parser.add_argument('--platform', choices=['linux-x86_64', 'windows-x86_64', 'macos-arm64', 'web'], required=True)
 parser.add_argument('--version', required=True)
 args = parser.parse_args()
 if not all(c.isalnum() or c in '.-_' for c in args.version):
@@ -19,13 +20,20 @@ dist.mkdir(exist_ok=True)
 name = f'CRTSim-Renderer-{args.version}-{args.platform}'
 stage = dist / name
 stage.mkdir()  # Refuse stale/reused staging folders.
+web = args.platform == 'web'
 exe = '.exe' if args.platform.startswith('windows') else ''
-for binary in ['crtsim-desktop', 'crtsim']:
-    shutil.copy2(root / 'target' / 'release' / (binary + exe), stage)
-    subprocess.run([str(stage / (binary + exe)), '--help'], check=True, stdout=subprocess.DEVNULL)
-for doc in ['README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md']:
+if web:
+    built = root / 'web' / 'dist'
+    for page in ['index.html', 'crtsim_app.js', 'crtsim_app_bg.wasm']:
+        shutil.copy2(built / page, stage)
+else:
+    for binary in ['crtsim-desktop', 'crtsim']:
+        shutil.copy2(root / 'target' / 'release' / (binary + exe), stage)
+        subprocess.run([str(stage / (binary + exe)), '--help'], check=True, stdout=subprocess.DEVNULL)
+for doc in ['LICENSE', 'THIRD_PARTY_NOTICES.md'] if web else ['README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md']:
     shutil.copy2(root / doc, stage)
-shutil.copytree(root / 'docs', stage / 'docs')
+if not web:
+    shutil.copytree(root / 'docs', stage / 'docs')
 shutil.copy2(root / 'assets/original-crtsim/SOURCES.md', stage / 'ORIGINAL_ASSETS.md')
 for source, destination in [
     ('SOURCES.md', 'NES_LUTS_SOURCES.md'),
@@ -56,6 +64,26 @@ for package in metadata['packages']:
             shutil.copytree(source, destination / source.name, dirs_exist_ok=True)
     index.append({key: package.get(key) for key in ['name', 'version', 'license', 'repository']})
 (licenses / 'index.json').write_text(json.dumps(index, indent=2) + '\n', encoding='utf-8')
+if web:
+    # A website serves every file it holds, so the web package gathers the texts into one file
+    # rather than a folder per dependency, with each text written out once.
+    texts = []
+    first = {}
+    for entry in index:
+        package = f"{entry['name']} {entry['version']}"
+        folder = licenses / f"{entry['name']}-{entry['version']}"
+        texts.append(f"{'=' * 78}\n{package} ({entry['license']})\n"
+                     f"{entry['repository'] or ''}\n{'=' * 78}\n")
+        for file in sorted(p for p in folder.rglob('*') if p.is_file()):
+            text = file.read_text(encoding='utf-8', errors='replace').rstrip()
+            license_name = file.relative_to(folder)
+            if text in first:
+                texts.append(f"--- {license_name}: the same text as {first[text]} ---\n\n")
+            else:
+                first[text] = f"{package}'s {license_name}"
+                texts.append(f"--- {license_name} ---\n{text}\n\n")
+    (stage / 'dependency-licenses.txt').write_text(''.join(texts), encoding='utf-8')
+    shutil.rmtree(licenses)
 (stage / 'BUILD.txt').write_text(
     f"Version: {args.version}\nPlatform: {args.platform}\nCommit: "
     + subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() + '\n', encoding='utf-8')
@@ -71,11 +99,12 @@ if args.platform == 'macos-arm64':
                       'CFBundleShortVersionString': '0.1.1', 'NSHighResolutionCapable': True}, output)
     # Ad-hoc signing permits execution on Apple Silicon; it is not Developer ID signing/notarization.
     subprocess.run(['codesign', '--force', '--deep', '--sign', '-', str(app.parent)], check=True)
-if exe:
+if exe or web:
     archive = dist / (name + '.zip')
     # Cargo sources can carry Unix-epoch timestamps, older than ZIP's 1980 minimum.
     # Keep Windows files at the ZIP root. Windows' "Extract All" already creates a
-    # directory named after the archive, so another identical directory is needless.
+    # directory named after the archive, so another identical directory is needless. The web
+    # app's files are at the root too, as the folder a site serves them from.
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, strict_timestamps=False) as output:
         for path in sorted(stage.rglob('*')):
             if path.is_file():

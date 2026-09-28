@@ -4,6 +4,11 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Add the web app to this existing release, such as v0.7.0. Leave empty to build every package as a preview.
+        required: false
+        default: ''
 permissions:
   contents: read
 # A new push to a pull request replaces its checks in progress; main and tags always finish.
@@ -12,6 +17,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   package:
+    # Adding the web app to an existing release leaves its desktop packages as they are.
+    if: inputs.release_tag == ''
     strategy:
       fail-fast: false
       matrix:
@@ -95,9 +102,52 @@ jobs:
             package-smoke/*.png
           if-no-files-found: error
           retention-days: 14
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      # wasm-bindgen's command line must match the crate version Cargo.lock pins; the cache
+      # keeps it installed between runs.
+      - name: Install wasm-bindgen
+        shell: bash
+        run: |
+          pinned="$(python -c "import re; print(re.search(r'name = \"wasm-bindgen\"\nversion = \"([^\"]+)\"', open('Cargo.lock').read()).group(1))")"
+          cargo install wasm-bindgen-cli --version "$pinned" --locked
+      - name: Build the web app
+        run: python tools/build_web.py
+      - name: Package the web app
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          if [ -n "$RELEASE_TAG" ]; then
+            version="$RELEASE_TAG"
+          elif [ "$REF_TYPE" = tag ]; then
+            version="$REF_NAME"
+          else
+            version="preview-${GITHUB_SHA:0:8}"
+          fi
+          python tools/package.py --platform web --version "$version"
+          cd dist && sha256sum -- *-web.zip > SHA256SUMS-web.txt && cat SHA256SUMS-web.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-package
+          path: |
+            dist/*-web.zip
+            dist/SHA256SUMS-web.txt
+          if-no-files-found: error
+          retention-days: 14
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: package
+    needs: [package, web]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -107,6 +157,10 @@ jobs:
           pattern: CRTSim-Renderer-*
           path: packages
           merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-package
+          path: packages/dist
       - name: Create or update draft release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -115,6 +169,25 @@ jobs:
         shell: bash
         run: |
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release create "$RELEASE_TAG" --verify-tag --draft --title "CRTSim Renderer $RELEASE_TAG" --notes 'Portable desktop and CLI packages. See the included README and docs/RELEASES.md. Video requires a separate FFmpeg/ffprobe installation. macOS is ad-hoc signed only, without Apple Developer ID signing or notarization.'
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "CRTSim Renderer $RELEASE_TAG" --notes 'Portable desktop and CLI packages, and the web app the site serves. See the included README and docs/RELEASES.md. Video requires a separate FFmpeg/ffprobe installation. macOS is ad-hoc signed only, without Apple Developer ID signing or notarization.'
           fi
           gh release upload "$RELEASE_TAG" packages/dist/*.zip packages/dist/*.tar.gz packages/dist/*.AppImage packages/dist/SHA256SUMS-*.txt --clobber
+  # The web app for a release published before its package existed, such as v0.7.0.
+  add-web:
+    if: inputs.release_tag != ''
+    needs: web
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-package
+          path: dist
+      - name: Add the web app to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: gh release upload "$RELEASE_TAG" dist/*-web.zip dist/SHA256SUMS-web.txt --clobber
