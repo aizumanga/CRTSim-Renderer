@@ -205,11 +205,13 @@ headless Chromium; the dialog offered it first and named the release. The update
 GitHub found v0.7.0 without a web zip, warned, and changed nothing. The site's own validation
 passes with the workflow's test added to it.
 
-## Home page showcase
+## Home page showcase (done)
 
-With the next release, the site's home page gains a small `CRTSim_Renderer.exe` window below
-**Welcome to my corner!**: a before/after slider over one sample at a time, with thumbnails to
-switch between an image and a video sample, and a **Download** button that opens the existing
-downloads dialog. **Open in your browser** joins it once the web app ships. The samples are the
-maintainer's own source and CRT pairs at matching sizes; the page gets smaller display copies,
-and videos load only when the window scrolls into view.
+The site's home page has a small `CRTSim_Renderer.exe` window below **Welcome to my corner!**: a
+before/after slider over one sample at a time, with thumbnails to switch between an image and a
+video sample, a **Download** button that opens the existing downloads dialog, and **Open in your
+browser** once the site's `WEB_APP` is on. The samples are the maintainer's own source and CRT
+pairs at matching sizes. Each is one file with the original above and the CRT version below, so
+a video's two sides always show the same frame. The page gets smaller display copies (WebP, and
+the video as H.264 with a VP9 copy for browsers without H.264), and nothing loads until the
+window is near the screen. The video pauses off screen and with the site's effects paused.
