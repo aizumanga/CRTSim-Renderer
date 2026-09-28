@@ -156,7 +156,7 @@ fn multiple_tracks_subtitles_chapters_metadata_and_lut_roundtrip() {
             &config,
             &options,
             &cancel,
-            |im, _| Ok(im.clone()),
+            |_, im, _| Ok(im.clone()),
             |_| {},
         )
         .unwrap();
@@ -253,7 +253,7 @@ fn ffmpeg_streaming_audio_timing_and_cancellation() {
             &config,
             &options,
             &cancel,
-            |image, _| Ok(image.clone()),
+            |_, image, _| Ok(image.clone()),
             |p| stages.push(p.fraction),
         )
         .unwrap();
@@ -301,7 +301,7 @@ fn ffmpeg_streaming_audio_timing_and_cancellation() {
         &config,
         &Options::default(),
         &cancel,
-        |image, _| {
+        |_, image, _| {
             cancel.store(true, Ordering::Relaxed);
             Ok(image.clone())
         },
@@ -329,7 +329,7 @@ fn ffmpeg_streaming_audio_timing_and_cancellation() {
             ..Options::default()
         },
         &cancel,
-        |image, _| Ok(image.clone()),
+        |_, image, _| Ok(image.clone()),
         |_| {},
     )
     .unwrap();
@@ -370,8 +370,8 @@ fn video_gpu_sequence_export() {
     let mut screen_config = config.clone();
     screen_config.screen_only = true;
     assert_ne!(
-        renderer.render(&frame, &config).unwrap().crt,
-        renderer.render(&frame, &screen_config).unwrap().crt
+        pollster::block_on(renderer.still(&frame, &config, None, |_| {})).unwrap(),
+        pollster::block_on(renderer.still(&frame, &screen_config, None, |_| {})).unwrap()
     );
     let mut times = vec![];
     crtsim_media::playback(
@@ -437,7 +437,7 @@ fn frame_rates_and_audio_offset() {
                 ..Options::default()
             },
             &cancel,
-            |image, _| Ok(image.clone()),
+            |_, image, _| Ok(image.clone()),
             |_| {},
         )
         .unwrap();
@@ -478,7 +478,7 @@ fn frame_rates_and_audio_offset() {
         &config,
         &Options::default(),
         &cancel,
-        |image, _| Ok(image.clone()),
+        |_, image, _| Ok(image.clone()),
         |_| {},
     )
     .unwrap();
@@ -534,7 +534,7 @@ fn frame_rates_and_audio_offset() {
         &config,
         &Options::default(),
         &cancel,
-        |image, _| Ok(image.clone()),
+        |_, image, _| Ok(image.clone()),
         |_| {},
     )
     .unwrap();
@@ -669,7 +669,7 @@ fn animated_gif_and_webp_open_and_export_to_video() {
             &config,
             &Options::default(),
             &cancel,
-            |image, _| Ok(image.clone()),
+            |_, image, _| Ok(image.clone()),
             |_| {},
         )
         .unwrap();
@@ -849,7 +849,7 @@ fn animation_exports_are_small_timed_and_replace_the_output_only_when_done() {
         &config,
         &one_second,
         &cancel,
-        |image, _| {
+        |_, image, _| {
             cancel.store(true, Ordering::Relaxed);
             Ok(image::imageops::resize(
                 image,

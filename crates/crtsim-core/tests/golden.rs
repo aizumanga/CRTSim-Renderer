@@ -20,7 +20,7 @@
 //! ```
 
 use crtsim_core::config::{self, ColorMode, Config, Phase};
-use crtsim_core::{nes_luts, Renderer, Sequence};
+use crtsim_core::{nes_luts, Renderer, Sequence, Signals};
 use image::RgbaImage;
 use std::path::{Path, PathBuf};
 
@@ -132,12 +132,41 @@ fn base() -> Config {
     }
 }
 
+/// A still with the signals it was made from.
+struct Rendered {
+    clean: RgbaImage,
+    signal: RgbaImage,
+    crt: RgbaImage,
+}
+
+fn render(renderer: &Renderer, input: &RgbaImage, c: &Config) -> Rendered {
+    pollster::block_on(async {
+        let mut sequence = Sequence::still();
+        renderer
+            .frame(&mut sequence, input, c, None, |_| {})
+            .await?;
+        let crt = renderer.read(&mut sequence).await?;
+        let Signals { clean, signal } = renderer.signals(&sequence).await?;
+        anyhow::Ok(Rendered { clean, signal, crt })
+    })
+    .expect("render")
+}
+
+/// `sequence`'s next frame of `input`, read back.
+fn next(renderer: &Renderer, sequence: &mut Sequence, input: &RgbaImage, c: &Config) -> RgbaImage {
+    pollster::block_on(async {
+        renderer.frame(sequence, input, c, None, |_| {}).await?;
+        renderer.read(sequence).await
+    })
+    .expect("sequence frame")
+}
+
 /// One rendered image per distinct path through the renderer. Anything that reaches the GPU by
 /// its own route — a color mode, the composite phases, the LUT, the frame-to-frame feedback —
 /// earns a case, because a change there is invisible in the others.
 fn cases(renderer: &Renderer) -> Vec<(&'static str, RgbaImage)> {
     let source = config::test_card();
-    let render = |c: &Config| renderer.render(&source, c).expect("render");
+    let render = |c: &Config| render(renderer, &source, c);
 
     let reference = render(&base());
     let mut cases = vec![
@@ -223,17 +252,13 @@ fn cases(renderer: &Renderer) -> Vec<(&'static str, RgbaImage)> {
         persistence: [0.9; 3],
         ..base()
     };
-    let mut sequence = Sequence::default();
+    let mut sequence = Sequence::still();
     let white = RgbaImage::from_pixel(64, 64, image::Rgba([255; 4]));
     let black = RgbaImage::from_pixel(64, 64, image::Rgba([0, 0, 0, 255]));
-    renderer
-        .render_frame(&white, &trailing, &mut sequence, None, |_| {})
-        .expect("first sequence frame");
+    next(renderer, &mut sequence, &white, &trailing);
     cases.push((
         "persistence-trail",
-        renderer
-            .render_frame(&black, &trailing, &mut sequence, None, |_| {})
-            .expect("second sequence frame"),
+        next(renderer, &mut sequence, &black, &trailing),
     ));
 
     cases.extend(prepare_cases(renderer));
@@ -383,7 +408,7 @@ fn prepare_cases(renderer: &Renderer) -> Vec<(&'static str, RgbaImage)> {
     ];
     routes
         .into_iter()
-        .map(|(name, source, c)| (name, renderer.render(source, &c).expect("render").clean))
+        .map(|(name, source, c)| (name, render(renderer, source, &c).clean))
         .collect()
 }
 

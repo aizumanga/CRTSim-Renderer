@@ -2,18 +2,24 @@
 mod animated;
 mod animation;
 mod decode;
+pub mod demux;
 mod export;
+mod gif_writer;
+pub mod mux;
+pub mod page;
 mod plan;
 mod probe;
 mod process;
 mod tools;
+mod webp_writer;
 
-pub use animated::AnimationFormat;
+pub use animated::{detect_bytes, probe_bytes, AnimationFormat};
 pub use animation::{AnimationOptions, AnimationSummary, Dither};
+pub use crtsim_core::Timing;
 pub use decode::{playback, preview, preview_frame};
 pub(crate) use export::Rate;
-pub use export::{export, export_animation, export_animation_with, export_with, render_config};
-pub use probe::{frame_count, probe, Source, Track, TrackKind, Video};
+pub use export::{export, export_animation, export_animation_with, export_with, Progress};
+pub use probe::{frame_count, probe, probe_demuxed, Contents, Source, Track, TrackKind, Video};
 pub use tools::{Found, Tool, ToolCheck};
 
 use anyhow::{ensure, Context, Result};
@@ -168,15 +174,6 @@ impl Encoder {
             Self::VideoToolbox => "h264_videotoolbox",
         })
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Timing {
-    #[default]
-    Stable,
-    Ntsc60,
-    Disabled,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]

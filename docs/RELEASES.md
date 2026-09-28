@@ -76,6 +76,6 @@ updating or replacing a portable package does not delete them. Use `CRTSIM_DATA_
 
 ## Local packaging
 
-Build with `cargo build --release --locked -p crtsim-desktop -p crtsim-cli`, then run
+Build with `cargo build --release --locked -p crtsim-app -p crtsim-cli`, then run
 `python tools/package.py --platform linux-x86_64 --version preview-local` (or the matching Windows/macOS platform).
 Run on the matching native OS. A clean `dist/` staging area is required. The workflow contains the additional AppImage build command.

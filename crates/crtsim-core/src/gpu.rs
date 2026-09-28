@@ -4,7 +4,6 @@
 use crate::mesh;
 use anyhow::{ensure, Context, Result};
 use image::RgbaImage;
-use wgpu::util::DeviceExt;
 
 /// The 8-bit format of the signal, its history and the final image.
 pub(crate) const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -60,14 +59,14 @@ impl Target {
 
     fn upload_level(&self, queue: &wgpu::Queue, mip_level: u32, image: &RgbaImage) {
         queue.write_texture(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: &self.texture,
                 mip_level,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
             image.as_raw(),
-            wgpu::ImageDataLayout {
+            wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(4 * image.width()),
                 rows_per_image: Some(image.height()),
@@ -108,8 +107,8 @@ impl Readback {
         }
     }
 
-    /// Copies `target` into the buffer, waits for the GPU and returns its pixels.
-    pub fn read(
+    /// Copies `target` into the buffer and returns its pixels once the GPU has written them.
+    pub async fn read(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -122,9 +121,9 @@ impl Readback {
         let mut encoder = device.create_command_encoder(&Default::default());
         encoder.copy_texture_to_buffer(
             target.texture.as_image_copy(),
-            wgpu::ImageCopyBuffer {
+            wgpu::TexelCopyBufferInfo {
                 buffer: &self.buffer,
-                layout: wgpu::ImageDataLayout {
+                layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(self.pitch),
                     rows_per_image: Some(target.height),
@@ -134,13 +133,13 @@ impl Readback {
         );
         queue.submit(Some(encoder.finish()));
         let slice = self.buffer.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (mapped, map) = futures_channel::oneshot::channel();
         slice.map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
+            let _ = mapped.send(r);
         });
-        device.poll(wgpu::Maintain::Wait);
-        rx.recv()??;
-        let mapped = slice.get_mapped_range();
+        drive(device)?;
+        map.await.context("the device dropped a read back")??;
+        let mapped = slice.get_mapped_range()?;
         let mut pixels = Vec::with_capacity((target.width * target.height * 4) as usize);
         for row in mapped.chunks_exact(self.pitch as usize) {
             pixels.extend_from_slice(&row[..target.width as usize * 4]);
@@ -158,28 +157,59 @@ pub(crate) struct GpuMesh {
 }
 
 impl GpuMesh {
-    pub fn new(device: &wgpu::Device, bytes: &[u8]) -> Result<Self> {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, bytes: &[u8]) -> Result<Self> {
         let m = mesh::Mesh::read(bytes)?;
         Ok(Self {
-            vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("mesh vertices"),
-                contents: bytemuck::cast_slice(&m.vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            }),
-            indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("mesh indices"),
-                contents: bytemuck::cast_slice(&m.indices),
-                usage: wgpu::BufferUsages::INDEX,
-            }),
+            vertices: filled(
+                device,
+                queue,
+                "mesh vertices",
+                bytemuck::cast_slice(&m.vertices),
+                wgpu::BufferUsages::VERTEX,
+            ),
+            indices: filled(
+                device,
+                queue,
+                "mesh indices",
+                bytemuck::cast_slice(&m.indices),
+                wgpu::BufferUsages::INDEX,
+            ),
             count: m.indices.len() as u32,
         })
     }
+}
+
+/// A buffer holding `contents`, made unmapped and written through the queue. Chrome can refuse
+/// to make a buffer mapped, even a small one (a Dawn bug that has hit PlayCanvas and Pixi.js
+/// too), which is how `create_buffer_init` fills one. Padded with zeros to the size copies need.
+pub(crate) fn filled(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &str,
+    contents: &[u8],
+    usage: wgpu::BufferUsages,
+) -> wgpu::Buffer {
+    let size = (contents.len() as u64)
+        .div_ceil(wgpu::COPY_BUFFER_ALIGNMENT)
+        .max(1)
+        * wgpu::COPY_BUFFER_ALIGNMENT;
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size,
+        usage: usage | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut padded = contents.to_vec();
+    padded.resize(size as usize, 0);
+    queue.write_buffer(&buffer, 0, &padded);
+    buffer
 }
 
 /// An attachment that starts the pass by clearing `view` to black.
 pub(crate) fn cleared(view: &wgpu::TextureView) -> Option<wgpu::RenderPassColorAttachment<'_>> {
     Some(wgpu::RenderPassColorAttachment {
         view,
+        depth_slice: None,
         resolve_target: None,
         ops: wgpu::Operations {
             load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -196,15 +226,54 @@ pub(crate) fn clear(encoder: &mut wgpu::CommandEncoder, target: &Target) {
         depth_stencil_attachment: None,
         timestamp_writes: None,
         occlusion_query_set: None,
+        multiview_mask: None,
     });
 }
 
+/// Resolves once the GPU has finished the work submitted so far.
+pub(crate) async fn finished(device: &wgpu::Device, queue: &wgpu::Queue) -> Result<()> {
+    let (done, wait) = futures_channel::oneshot::channel();
+    queue.on_submitted_work_done(move || {
+        let _ = done.send(());
+    });
+    drive(device)?;
+    wait.await.context("the device dropped a submission")
+}
+
+/// Returns once, after letting anything else waiting on this thread run: in a browser the whole
+/// app shares one thread, and a long render gives previews and the interface their turn between
+/// batches.
+pub(crate) async fn yield_now() {
+    let mut yielded = false;
+    std::future::poll_fn(|cx| {
+        if yielded {
+            return std::task::Poll::Ready(());
+        }
+        yielded = true;
+        cx.waker().wake_by_ref();
+        std::task::Poll::Pending
+    })
+    .await
+}
+
+/// Makes the device call back what it has finished. Natively that takes a poll, which waits for
+/// the GPU; in a browser the page's event loop delivers callbacks, and nothing may block.
+fn drive(device: &wgpu::Device) -> Result<()> {
+    #[cfg(not(target_arch = "wasm32"))]
+    device.poll(wgpu::PollType::wait_indefinitely())?;
+    #[cfg(target_arch = "wasm32")]
+    let _ = device;
+    Ok(())
+}
+
 /// Draws one triangle over all of `dst`, the fullscreen pass every image-space step uses.
+/// `offsets` picks the uniform slot of a binding with a dynamic offset.
 pub(crate) fn fullscreen(
     encoder: &mut wgpu::CommandEncoder,
     dst: &Target,
     pipeline: &wgpu::RenderPipeline,
     bindings: &wgpu::BindGroup,
+    offsets: &[u32],
 ) {
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("fullscreen pass"),
@@ -212,9 +281,10 @@ pub(crate) fn fullscreen(
         depth_stencil_attachment: None,
         timestamp_writes: None,
         occlusion_query_set: None,
+        multiview_mask: None,
     });
     pass.set_pipeline(pipeline);
-    pass.set_bind_group(0, bindings, &[]);
+    pass.set_bind_group(0, bindings, offsets);
     pass.draw(0..3, 0..1);
 }
 

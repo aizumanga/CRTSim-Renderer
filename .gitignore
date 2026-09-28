@@ -6,3 +6,4 @@ __pycache__/
 /package-smoke/
 /linuxdeploy.AppImage
 /formatting.patch
+/web/dist/

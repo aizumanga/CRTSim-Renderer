@@ -2,7 +2,7 @@ use anyhow::{ensure, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use crtsim_core::{
     config::{self, Config, Phase},
-    mesh, PrepareOn, Renderer,
+    mesh, PrepareOn, Renderer, Sequence,
 };
 use image::{DynamicImage, ImageOutputFormat};
 use std::{
@@ -217,12 +217,15 @@ fn main() -> Result<()> {
                 renderer.adapter.name, renderer.adapter.backend, renderer.adapter.device_type
             );
             let started = std::time::Instant::now();
-            let rendered = renderer.render(&src, &c)?;
-            save_png(&output, rendered.crt)?;
+            let mut sequence = Sequence::still();
+            pollster::block_on(renderer.frame(&mut sequence, &src, &c, None, |_| {}))?;
+            save_png(&output, pollster::block_on(renderer.read(&mut sequence))?)?;
+            // Only a debug run reads back the images the frame was made from.
             if let Some(dir) = debug_dir {
                 fs::create_dir(&dir)?;
-                save_png(&dir.join("clean.png"), rendered.clean)?;
-                save_png(&dir.join("signal.png"), rendered.signal)?;
+                let signals = pollster::block_on(renderer.signals(&sequence))?;
+                save_png(&dir.join("clean.png"), signals.clean)?;
+                save_png(&dir.join("signal.png"), signals.signal)?;
                 let mut file = new_file(&dir.join("settings.json"))?;
                 file.write_all(serde_json::to_string_pretty(&c)?.as_bytes())?;
             }

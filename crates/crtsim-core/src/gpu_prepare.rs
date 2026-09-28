@@ -307,8 +307,8 @@ impl Pipelines {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
-            bind_group_layouts: &[&layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
         });
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("prepare WGSL"),
@@ -320,12 +320,14 @@ impl Pipelines {
                 layout: Some(&pipeline_layout),
                 vertex: wgpu::VertexState {
                     module: &module,
-                    entry_point: "quad",
+                    entry_point: Some("quad"),
+                    compilation_options: Default::default(),
                     buffers: &[],
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &module,
-                    entry_point: entry,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
                         blend: None,
@@ -335,7 +337,8 @@ impl Pipelines {
                 primitive: Default::default(),
                 depth_stencil: None,
                 multisample: Default::default(),
-                multiview: None,
+                multiview_mask: None,
+                cache: None,
             })
         };
         Self {
@@ -391,11 +394,13 @@ impl Pipelines {
             }
             None => &self.no_lut,
         };
-        let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("prepare settings"),
-            contents: bytemuck::bytes_of(&Params::new(size, signal_size, c)),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let uniform = gpu::filled(
+            device,
+            queue,
+            "prepare settings",
+            bytemuck::bytes_of(&Params::new(size, signal_size, c)),
+            wgpu::BufferUsages::UNIFORM,
+        );
         let bind = |input: &Target, kernel: &KernelTextures| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None,
@@ -426,7 +431,13 @@ impl Pipelines {
         };
 
         if c.edits_source() {
-            gpu::fullscreen(encoder, signal, &self.edit, &bind(source, &self.no_kernel));
+            gpu::fullscreen(
+                encoder,
+                signal,
+                &self.edit,
+                &bind(source, &self.no_kernel),
+                &[],
+            );
             return;
         }
         let key = (size, signal_size, c.filter);
@@ -461,12 +472,14 @@ impl Pipelines {
             &resample.between,
             &self.rows,
             &bind(source, &resample.rows),
+            &[],
         );
         gpu::fullscreen(
             encoder,
             signal,
             &self.columns,
             &bind(&resample.between, &resample.columns),
+            &[],
         );
     }
 }
