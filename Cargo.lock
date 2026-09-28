@@ -717,7 +717,7 @@ checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
 
 [[package]]
 name = "crtsim-app"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "crtsim-core",
@@ -740,7 +740,7 @@ dependencies = [
 
 [[package]]
 name = "crtsim-cli"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -753,7 +753,7 @@ dependencies = [
 
 [[package]]
 name = "crtsim-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -769,7 +769,7 @@ dependencies = [
 
 [[package]]
 name = "crtsim-media"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "crtsim-core",
