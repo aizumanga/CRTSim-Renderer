@@ -5,6 +5,7 @@ pub mod input;
 pub mod mesh;
 pub mod nes_luts;
 pub mod palette;
+pub mod retroarch;
 mod sequence;
 pub mod settings;
 #[cfg(test)]
@@ -38,7 +39,7 @@ struct Params {
     mask: [f32; 4],
     lighting: [f32; 4],
     surface: [f32; 4],
-    frame: [f32; 4],
+    bezel: [f32; 4],
     light: [f32; 4],
     camera: [f32; 4],
     bloom: [f32; 4],
@@ -80,7 +81,7 @@ impl Params {
                 c.saturation,
                 flag(c.mask_antialias),
             ],
-            frame: [c.frame_color[0], c.frame_color[1], c.frame_color[2], 1.],
+            bezel: [c.frame_color[0], c.frame_color[1], c.frame_color[2], 1.],
             light: [
                 c.light_position[0],
                 c.light_position[1],
@@ -132,8 +133,8 @@ struct Pipelines {
 
 /// What follows the signal: the curved glass and its bezel, then the bloom's two blurs.
 struct SurfacePasses {
-    screen: wgpu::RenderPipeline,
-    frame: wgpu::RenderPipeline,
+    glass: wgpu::RenderPipeline,
+    bezel: wgpu::RenderPipeline,
     downsample: wgpu::RenderPipeline,
     upsample: wgpu::RenderPipeline,
 }
@@ -244,8 +245,7 @@ pub struct Renderer {
     /// In binding order: point and linear filtering clamped to the edge, then repeating.
     samplers: [wgpu::Sampler; 4],
     pipelines: Pipelines,
-    screen: GpuMesh,
-    frame: GpuMesh,
+    bezel: GpuMesh,
     artifacts: Target,
     mask: Target,
     prepare_pipelines: gpu_prepare::Pipelines,
@@ -412,8 +412,7 @@ impl Renderer {
         Ok(Self {
             artifacts: gpu::artifacts(&device, &queue)?,
             mask: gpu::shadow_mask(&device, &queue)?,
-            screen: GpuMesh::new(&device, &queue, mesh::SCREEN)?,
-            frame: GpuMesh::new(&device, &queue, mesh::FRAME)?,
+            bezel: GpuMesh::new(&device, &queue, mesh::BEZEL)?,
             device,
             queue,
             layout,
@@ -443,8 +442,10 @@ impl Renderer {
             attributes: &attrs,
         })];
         let pipeline = |entry: &str, format| {
-            // The screen and bezel are meshes, depth-tested; everything else covers its target.
-            let mesh = entry == "screen" || entry == "frame";
+            // The bezel is a mesh and the glass is ray-traced; both are depth-tested, and
+            // everything else covers its target.
+            let mesh = entry == "bezel";
+            let depth = mesh || entry == "glass";
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(entry),
                 layout: Some(&pipeline_layout),
@@ -464,7 +465,7 @@ impl Renderer {
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
-                // The original culled clockwise faces. Its meshes' visible faces wind
+                // The original culled clockwise faces. Its bezel's visible faces wind
                 // counter-clockwise here, so those stay and the ones facing away are skipped.
                 // The depth test already hid those at every angle the settings allow.
                 primitive: wgpu::PrimitiveState {
@@ -472,7 +473,7 @@ impl Renderer {
                     cull_mode: mesh.then_some(wgpu::Face::Back),
                     ..Default::default()
                 },
-                depth_stencil: mesh.then(|| wgpu::DepthStencilState {
+                depth_stencil: depth.then(|| wgpu::DepthStencilState {
                     format: wgpu::TextureFormat::Depth32Float,
                     depth_write_enabled: Some(true),
                     depth_compare: Some(wgpu::CompareFunction::Less),
@@ -487,8 +488,8 @@ impl Renderer {
         let surface = |mode| {
             let format = surface_format(mode);
             SurfacePasses {
-                screen: pipeline("screen", format),
-                frame: pipeline("frame", format),
+                glass: pipeline("glass", format),
+                bezel: pipeline("bezel", format),
                 downsample: pipeline("downsample", format),
                 upsample: pipeline("upsample", format),
             }
@@ -685,7 +686,7 @@ impl Renderer {
             Target::new(device, "history A", signal_size),
             Target::new(device, "history B", signal_size),
         ];
-        let full = surface("screen and frame", output_size);
+        let full = surface("screen and bezel", output_size);
         let down = surface(
             "bloom downsample",
             ((output_size.0 / 16).max(1), (output_size.1 / 16).max(1)),
@@ -780,7 +781,7 @@ impl Renderer {
         let bindings = &workspace.bindings;
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("curved glass and frame"),
+                label: Some("curved glass and bezel"),
                 color_attachments: &[gpu::cleared(&workspace.full.view)],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &workspace.depth_view,
@@ -795,9 +796,10 @@ impl Renderer {
                 multiview_mask: None,
             });
             pass.set_bind_group(0, &bindings.glass[latest], &[offset]);
-            draw(&mut pass, &passes.screen, &self.screen);
+            pass.set_pipeline(&passes.glass);
+            pass.draw(0..3, 0..1);
             if !c.screen_only {
-                draw(&mut pass, &passes.frame, &self.frame);
+                draw(&mut pass, &passes.bezel, &self.bezel);
             }
         }
         gpu::fullscreen(

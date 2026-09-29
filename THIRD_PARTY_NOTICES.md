@@ -15,6 +15,8 @@ Direct dependencies include wgpu/Naga, image, glam, bytemuck, serde/serde_json, 
 eframe/egui, rfd, tempfile and directories. The desktop uses eframe's bundled fonts, which retain their upstream notices.
 Before distributing binaries, collect the complete license texts for all transitive dependencies using a license-reporting tool such as cargo-about.
 This document is a development inventory, not a completed binary-distribution license bundle.
+`crates/crtsim-ports` runs the RetroArch port in tests through librashader (MPL-2.0 or GPL-3.0),
+with glslang and SPIRV-Cross; it is never packaged, and nothing that ships depends on it.
 
 ## FFmpeg
 

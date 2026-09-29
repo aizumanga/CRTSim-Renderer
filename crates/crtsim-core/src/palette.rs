@@ -69,17 +69,26 @@ impl NesPalette {
     }
 
     /// The palette as a LUT from MAME's NES colours to these, shared while the settings stay
-    /// the same, so a renderer can keep it on the GPU.
+    /// the same, so a renderer can keep it on the GPU. The few palettes used last are kept, so
+    /// a preview, an export and a gallery thumbnail with different settings do not keep
+    /// replacing each other's.
     pub fn lut(&self) -> Arc<Lut> {
-        static LAST: Mutex<Option<(NesPalette, Arc<Lut>)>> = Mutex::new(None);
-        let mut last = LAST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some((settings, lut)) = last.as_ref() {
-            if settings == self {
-                return lut.clone();
-            }
+        const KEPT: usize = 4;
+        static RECENT: Mutex<Vec<(NesPalette, Arc<Lut>)>> = Mutex::new(Vec::new());
+        let mut recent = RECENT
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(at) = recent.iter().position(|(settings, _)| settings == self) {
+            let entry = recent.remove(at);
+            let lut = entry.1.clone();
+            recent.push(entry);
+            return lut;
         }
         let lut = Arc::new(self.build_lut());
-        *last = Some((*self, lut.clone()));
+        if recent.len() == KEPT {
+            recent.remove(0);
+        }
+        recent.push((*self, lut.clone()));
         lut
     }
 

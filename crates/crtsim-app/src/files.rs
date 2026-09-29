@@ -174,6 +174,79 @@ fn crc32(bytes: &[u8]) -> u32 {
     }
     !crc
 }
+/// `c` as a RetroArch shader preset, zipped in a folder of its own with the port's shaders.
+/// The look is named after the file, less any `-retroarch`.
+pub fn save_retroarch(path: &Path, c: &Config) -> Result<()> {
+    let stem = crate::file_stem(path);
+    let stem = stem.strip_suffix("-retroarch").unwrap_or(&stem);
+    let name: String = stem
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let bytes = zip(
+        &format!("{name}-retroarch"),
+        &crtsim_core::retroarch::export(&[(&name, c)])?,
+    );
+    #[cfg(not(target_arch = "wasm32"))]
+    return save_atomic(path, |f| Ok(f.write_all(&bytes)?));
+    // A browser saves by downloading, under the name the path gives.
+    #[cfg(target_arch = "wasm32")]
+    return crate::web::download(&crate::file_name(path), &bytes, "application/zip");
+}
+
+/// `files` in a zip archive under `folder`, stored uncompressed: the PNGs are compressed
+/// already and the shaders are small, so storing keeps this short and free of dependencies.
+fn zip(folder: &str, files: &[crtsim_core::retroarch::File]) -> Vec<u8> {
+    let mut archive = Vec::new();
+    let mut directory = Vec::new();
+    for file in files {
+        let name = format!("{folder}/{}", file.path);
+        let (crc, size) = (crc32(&file.bytes), file.bytes.len() as u32);
+        let offset = archive.len() as u32;
+        // Version 2.0, no flags, stored, a zero time and date; the checksum, sizes and name.
+        let fields = |out: &mut Vec<u8>| {
+            for field in [20_u16, 0, 0, 0, 0] {
+                out.extend_from_slice(&field.to_le_bytes());
+            }
+            for field in [crc, size, size] {
+                out.extend_from_slice(&field.to_le_bytes());
+            }
+            out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            out.extend_from_slice(&0_u16.to_le_bytes());
+        };
+        archive.extend_from_slice(&0x0403_4b50_u32.to_le_bytes());
+        fields(&mut archive);
+        archive.extend_from_slice(name.as_bytes());
+        archive.extend_from_slice(&file.bytes);
+        directory.extend_from_slice(&0x0201_4b50_u32.to_le_bytes());
+        directory.extend_from_slice(&20_u16.to_le_bytes());
+        fields(&mut directory);
+        // No comment, the first disk, no attributes, then where the file's header starts.
+        for field in [0_u16, 0, 0] {
+            directory.extend_from_slice(&field.to_le_bytes());
+        }
+        directory.extend_from_slice(&0_u32.to_le_bytes());
+        directory.extend_from_slice(&offset.to_le_bytes());
+        directory.extend_from_slice(name.as_bytes());
+    }
+    let (start, count) = (archive.len() as u32, files.len() as u16);
+    archive.extend_from_slice(&directory);
+    archive.extend_from_slice(&0x0605_4b50_u32.to_le_bytes());
+    for field in [0_u16, 0, count, count] {
+        archive.extend_from_slice(&field.to_le_bytes());
+    }
+    archive.extend_from_slice(&(directory.len() as u32).to_le_bytes());
+    archive.extend_from_slice(&start.to_le_bytes());
+    archive.extend_from_slice(&0_u16.to_le_bytes());
+    archive
+}
+
 pub fn save_preset(path: &Path, c: &Config) -> Result<()> {
     let bytes = preset_json(c)?;
     #[cfg(not(target_arch = "wasm32"))]
@@ -192,6 +265,49 @@ pub fn preset_json(c: &Config) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_retroarch_export_is_a_zip_of_one_folder_named_for_its_look() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Warm Tube-retroarch.zip");
+        let mut c = Config::general();
+        c.lut = Some(std::sync::Arc::new(crtsim_core::nes_luts::load(0).unwrap()));
+        save_retroarch(&path, &c).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        // The end record: how many files, and where the directory listing them starts.
+        let end = bytes.len() - 22;
+        assert_eq!(&bytes[end..end + 4], b"PK\x05\x06");
+        let count = u16::from_le_bytes([bytes[end + 10], bytes[end + 11]]) as usize;
+        let mut at = u32::from_le_bytes(bytes[end + 16..end + 20].try_into().unwrap()) as usize;
+        let mut names = vec![];
+        for _ in 0..count {
+            assert_eq!(&bytes[at..at + 4], b"PK\x01\x02");
+            let field =
+                |offset: usize| u16::from_le_bytes([bytes[at + offset], bytes[at + offset + 1]]);
+            let (length, local) = (
+                field(28) as usize,
+                u32::from_le_bytes(bytes[at + 42..at + 46].try_into().unwrap()),
+            );
+            let name = String::from_utf8(bytes[at + 46..at + 46 + length].to_vec()).unwrap();
+            // Each entry's own header is where the directory says, with the same checksum.
+            let local = local as usize;
+            assert_eq!(&bytes[local..local + 4], b"PK\x03\x04");
+            assert_eq!(bytes[local + 14..local + 18], bytes[at + 16..at + 20]);
+            names.push(name);
+            at += 46 + length;
+        }
+        assert!(
+            names.iter().all(|n| n.starts_with("Warm_Tube-retroarch/")),
+            "{names:?}"
+        );
+        for expected in ["Warm_Tube.slangp", "Warm_Tube-table.png", "README.md"] {
+            assert!(
+                names.contains(&format!("Warm_Tube-retroarch/{expected}")),
+                "{names:?}"
+            );
+        }
+    }
+
     #[test]
     fn included_lut_survives_preset_and_png_metadata_roundtrip() {
         let dir = tempfile::tempdir().unwrap();

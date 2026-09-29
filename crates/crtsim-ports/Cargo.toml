@@ -1,0 +1,20 @@
+[package]
+name = "crtsim-ports"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Runs the shader ports through librashader, to compare them with the renderer."
+# Never published or packaged. librashader is MPL-2.0 OR GPL-3.0-only, so it may be a dependency
+# of this crate only, which exists for tests and benchmarks and never ships. No crate that ships
+# may depend on this one.
+publish = false
+
+[dependencies]
+# A normal dependency rather than a dev-dependency because the harness is this crate's library,
+# shared by its tests and its benchmark. The crate never ships, so neither does librashader.
+librashader = { version = "0.12.0", default-features = false, features = ["runtime-wgpu", "presets", "preprocess"] }
+crtsim-core = { path = "../crtsim-core" }
+anyhow.workspace = true
+image.workspace = true
+wgpu.workspace = true
+pollster = "0.3"

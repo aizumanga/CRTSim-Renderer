@@ -293,10 +293,19 @@ fn bmp(bytes: &[u8]) -> Result<RgbaImage> {
 }
 
 /// The artifact pattern the composite pass tints neighbouring pixels by.
-pub(crate) fn artifacts(device: &wgpu::Device, queue: &wgpu::Queue) -> Result<Target> {
-    let image = bmp(include_bytes!(
+pub(crate) fn artifacts_image() -> Result<RgbaImage> {
+    bmp(include_bytes!(
         "../../../assets/original-crtsim/artifacts.bmp"
-    ))?;
+    ))
+}
+
+/// The shadow mask at full size.
+pub(crate) fn mask_image() -> Result<RgbaImage> {
+    bmp(include_bytes!("../../../assets/original-crtsim/mask.bmp"))
+}
+
+pub(crate) fn artifacts(device: &wgpu::Device, queue: &wgpu::Queue) -> Result<Target> {
+    let image = artifacts_image()?;
     let target = Target::new(device, "NTSC texture", image.dimensions());
     target.upload(queue, &image);
     Ok(target)
@@ -305,7 +314,7 @@ pub(crate) fn artifacts(device: &wgpu::Device, queue: &wgpu::Queue) -> Result<Ta
 /// The shadow mask with a full mip chain, for sampling it smaller than it is. Each level
 /// averages 2×2 texels of the one above, as the original's box-filtered mipmaps did.
 pub(crate) fn shadow_mask(device: &wgpu::Device, queue: &wgpu::Queue) -> Result<Target> {
-    let mut level = bmp(include_bytes!("../../../assets/original-crtsim/mask.bmp"))?;
+    let mut level = mask_image()?;
     let levels = level.width().max(level.height()).ilog2() + 1;
     let mask = Target::with_format(device, "shadow mask", level.dimensions(), FORMAT, levels);
     for mip in 0..levels {

@@ -9,6 +9,7 @@ on:
       - tools/package.py
       - tools/build_web.py
       - packaging/**
+      - ports/**
       - web/**
       - Cargo.lock
   push:
@@ -55,7 +56,7 @@ jobs:
       # tagged and manual builds test again here before packaging.
       - name: Test
         if: github.event_name != 'pull_request'
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --exclude crtsim-ports --locked
       - name: Build
         run: cargo build --release --locked -p crtsim-app -p crtsim-cli
       - name: Package binaries and licenses
@@ -72,6 +73,10 @@ jobs:
           fi
           echo "PACKAGE_VERSION=$version" >> "$GITHUB_ENV"
           python tools/package.py --platform "$PACKAGE_PLATFORM" --version "$version"
+          # The RetroArch presets are the same on every system, so one build writes them.
+          if [ "$PACKAGE_PLATFORM" = linux-x86_64 ]; then
+            python tools/package.py --platform retroarch --version "$version"
+          fi
       - name: Build Linux AppImage
         if: runner.os == 'Linux'
         shell: bash
@@ -186,7 +191,7 @@ jobs:
         shell: bash
         run: |
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release create "$RELEASE_TAG" --verify-tag --draft --title "CRTSim Renderer $RELEASE_TAG" --notes 'Portable desktop and CLI packages, and the web app the site serves. See the included README and docs/RELEASES.md. Video requires a separate FFmpeg/ffprobe installation. macOS is ad-hoc signed only, without Apple Developer ID signing or notarization.'
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "CRTSim Renderer $RELEASE_TAG" --notes 'Portable desktop and CLI packages, the web app the site serves, and the CRT as RetroArch shader presets. See the included README and docs/RELEASES.md. Video requires a separate FFmpeg/ffprobe installation. macOS is ad-hoc signed only, without Apple Developer ID signing or notarization.'
           fi
           gh release upload "$RELEASE_TAG" packages/dist/*.zip packages/dist/*.tar.gz packages/dist/*.AppImage packages/dist/SHA256SUMS-*.txt --clobber
   # The web app for a release published before its package existed, such as v0.7.0.

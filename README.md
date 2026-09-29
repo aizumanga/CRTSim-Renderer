@@ -10,7 +10,7 @@ It is not an official product or an exact reconstruction of a commercial game's 
 
 - PNG/JPEG/WebP/BMP/GIF input and PNG export; an original test card when input is omitted.
 - Animated GIF and WebP open as animations, decoded without FFmpeg; videos, GIFs and animated WebPs export to MP4, MKV, WebM, GIF or animated WebP.
-- The original curved-screen and frame meshes, including colors, normals, UVs and reflection weights.
+- The original curved screen, ray-traced as the sphere its mesh was cut from, with the same UVs, normals, rounded outline and edge shading; the original bezel mesh with its colors, normals, UVs and reflection weights.
 - Composite artifacts, horizontal ringing, separate RGB persistence, shadow mask, lighting, edge reflections and bloom.
 - Deterministic still jobs, cleared feedback buffers, phase A/B/stable/alternating selection and configurable warm-up.
 - Logical signal and output resolution presets; custom dimensions; JSON settings.
@@ -149,6 +149,15 @@ python3 -m http.server --directory web/dist 8000            # then open http://l
 
 Browsers without WebGPU get a page that says how to turn it on. Firefox and LibreWolf on Linux
 need `dom.webgpu.enabled` set to `true` in `about:config`.
+
+## In games: RetroArch
+
+The CRT also runs in RetroArch, over any core as it plays, as a shader port of the same passes
+(see [the decision](docs/adr/0003-games-get-shader-ports-not-the-renderer.md)). Each release has
+a `-retroarch.zip` of presets for the shipped looks; **Export → RetroArch shader…** in the app,
+or `crtsim export-retroarch`, writes any look as one. The shaders are in
+[`ports/retroarch`](ports/retroarch), with instructions for using them. The bezel is not ported
+yet, so looks are drawn screen-only.
 
 ## Build and try
 

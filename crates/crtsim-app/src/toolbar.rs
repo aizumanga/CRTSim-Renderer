@@ -82,6 +82,17 @@ impl App {
                         self.open_video_export(false);
                         ui.close();
                     }
+                    if ui
+                        .button("RetroArch shader…")
+                        .on_hover_text(
+                            "These settings as a shader preset for RetroArch, drawn over a \
+                             game as it plays. The bezel is not ported yet.",
+                        )
+                        .clicked()
+                    {
+                        self.dialog(Dialog::RetroArch, ctx);
+                        ui.close();
+                    }
                     ui.separator();
                     if ui.button("Batch queue…").clicked() {
                         self.show_queue = true;

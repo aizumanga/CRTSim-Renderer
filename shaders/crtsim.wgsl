@@ -9,7 +9,7 @@ struct Params {
     mask: vec4<f32>, // repeats xy, brightness, opacity
     lighting: vec4<f32>, // diffuse, specular, power, rim
     surface: vec4<f32>, // dimming, reflection, saturation, unused
-    frame: vec4<f32>,
+    bezel: vec4<f32>,
     light: vec4<f32>,
     camera: vec4<f32>,
     bloom: vec4<f32>, // amount, power, spread, unused
@@ -97,16 +97,16 @@ fn black_border(uv: vec2<f32>) -> vec3<f32> {
     return mix(mix(border_load(xy),border_load(xy+vec2(1,0)),f.x),
         mix(border_load(xy+vec2(0,1)),border_load(xy+vec2(1,1)),f.x),f.y);
 }
-fn crt(uv: vec2<f32>, frame: bool) -> vec3<f32> {
+fn crt(uv: vec2<f32>, bezel: bool) -> vec3<f32> {
     let scaled=(uv-vec2(0.5))*p.geometry.xy+vec2(0.5);
-    let density=p.mask.xy*select(vec2(1.),vec2(1.,0.5),frame);
+    let density=p.mask.xy*select(vec2(1.),vec2(1.,0.5),bezel);
     let mask_uv=scaled*density;
     let texels=vec2<f32>(textureDimensions(mask_tex));
     let footprint=max(length(dpdx(mask_uv)*texels),length(dpdy(mask_uv)*texels));
     let lod=select(0.,max(log2(max(footprint,0.000001)),0.),p.surface.w>0.5);
     var grid=textureSampleLevel(mask_tex,linear_repeat,mask_uv,lod).rgb;
     grid=mix(vec3(1.),grid+vec3(p.mask.z),p.mask.w);
-    let over=select(1./p.geometry.z,p.geometry.z,frame);
+    let over=select(1./p.geometry.z,p.geometry.z,bezel);
     var pos=(scaled-vec2(0.5))*over;
     pos=pos+pos*p.geometry.w*dot(pos,pos)+vec2(0.5);
     let emissive=black_border(pos)*grid;
@@ -116,17 +116,17 @@ fn safe_normalize(v: vec3<f32>) -> vec3<f32> {
     if dot(v,v)<0.000000000001 { return vec3(0.); }
     return normalize(v);
 }
-fn shade(v: Surface, frame: bool) -> vec4<f32> {
+fn shade(v: Surface, bezel: bool) -> vec4<f32> {
     let n=safe_normalize(v.normal); let cam=safe_normalize(v.camera); let light=safe_normalize(v.light);
     let diffuse=max(dot(n,light),0.);
     let halfvec=safe_normalize(light+cam);
     let spec=pow(max(dot(n,halfvec),0.),p.lighting.z);
     let fres=pow(1.-dot(cam,n),2.)*p.lighting.w;
-    var color=crt(v.uv,frame);
-    if frame {
+    var color=crt(v.uv,bezel);
+    if bezel {
         let hemi=(dot(n,vec3(0.,0.,1.))*0.5+0.5)*0.4+0.3;
-        let frame_color=select(p.frame.rgb,srgb_decode(p.frame.rgb),p.processing.x>0.5);
-        color=frame_color*(diffuse+hemi)*p.lighting.x + vec3(0.25)*spec*p.lighting.y
+        let bezel_color=select(p.bezel.rgb,srgb_decode(p.bezel.rgb),p.processing.x>0.5);
+        color=bezel_color*(diffuse+hemi)*p.lighting.x + vec3(0.25)*spec*p.lighting.y
             +color*v.reflection*p.surface.y+vec3(0.15)*fres;
     } else {
         color+=vec3(0.175,0.15,0.2)*diffuse*p.lighting.x
@@ -134,8 +134,40 @@ fn shade(v: Surface, frame: bool) -> vec4<f32> {
     }
     return vec4(color*mix(vec3(1.),v.color.rgb,p.surface.x),1.);
 }
-@fragment fn screen(v: Surface) -> @location(0) vec4<f32> { return shade(v,false); }
-@fragment fn frame(v: Surface) -> @location(0) vec4<f32> { return shade(v,true); }
+// The screen's glass, ray-traced rather than drawn as the original's mesh, which was a cap of
+// this sphere: its UVs, normals, rounded outline and darkened edges are all functions of where
+// a ray meets it. A host that can only draw full-screen passes draws it the same way.
+const GLASS_CENTRE = vec3(4.,0.,0.);
+const GLASS_RADIUS = 4.;
+// The outline is a superellipse in UV space; its edge shading follows the same curves inward.
+const GLASS_CORNER = 11.54;
+struct Glass { @builtin(frag_depth) depth: f32, @location(0) color: vec4<f32> };
+@fragment fn glass(q: Quad) -> Glass {
+    let ndc=vec2(q.position.x/p.size.z*2.-1.,1.-q.position.y/p.size.w*2.);
+    // The camera looks along +x from 1/tan(fov/2) in front, with z up and -y to the right.
+    let spread=-1./p.camera.x;
+    let ray=normalize(vec3(1.,-ndc.x*spread*p.size.z/p.size.w,ndc.y*spread));
+    let to=p.camera.xyz-GLASS_CENTRE;
+    let b=dot(to,ray);
+    let reach=b*b-dot(to,to)+GLASS_RADIUS*GLASS_RADIUS;
+    let hit=p.camera.xyz+ray*(-b-sqrt(max(reach,0.)));
+    var v: Surface;
+    v.uv=vec2((4./3.-hit.y)*0.375,(1.-hit.z)*0.5);
+    let edge=abs(v.uv*2.-vec2(1.));
+    let radius=pow(pow(edge.x,GLASS_CORNER)+pow(edge.y,GLASS_CORNER),1./GLASS_CORNER);
+    v.normal=(hit-GLASS_CENTRE)/GLASS_RADIUS;
+    v.color=vec4(vec3(1.-0.5*pow(radius,6.)),1.);
+    v.reflection=0.;
+    v.camera=p.camera.xyz-hit; v.light=p.light.xyz-hit;
+    var o: Glass;
+    o.color=shade(v,false);
+    // A ray that misses the glass lies at the far plane, which the depth test turns away, so
+    // everything above stays in uniform control flow for the mask's derivatives.
+    let clip=p.mvp*vec4(hit,1.);
+    o.depth=select(clip.z/clip.w,1.,reach<0. || radius>1.);
+    return o;
+}
+@fragment fn bezel(v: Surface) -> @location(0) vec4<f32> { return shade(v,true); }
 
 fn blur(uv: vec2<f32>, swap: bool) -> vec4<f32> {
     var offsets=array<vec2<f32>,7>(vec2(0.,0.),vec2(0.,1.),vec2(0.,-1.),

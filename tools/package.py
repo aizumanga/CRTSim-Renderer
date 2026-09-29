@@ -9,7 +9,9 @@ import zipfile
 
 parser = argparse.ArgumentParser()
 # `web` packages the web app that tools/build_web.py left in web/dist, for a website to serve.
-parser.add_argument('--platform', choices=['linux-x86_64', 'windows-x86_64', 'macos-arm64', 'web'], required=True)
+# `retroarch` packages the shipped looks as RetroArch shader presets, written by the release CLI.
+parser.add_argument('--platform', choices=['linux-x86_64', 'windows-x86_64', 'macos-arm64', 'web', 'retroarch'],
+                    required=True)
 parser.add_argument('--version', required=True)
 args = parser.parse_args()
 if not all(c.isalnum() or c in '.-_' for c in args.version):
@@ -20,6 +22,21 @@ dist.mkdir(exist_ok=True)
 name = f'CRTSim-Renderer-{args.version}-{args.platform}'
 stage = dist / name
 stage.mkdir()  # Refuse stale/reused staging folders.
+if args.platform == 'retroarch':
+    # One folder to copy into RetroArch's shaders folder. The shaders and textures are CC0 and
+    # hold no dependency's code, so the package carries only the original assets' sources.
+    shaders = stage / 'crtsim-renderer'
+    subprocess.run([str(root / 'target' / 'release' / 'crtsim'), 'export-retroarch', '--output-dir', str(shaders)],
+                   check=True, stdout=subprocess.DEVNULL)
+    shutil.copy2(root / 'LICENSE', shaders)
+    shutil.copy2(root / 'assets/original-crtsim/SOURCES.md', shaders / 'ORIGINAL_ASSETS.md')
+    archive = dist / (name + '.zip')
+    with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as output:
+        for path in sorted(shaders.rglob('*')):
+            if path.is_file():
+                output.write(path, path.relative_to(stage))
+    print(archive)
+    raise SystemExit
 web = args.platform == 'web'
 exe = '.exe' if args.platform.startswith('windows') else ''
 if web:
@@ -41,13 +58,25 @@ for source, destination in [
     ('SHA256SUMS', 'NES_LUTS_SHA256SUMS'),
 ]:
     shutil.copy2(root / 'assets/nes-luts' / source, stage / destination)
-# Collect license texts from the exact Cargo.lock dependency sources, including build dependencies.
+# Collect license texts from the exact Cargo.lock dependency sources, including build dependencies,
+# of what ships: the app and the CLI. Test-only crates, such as crtsim-ports and the librashader
+# it runs the shader ports with, are never built into a package.
 metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--format-version', '1']))
+nodes = {node['id']: node for node in metadata['resolve']['nodes']}
+shipped = set()
+pending = [p['id'] for p in metadata['packages'] if p['name'] in ('crtsim-app', 'crtsim-cli') and p['source'] is None]
+while pending:
+    package_id = pending.pop()
+    if package_id in shipped:
+        continue
+    shipped.add(package_id)
+    pending += [dep['pkg'] for dep in nodes[package_id]['deps']
+                if any(kind['kind'] != 'dev' for kind in dep['dep_kinds'])]
 licenses = stage / 'dependency-licenses'
 licenses.mkdir()
 index = []
 for package in metadata['packages']:
-    if package['source'] is None:
+    if package['source'] is None or package['id'] not in shipped:
         continue
     package_root = Path(package['manifest_path']).parent
     destination = licenses / f"{package['name']}-{package['version']}"
