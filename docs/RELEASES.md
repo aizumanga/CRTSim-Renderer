@@ -1,5 +1,17 @@
 # Portable releases (Phase 4)
 
+## v0.8.0
+
+- The CRT runs in RetroArch, over any core as it plays: `CRTSim-Renderer-v0.8.0-retroarch.zip` holds presets for
+  the original's settings, the same in linear light, the general look and the NES palette. Copy its folder into
+  RetroArch's `shaders` folder and set **Video → Scaling → Aspect Ratio** to **Full**. The bezel is not ported yet,
+  so the presets draw the screen alone.
+- **Export → RetroArch shader…** saves the look in use as such a preset, in the desktop and web apps alike, and
+  `crtsim export-retroarch` does the same from the command line.
+- The screen's glass is ray-traced as the sphere its mesh was cut from, as the RetroArch port draws it. Renders move
+  by at most 3 steps where the mesh's flat triangles shaded its edges, and its corners are true curves now.
+- Presets, projects and exports are written as before.
+
 ## v0.6.0
 
 - Animated GIF and WebP open as animations, with frame navigation, playback and export. They are decoded without FFmpeg.
