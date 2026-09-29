@@ -1,0 +1,14 @@
+# CC0 1.0: written for this repository's tests and dedicated to the public domain.
+# Proves the harness: a pass reading its own feedback, the frame count, the uniforms newer
+# RetroArch defines, parameters and the readback, with results exact to the 8-bit step.
+
+shaders = 2
+
+shader0 = accumulate.slang
+filter_linear0 = false
+scale_type0 = source
+scale0 = 1.0
+
+shader1 = present.slang
+filter_linear1 = false
+scale_type1 = viewport
