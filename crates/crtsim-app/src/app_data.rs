@@ -422,6 +422,7 @@ mod tests {
         let session = project::Project {
             version: 1,
             source: None,
+            built_in: project::BuiltIn::VideoTestCard,
             frame: 3,
             config: Config::general(),
             options: Default::default(),

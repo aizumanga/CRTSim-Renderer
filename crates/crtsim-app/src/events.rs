@@ -106,8 +106,12 @@ impl App {
             Some(_) => "Video frame loaded",
             None => "Image loaded",
         };
+        let drawn = loaded
+            .timeline
+            .as_ref()
+            .is_some_and(timeline::Timeline::is_video_test_card);
         self.set_source(
-            Some(loaded.path),
+            (!drawn).then_some(loaded.path),
             loaded.name,
             loaded.timeline,
             loaded.image,

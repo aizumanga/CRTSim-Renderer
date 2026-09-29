@@ -1,7 +1,8 @@
 //! Decoded frames of a video, one at a time: single previews and continuous playback.
 //!
-//! FFmpeg decodes videos. Animated GIF and WebP are decoded by `animated` instead; both come
-//! out as the same stream of packed RGBA frames at the video's size.
+//! FFmpeg decodes videos. Animated GIF and WebP are decoded by `animated` instead, which also
+//! draws the video test card's frames; all come out as the same stream of packed RGBA frames
+//! at the video's size.
 use crate::{
     animated, check_cancel,
     export::{render_frame, QUEUED_FRAMES},
@@ -53,11 +54,9 @@ impl Decoder {
                 }
             }
             Source::Demuxed(_) => anyhow::bail!("This video is decoded by the browser"),
-            Source::Animated { format, delays } => {
-                let plan = animated::schedule(delays, request)?;
-                let origin = animated::Origin::of(video);
-                let (decoding, frames) =
-                    animated::Decoding::start(origin, *format, plan, QUEUED_FRAMES, cancel);
+            Source::Animated { .. } | Source::TestClip => {
+                let plan = animated::Plan::new(video, request)?;
+                let (decoding, frames) = animated::Decoding::start(plan, QUEUED_FRAMES, cancel);
                 Self {
                     frames: Some(Box::new(frames)),
                     work: Work::Animated(decoding),

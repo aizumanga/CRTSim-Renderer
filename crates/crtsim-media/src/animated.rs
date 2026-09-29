@@ -1,4 +1,5 @@
-//! Animated GIF and WebP, decoded here rather than by FFmpeg, so they open without it.
+//! Animated GIF and WebP, decoded here rather than by FFmpeg, so they open without it; and the
+//! video test card, whose frames are drawn here.
 //!
 //! Each frame comes out composited onto the whole canvas, with how long it shows. Frames are
 //! read in order and one at a time, since each one builds on the canvas the last one left.
@@ -7,8 +8,8 @@ use crate::{
     decode::Request,
     probe::{Contents, Source, Track, TrackKind, Video},
 };
-use anyhow::{ensure, Context, Result};
-use crtsim_core::config;
+use anyhow::{bail, ensure, Context, Result};
+use crtsim_core::{config, test_clip};
 use image::{codecs::gif::GifDecoder, AnimationDecoder, ImageDecoder, RgbaImage};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -267,6 +268,35 @@ fn probe_in(
     })
 }
 
+/// The video test card: ten seconds of pixel-art gameplay at 60 frames per second, drawn here,
+/// so it opens, plays and exports as an animation does, without a file or FFmpeg to read it.
+pub fn test_clip() -> Video {
+    let fps = test_clip::FPS;
+    Video {
+        metadata: Default::default(),
+        tracks: vec![Track {
+            index: 0,
+            kind: TrackKind::Video,
+            codec: "drawn".into(),
+            offset: 0.,
+        }],
+        start: 0.,
+        // Not a file: what the app calls it.
+        path: "Video test card".into(),
+        size: test_clip::SIZE,
+        fps: f64::from(fps),
+        rate: format!("{fps}/1"),
+        duration: test_clip::FRAMES as f64 / f64::from(fps),
+        audio: false,
+        audio_offset: 0.,
+        hdr: false,
+        stream: 0,
+        frames: Some(test_clip::FRAMES),
+        source: Source::TestClip,
+        contents: None,
+    }
+}
+
 /// The rate `frames` frames lasting `total_ms` average, exactly and as a number, kept within
 /// the 1–240 per second videos are held to. Mirrors ffprobe's average frame rate.
 fn average_rate(frames: u64, total_ms: u64) -> (f64, String) {
@@ -297,19 +327,24 @@ fn gcd(a: u64, b: u64) -> u64 {
 /// `fps=round=near` rounds each start to the nearest tick, halves up. Frames hold or drop but
 /// are never blended.
 pub(crate) fn schedule(delays: &[u32], request: &Request) -> Result<Vec<usize>> {
-    if let Some(frame) = request.frame {
-        ensure!(
-            (frame as usize) < delays.len(),
-            "The animation has no frame {}",
-            frame + 1
-        );
-        return Ok(vec![frame as usize]);
-    }
     let mut starts = Vec::with_capacity(delays.len());
     let mut end = 0.;
     for &delay in delays {
         starts.push(end);
         end += f64::from(delay) / 1000.;
+    }
+    schedule_starts(&starts, end, request)
+}
+
+/// As `schedule`, for frames starting at `starts` and ending at `end`, in seconds.
+fn schedule_starts(starts: &[f64], end: f64, request: &Request) -> Result<Vec<usize>> {
+    if let Some(frame) = request.frame {
+        ensure!(
+            (frame as usize) < starts.len(),
+            "The animation has no frame {}",
+            frame + 1
+        );
+        return Ok(vec![frame as usize]);
     }
     // The last frame starting before `time`, or also at it when `at` holds.
     let last = |time: f64, at: bool| {
@@ -332,46 +367,106 @@ pub(crate) fn schedule(delays: &[u32], request: &Request) -> Result<Vec<usize>> 
         .collect())
 }
 
-/// The frames a plan lists, decoded in order on the calling thread: how a browser page, which
-/// has no other thread, reads an animation.
-pub(crate) struct Planned {
-    frames: Frames,
-    plan: Vec<usize>,
-    /// The plan's next entry.
-    next: usize,
-    /// How many frames have been decoded; the last of them is `current`.
-    decoded: usize,
-    current: RgbaImage,
+/// Where a plan's frames come from.
+enum Maker {
+    /// Decoded from an animated GIF or WebP.
+    File(Origin, AnimationFormat),
+    /// Drawn by the video test card.
+    TestClip,
 }
 
-impl Planned {
-    pub(crate) fn open(origin: &Origin, format: AnimationFormat, plan: Vec<usize>) -> Result<Self> {
-        let (_, frames) = Frames::open(origin, format)?;
-        Ok(Self {
-            frames,
-            plan,
-            next: 0,
-            decoded: 0,
-            current: RgbaImage::new(0, 0),
+/// Which frames of a video made here to read, in order, and where they come from. It can move
+/// to the thread that reads them; the decoders it opens there cannot.
+pub(crate) struct Plan {
+    maker: Maker,
+    frames: Vec<usize>,
+}
+
+impl Plan {
+    /// The frames of `video` that `request` asks for: an animation's, or the video test card's.
+    pub(crate) fn new(video: &Video, request: &Request) -> Result<Self> {
+        match &video.source {
+            Source::Animated { format, delays } => Ok(Self {
+                maker: Maker::File(Origin::of(video), *format),
+                frames: schedule(delays, request)?,
+            }),
+            Source::TestClip => {
+                let fps = f64::from(test_clip::FPS);
+                let starts: Vec<f64> = (0..test_clip::FRAMES)
+                    .map(|frame| frame as f64 / fps)
+                    .collect();
+                Ok(Self {
+                    maker: Maker::TestClip,
+                    frames: schedule_starts(&starts, video.duration, request)?,
+                })
+            }
+            Source::Ffmpeg | Source::Demuxed(_) => {
+                bail!("Only animations and the video test card are made here")
+            }
+        }
+    }
+
+    /// Starts reading the frames, on the calling thread.
+    pub(crate) fn open(self) -> Result<Planned> {
+        Ok(match self.maker {
+            Maker::File(origin, format) => Planned(Making::Decoded {
+                frames: Frames::open(&origin, format)?.1,
+                plan: self.frames,
+                next: 0,
+                decoded: 0,
+                current: RgbaImage::new(0, 0),
+            }),
+            Maker::TestClip => Planned(Making::Drawn(self.frames.into_iter())),
         })
     }
+}
+
+/// The frames a plan lists, made in order on the calling thread: how a browser page, which
+/// has no other thread, reads an animation.
+pub(crate) struct Planned(Making);
+
+/// How the frames are being made.
+enum Making {
+    /// Decoded one after another, as each builds on the last.
+    Decoded {
+        frames: Frames,
+        plan: Vec<usize>,
+        /// The plan's next entry.
+        next: usize,
+        /// How many frames have been decoded; the last of them is `current`.
+        decoded: usize,
+        current: RgbaImage,
+    },
+    /// Drawn each on its own, so a frame far into the clip is as quick as the first.
+    Drawn(std::vec::IntoIter<usize>),
 }
 
 impl Iterator for Planned {
     type Item = Result<RgbaImage>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let wanted = *self.plan.get(self.next)?;
-        while self.decoded <= wanted {
-            match self.frames.next() {
-                Some(Ok((frame, _))) => self.current = frame,
-                Some(Err(error)) => return Some(Err(error)),
-                None => return Some(Err(anyhow::anyhow!("The animation ended early"))),
+        match &mut self.0 {
+            Making::Drawn(plan) => plan.next().map(|frame| Ok(test_clip::frame(frame as u64))),
+            Making::Decoded {
+                frames,
+                plan,
+                next,
+                decoded,
+                current,
+            } => {
+                let wanted = *plan.get(*next)?;
+                while *decoded <= wanted {
+                    match frames.next() {
+                        Some(Ok((frame, _))) => *current = frame,
+                        Some(Err(error)) => return Some(Err(error)),
+                        None => return Some(Err(anyhow::anyhow!("The animation ended early"))),
+                    }
+                    *decoded += 1;
+                }
+                *next += 1;
+                Some(Ok(current.clone()))
             }
-            self.decoded += 1;
         }
-        self.next += 1;
-        Some(Ok(self.current.clone()))
     }
 }
 
@@ -383,12 +478,10 @@ pub(crate) struct Decoding {
 }
 
 impl Decoding {
-    /// Starts decoding the frames `plan` lists and returns the decode with a reader of them,
+    /// Starts making the frames `plan` lists and returns the decode with a reader of them,
     /// as packed RGBA at the canvas size. At most `queued` frames wait to be read.
     pub(crate) fn start(
-        origin: Origin,
-        format: AnimationFormat,
-        plan: Vec<usize>,
+        plan: Plan,
         queued: usize,
         cancel: &Arc<AtomicBool>,
     ) -> (Self, impl Read + Send) {
@@ -396,7 +489,7 @@ impl Decoding {
         let stop = Arc::new(AtomicBool::new(false));
         let (cancel, stopped) = (cancel.clone(), stop.clone());
         let thread = std::thread::spawn(move || -> Result<()> {
-            for frame in Planned::open(&origin, format, plan)? {
+            for frame in plan.open()? {
                 if stopped.load(Ordering::Relaxed) {
                     return Ok(());
                 }
@@ -486,6 +579,14 @@ mod tests {
         }
     }
 
+    /// A plan to decode `frames` of the animation at `path`.
+    fn file(path: &Path, format: AnimationFormat, frames: Vec<usize>) -> Plan {
+        Plan {
+            maker: Maker::File(Origin::Path(path.to_owned()), format),
+            frames,
+        }
+    }
+
     /// A GIF of `delays.len()` 3x2 frames, frame `i` filled with gray level `i * 10`.
     fn write_gif(path: &Path, delays_ms: &[u32]) {
         let mut encoder = GifEncoder::new(File::create(path).unwrap());
@@ -570,13 +671,8 @@ mod tests {
         let ten = rate(10);
         let plan = schedule(delays, &request(Some(&ten), 0., None)).unwrap();
         assert_eq!(plan, vec![0, 1, 2, 2, 3]);
-        let (mut decoding, mut frames) = Decoding::start(
-            Origin::Path(path.clone()),
-            AnimationFormat::Gif,
-            plan,
-            2,
-            &cancel,
-        );
+        let (mut decoding, mut frames) =
+            Decoding::start(file(&path, AnimationFormat::Gif, plan), 2, &cancel);
         let mut bytes = vec![];
         frames.read_to_end(&mut bytes).unwrap();
         decoding.wait().unwrap();
@@ -601,13 +697,8 @@ mod tests {
         assert!((video.duration - 0.4).abs() < 1e-9);
         assert_eq!(video.rate, "10/1");
         let plan = schedule(&[100; 4], &request(None, 0., Some(2))).unwrap();
-        let (mut decoding, mut frames) = Decoding::start(
-            Origin::Path(path.clone()),
-            AnimationFormat::Webp,
-            plan,
-            2,
-            &cancel,
-        );
+        let (mut decoding, mut frames) =
+            Decoding::start(file(&path, AnimationFormat::Webp, plan), 2, &cancel);
         let mut bytes = vec![];
         frames.read_to_end(&mut bytes).unwrap();
         decoding.wait().unwrap();
@@ -653,15 +744,42 @@ mod tests {
     }
 
     #[test]
+    fn the_video_test_card_is_drawn_without_a_file_or_ffmpeg() {
+        use crate::page::{self, FrameSource};
+        let video = test_clip();
+        assert_eq!(
+            (video.size, video.frames, video.rate.as_str()),
+            ((256, 224), Some(600), "60/1")
+        );
+        assert!((video.duration - 10.).abs() < 1e-9);
+        assert!((video.frame_time(150) - 2.5).abs() < 1e-9);
+        // A frame by its number, as the desktop reads it, on a thread of its own.
+        let cancel = Arc::new(AtomicBool::new(false));
+        let frame = crate::preview_frame(&video, 400, &cancel).unwrap();
+        assert_eq!(frame, test_clip::frame(400));
+        // Frames at half the rate from a second in, as a page reads them.
+        let span = page::Span {
+            start: 1.,
+            fps: Some(30.),
+            limit: Some(0.1),
+        };
+        let mut frames = page::decoded(&video, &span).unwrap();
+        let mut read = vec![];
+        while let Some(frame) = pollster::block_on(frames.next()).unwrap() {
+            read.push(frame);
+        }
+        assert_eq!(read, [60, 62, 64].map(test_clip::frame));
+        assert!(page::frame(&video, 600).is_err(), "there are 600 frames");
+    }
+
+    #[test]
     fn a_dropped_reader_stops_the_decode() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("long.gif");
         write_gif(&path, &[20; 50]);
         let cancel = Arc::new(AtomicBool::new(false));
         let (mut decoding, frames) = Decoding::start(
-            Origin::Path(path.clone()),
-            AnimationFormat::Gif,
-            (0..50).collect(),
+            file(&path, AnimationFormat::Gif, (0..50).collect()),
             1,
             &cancel,
         );
@@ -669,9 +787,7 @@ mod tests {
         assert!(decoding.wait().is_ok());
         cancel.store(true, Ordering::Relaxed);
         let (mut decoding, mut frames) = Decoding::start(
-            Origin::Path(path.clone()),
-            AnimationFormat::Gif,
-            (0..50).collect(),
+            file(&path, AnimationFormat::Gif, (0..50).collect()),
             1,
             &cancel,
         );

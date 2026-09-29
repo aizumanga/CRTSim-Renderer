@@ -13,7 +13,7 @@ mod process;
 mod tools;
 mod webp_writer;
 
-pub use animated::{detect_bytes, probe_bytes, AnimationFormat};
+pub use animated::{detect_bytes, probe_bytes, test_clip, AnimationFormat};
 pub use animation::{AnimationOptions, AnimationSummary, Dither};
 pub use crtsim_core::Timing;
 pub use decode::{playback, preview, preview_frame};

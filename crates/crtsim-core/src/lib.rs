@@ -9,6 +9,7 @@ pub mod palette;
 pub mod retroarch;
 mod sequence;
 pub mod settings;
+pub mod test_clip;
 #[cfg(test)]
 mod tests;
 pub mod workflow;

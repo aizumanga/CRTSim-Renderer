@@ -2,8 +2,8 @@
 //! and encoded one at a time on the page's only thread, each step awaited so the page keeps
 //! drawing, and a file is made in memory for the page to download.
 //!
-//! Animated GIF and WebP are decoded here. Other videos are decoded by the host, which hands
-//! their frames over through `FrameSource`.
+//! Animated GIF and WebP are decoded here, and the video test card's frames are drawn here.
+//! Other videos are decoded by the host, which hands their frames over through `FrameSource`.
 use crate::{
     animated::{self, Planned},
     animation::AnimationPlan,
@@ -93,7 +93,7 @@ impl Ticks {
     }
 }
 
-/// Frames of an animated GIF or WebP, decoded here.
+/// Frames of an animated GIF or WebP, decoded here, or of the video test card, drawn here.
 pub struct Decoded(Planned);
 
 impl FrameSource for Decoded {
@@ -102,7 +102,8 @@ impl FrameSource for Decoded {
     }
 }
 
-/// The frames of `video` that `span` asks for, when they can be decoded here: an animation's.
+/// The frames of `video` that `span` asks for, when they can be made here: an animation's or
+/// the video test card's.
 pub fn decoded(video: &Video, span: &Span) -> Result<Decoded> {
     let rate = span.fps.map(|fps| Rate {
         text: format!("{fps}"),
@@ -132,15 +133,7 @@ pub fn frame(video: &Video, number: u64) -> Result<RgbaImage> {
 }
 
 fn planned(video: &Video, request: &Request) -> Result<Decoded> {
-    let Source::Animated { format, delays } = &video.source else {
-        bail!("Only animations are decoded here");
-    };
-    let plan = animated::schedule(delays, request)?;
-    Ok(Decoded(Planned::open(
-        &animated::Origin::of(video),
-        *format,
-        plan,
-    )?))
+    Ok(Decoded(animated::Plan::new(video, request)?.open()?))
 }
 
 /// Plays `video` from `start` seconds: each frame rendered on `renderer` at the playback rate,

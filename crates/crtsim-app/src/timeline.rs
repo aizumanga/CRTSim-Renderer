@@ -28,6 +28,11 @@ impl Timeline {
         }
     }
 
+    /// Whether the video is the video test card, which is drawn rather than read from a file.
+    pub fn is_video_test_card(&self) -> bool {
+        matches!(self.video.source, crtsim_media::Source::TestClip)
+    }
+
     pub fn last(&self) -> u64 {
         self.frames.saturating_sub(1)
     }

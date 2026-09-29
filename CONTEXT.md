@@ -57,6 +57,11 @@ already overdue are skipped rather than shown late.
 holds when large frames make it smaller. When the renderer falls behind, the clock stops and
 playback prerolls again.
 
+**Video test card**: ten seconds of original side-scrolling pixel-art gameplay that the app
+draws itself, at a 16-bit console's 256x224, to see a look on moving pixels before exporting
+it. It opens and plays without a file or FFmpeg, exports as an opened animation does, and a
+project or session holding it opens it again.
+
 **Colour table**: the LUT or the NES palette a look maps colours through before the CRT. A look
 has one at most; choosing either replaces the other (`Config::set_lut`, `Config::set_palette`).
 

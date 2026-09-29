@@ -365,7 +365,7 @@ impl Export {
                 video,
                 options,
                 config,
-            } if video.contents.is_some() => {
+            } if made_here(video) => {
                 export_animation_here(graphics, video, config, options, path, cancel, progress)
                     .await
             }
@@ -777,13 +777,20 @@ async fn load_video(
         }
     };
     ensure!(frame < frames, "Frame is outside the video");
-    // A video handed over as bytes is decoded here; one found by its path, by FFmpeg.
-    let image = if video.contents.is_some() {
+    let image = if made_here(&video) {
         crate::frames::frame(&video, frame).await?
     } else {
         crtsim_media::preview_frame(&video, frame, cancel)?
     };
     Ok(opened(video, frame, frames, image))
+}
+
+/// Whether `video` is read, played and exported here, one frame at a time as a browser page
+/// does: always in a browser, and on the desktop a file handed over as bytes, as tests do.
+/// Otherwise `crtsim_media` reads it, with FFmpeg for a video file and without for an
+/// animation or the video test card, and FFmpeg encodes its exports.
+fn made_here(video: &Video) -> bool {
+    cfg!(target_arch = "wasm32") || video.contents.is_some()
 }
 
 /// Frame `frame` of `video`, of `frames`, opened for editing with its timeline.
@@ -1033,7 +1040,7 @@ async fn export_video(
     cancel: &Arc<AtomicBool>,
     progress: &dyn Fn(Progress),
 ) -> Result<()> {
-    if video.contents.is_some() {
+    if made_here(video) {
         return export_video_here(graphics, video, config, options, path, cancel, progress).await;
     }
     let renderer = graphics.renderer(|| {}).await?;
@@ -1058,9 +1065,8 @@ async fn play(
     let played = graphics
         .guard("Playback graphics driver failed", async |g| {
             let renderer = g.renderer(|| {}).await?;
-            // A video handed over as bytes is decoded and paced here, awaiting room in the
-            // feed so a browser page keeps drawing; one found by its path, by FFmpeg.
-            if video.contents.is_some() {
+            // Paced here, awaiting room in the feed so a browser page keeps drawing.
+            if made_here(video) {
                 use crtsim_media::page;
                 return page::playback(
                     video,
@@ -1359,6 +1365,125 @@ mod tests {
             };
             assert_eq!(loaded.image.get_pixel(0, 0)[0], 80, "{runtime}");
             stop(worker);
+        }
+    }
+
+    /// The video test card has no file to read and needs no FFmpeg: its frames are drawn.
+    #[test]
+    fn the_video_test_card_opens_at_any_frame_on_either_runtime() {
+        for (runtime, worker, next) in workers() {
+            let video = crtsim_media::test_clip();
+            for frame in [0, 450] {
+                worker
+                    .jobs
+                    .send(Job::LoadVideo {
+                        path: video.path.clone(),
+                        frame,
+                        cached: Some((video.clone(), 600)),
+                        cancel: Arc::new(AtomicBool::new(false)),
+                    })
+                    .unwrap();
+                let Event::Loaded(Ok(loaded)) = next(&worker) else {
+                    panic!("{runtime}: expected frame {frame}");
+                };
+                assert_eq!(loaded.name, "Video test card", "{runtime}");
+                assert_eq!(loaded.image, crtsim_core::test_clip::frame(frame));
+                let timeline = loaded.timeline.expect("the clip has a timeline");
+                assert!(timeline.is_video_test_card());
+                assert_eq!((timeline.shown, timeline.frames), (frame, 600));
+            }
+            stop(worker);
+        }
+    }
+
+    /// Exports of the video test card: made here as a browser makes them, and on the desktop
+    /// by FFmpeg, as any animation's are.
+    #[test]
+    #[ignore = "requires a Vulkan adapter and FFmpeg"]
+    fn the_video_test_card_exports_as_a_browser_and_the_desktop_export_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let video = crtsim_media::test_clip();
+        let options = crtsim_media::AnimationOptions {
+            max_side: 128,
+            fps: 20,
+            start: 2.,
+            max_seconds: Some(1.),
+            lossless: true,
+            ..Default::default()
+        };
+        let small = Config {
+            output: "160x120".into(),
+            ..Config::default()
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        // As a browser does: one frame at a time, the file made in memory.
+        let mut graphics = Graphics::new(Gpu::Own(wgpu::Backends::VULKAN));
+        let config = Config::default();
+        for name in ["here.gif", "here.webp"] {
+            let path = dir.path().join(name);
+            let export = export_animation_here(
+                &mut graphics,
+                &video,
+                &config,
+                &options,
+                &path,
+                &cancel,
+                &|_| {},
+            );
+            pollster::block_on(export).unwrap();
+        }
+        // As the desktop does, through the worker.
+        let (_, worker, next) = workers().remove(0);
+        let exports = [
+            (
+                "desktop.gif",
+                Export::Animation {
+                    video: video.clone(),
+                    options: options.clone(),
+                    config: Config::default(),
+                },
+            ),
+            (
+                "desktop.mp4",
+                Export::Video {
+                    video: video.clone(),
+                    options: Options::default(),
+                    config: small,
+                },
+            ),
+        ];
+        for (name, export) in exports {
+            worker
+                .jobs
+                .send(Job::Export {
+                    export,
+                    path: dir.path().join(name),
+                    cancel: cancel.clone(),
+                })
+                .unwrap();
+            loop {
+                match next(&worker) {
+                    Event::Progress(_) => continue,
+                    Event::Exported(result) => {
+                        assert!(result.is_ok(), "{name}: {:?}", result.err());
+                        break;
+                    }
+                    _ => panic!("{name}: unexpected event"),
+                }
+            }
+        }
+        stop(worker);
+        for (name, frames) in [
+            // A second at 20 per second.
+            ("here.gif", 20),
+            ("here.webp", 20),
+            ("desktop.gif", 20),
+            // The whole clip, at its own rate.
+            ("desktop.mp4", 600),
+        ] {
+            let written = crtsim_media::probe(&dir.path().join(name), &cancel).unwrap();
+            let count = crtsim_media::frame_count(&written, &cancel).unwrap();
+            assert_eq!(count, frames, "{name}");
         }
     }
 
