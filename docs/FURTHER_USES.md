@@ -23,7 +23,7 @@ What stands in the way today, in `crtsim-core`:
 | Obstacle | Where | Why it matters |
 | --- | --- | --- |
 | The input is a CPU `RgbaImage`, uploaded each frame | `Renderer::frame` | A game's frame is already a GPU texture. The round trip costs more than the effect. |
-| ~~The renderer submits and waits~~ Done: `Renderer::frame` and `read` are `async`, and wait only natively | `lib.rs`, `gpu.rs` | A host records into its own frame. Browsers cannot block at all. |
+| The renderer submits and waits. `Renderer::frame` and `read` are `async` and never block a browser, but natively every frame, even one tick long, submits, waits for the GPU and submits again | `lib.rs`, `gpu.rs` | A host records into its own frame and never waits on the GPU. |
 | ~~A new uniform buffer and bind group for every tick and pass~~ Done: one buffer per sequence, bind groups made with it | `Workspace` | This was fine offline, but allocated 60 or more times a second in a game. |
 | ~~wgpu 0.19, pinned by eframe 0.27~~ Done: wgpu 30 and eframe 0.36 | `Cargo.toml` | Current Bevy and wgpu releases were far newer. |
 

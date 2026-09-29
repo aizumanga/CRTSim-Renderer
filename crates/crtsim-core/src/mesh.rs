@@ -5,7 +5,7 @@ use serde::Serialize;
 use std::io::{Cursor, Read};
 
 pub const SCREEN: &[u8] = include_bytes!("../../../assets/original-crtsim/screen.m3d");
-pub const FRAME: &[u8] = include_bytes!("../../../assets/original-crtsim/frame.m3d");
+pub const BEZEL: &[u8] = include_bytes!("../../../assets/original-crtsim/frame.m3d");
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable, Serialize)]
@@ -132,7 +132,7 @@ mod tests {
     #[test]
     fn embedded_meshes_keep_all_attributes() {
         let s = Mesh::read(SCREEN).unwrap();
-        let f = Mesh::read(FRAME).unwrap();
+        let f = Mesh::read(BEZEL).unwrap();
         assert_eq!(s.vertices.len(), 2401);
         assert_eq!(f.vertices.len(), 1372);
         assert_eq!(s.streams.len(), 4);

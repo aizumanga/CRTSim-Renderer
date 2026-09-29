@@ -125,7 +125,7 @@ fn main() -> Result<()> {
                 fs::create_dir(dir)
                     .context("export directory must be new and its parent must exist")?;
             }
-            for (name, bytes) in [("screen", mesh::SCREEN), ("frame", mesh::FRAME)] {
+            for (name, bytes) in [("screen", mesh::SCREEN), ("bezel", mesh::BEZEL)] {
                 let m = mesh::Mesh::read(bytes)?;
                 println!(
                     "{name}: {} vertices, {} triangles, streams {:?}",
