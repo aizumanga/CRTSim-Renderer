@@ -30,8 +30,10 @@ jobs:
       - name: Install Linux windowing development libraries
         if: runner.os == 'Linux'
         run: sudo apt-get update -qq && sudo apt-get install -y libxkbcommon-dev libwayland-dev libegl1-mesa-dev
-      - run: cargo test --workspace --locked
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # crtsim-ports, the shader ports' test harness, builds librashader and its C++ shader
+      # compilers; the Vulkan job below builds and runs it once, on Linux.
+      - run: cargo test --workspace --exclude crtsim-ports --locked
+      - run: cargo clippy --workspace --exclude crtsim-ports --all-targets --locked -- -D warnings
       # The web app: core and the app, as a browser builds them. Media's FFmpeg code compiles
       # there too but never runs, so it is left out.
       - name: Web app compiles for the browser
@@ -68,6 +70,10 @@ jobs:
         run: cargo test --locked -p crtsim-core gpu_prepare_matches_cpu_prepare -- --ignored --nocapture
       - name: Golden-image rendering regression
         run: cargo test --locked -p crtsim-core --test golden -- --ignored --nocapture
+      - name: RetroArch port against the renderer, through librashader
+        run: |
+          cargo clippy --locked -p crtsim-ports --all-targets -- -D warnings
+          cargo test --locked -p crtsim-ports -- --ignored --nocapture
       - name: Video history, FFmpeg and audio integration
         run: |
           cargo test --locked -p crtsim-core video_history -- --ignored --nocapture

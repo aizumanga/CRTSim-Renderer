@@ -21,7 +21,8 @@
 
 The preset schema remains version 1 and is compatible with v0.1.0 files.
 
-The **Portable packages** workflow builds downloadable Actions artifacts for each manual workflow run, and for pull requests that change packaging: the workflow itself, `tools/package.py`, `tools/build_web.py`, `packaging/`, `web/` or `Cargo.lock`. Other pull requests are built and tested by the validation workflow only.
+The **Portable packages** workflow builds downloadable Actions artifacts for each manual workflow run, and for pull requests that change packaging: the workflow itself, `tools/package.py`, `tools/build_web.py`, `packaging/`, `ports/`, `web/` or `Cargo.lock`.
+The Linux job also writes `CRTSim-Renderer-vX.Y.Z-retroarch.zip`, the RetroArch presets its CLI exports. Other pull requests are built and tested by the validation workflow only.
 A `v*` tag builds the same packages and creates a **draft** GitHub release after all three packaging jobs succeed.
 Review and publish the draft manually. This workflow does not create tags or merge pull requests.
 The same workflow builds the web app into `CRTSim-Renderer-vX.Y.Z-web.zip` and `SHA256SUMS-web.txt`. Running it by
@@ -38,6 +39,7 @@ brings the web app and the new version to the site.
 | Linux x86_64 | Portable tar.gz, desktop and CLI | Extract, run `./crtsim-desktop` |
 | macOS Apple Silicon | tar.gz with `.app`, desktop and CLI | Extract, open `CRTSim Renderer.app` |
 | Web | ZIP of the web app, for a website to serve | Serve the files over HTTPS in a browser with WebGPU; the site does this at `aizumanga.neocities.org/crtsim/` |
+| RetroArch | ZIP of shader presets for the shipped looks | Copy its `crtsim-renderer` folder into RetroArch's `shaders` folder; see the README inside |
 
 No Rust installation or repository checkout is required. Effects/assets are embedded.
 Each archive includes the README, project license, original asset provenance, dependency license texts/index and commit identifier.

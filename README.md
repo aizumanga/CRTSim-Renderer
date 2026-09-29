@@ -150,6 +150,15 @@ python3 -m http.server --directory web/dist 8000            # then open http://l
 Browsers without WebGPU get a page that says how to turn it on. Firefox and LibreWolf on Linux
 need `dom.webgpu.enabled` set to `true` in `about:config`.
 
+## In games: RetroArch
+
+The CRT also runs in RetroArch, over any core as it plays, as a shader port of the same passes
+(see [the decision](docs/adr/0003-games-get-shader-ports-not-the-renderer.md)). Each release has
+a `-retroarch.zip` of presets for the shipped looks; **Export → RetroArch shader…** in the app,
+or `crtsim export-retroarch`, writes any look as one. The shaders are in
+[`ports/retroarch`](ports/retroarch), with instructions for using them. The bezel is not ported
+yet, so looks are drawn screen-only.
+
 ## Build and try
 
 ### Video
