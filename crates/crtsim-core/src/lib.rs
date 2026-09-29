@@ -1,3 +1,4 @@
+pub mod bezel;
 pub mod config;
 mod gpu;
 mod gpu_prepare;
@@ -15,7 +16,7 @@ pub mod workflow;
 use anyhow::{ensure, Context, Result};
 use bytemuck::{Pod, Zeroable};
 use config::{ColorMode, Config, Phase};
-use gpu::{GpuMesh, Readback, Target, FORMAT};
+use gpu::{Readback, Target, FORMAT};
 use image::RgbaImage;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -94,7 +95,7 @@ impl Params {
                 flag(c.color_mode == ColorMode::LinearLight),
                 flag(c.interlace),
                 0.,
-                0.,
+                flag(c.screen_only),
             ],
         }
     }
@@ -133,8 +134,7 @@ struct Pipelines {
 
 /// What follows the signal: the curved glass and its bezel, then the bloom's two blurs.
 struct SurfacePasses {
-    glass: wgpu::RenderPipeline,
-    bezel: wgpu::RenderPipeline,
+    surface: wgpu::RenderPipeline,
     downsample: wgpu::RenderPipeline,
     upsample: wgpu::RenderPipeline,
 }
@@ -159,8 +159,6 @@ pub(crate) struct Workspace {
     down: Target,
     up: Target,
     final_target: Target,
-    _depth: wgpu::Texture,
-    depth_view: wgpu::TextureView,
     /// Made on the first read back, which a frame only shown on the device never needs.
     readback: Option<Readback>,
     prepare: gpu_prepare::Cache,
@@ -245,7 +243,8 @@ pub struct Renderer {
     /// In binding order: point and linear filtering clamped to the edge, then repeating.
     samplers: [wgpu::Sampler; 4],
     pipelines: Pipelines,
-    bezel: GpuMesh,
+    /// The bezel as the surface pass traces it, in the order `bezel::Maps` lists them.
+    bezel: [Target; 3],
     artifacts: Target,
     mask: Target,
     prepare_pipelines: gpu_prepare::Pipelines,
@@ -362,7 +361,7 @@ impl Renderer {
             },
             count: None,
         }];
-        for binding in 1..=4 {
+        for binding in (1..=4).chain(9..=11) {
             entries.push(wgpu::BindGroupLayoutEntry {
                 binding,
                 visibility: wgpu::ShaderStages::FRAGMENT,
@@ -412,7 +411,19 @@ impl Renderer {
         Ok(Self {
             artifacts: gpu::artifacts(&device, &queue)?,
             mask: gpu::shadow_mask(&device, &queue)?,
-            bezel: GpuMesh::new(&device, &queue, mesh::BEZEL)?,
+            bezel: {
+                let maps = bezel::maps()?;
+                [
+                    ("bezel shape", &maps.shape),
+                    ("bezel uv", &maps.uv),
+                    ("bezel normal", &maps.normal),
+                ]
+                .map(|(name, image)| {
+                    let target = Target::new(&device, name, image.dimensions());
+                    target.upload(&queue, image);
+                    target
+                })
+            },
             device,
             queue,
             layout,
@@ -435,25 +446,16 @@ impl Renderer {
             label: Some("CRT WGSL"),
             source: wgpu::ShaderSource::Wgsl(SHADER.into()),
         });
-        let attrs = wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3,2=>Float32x4,3=>Float32x2,4=>Float32];
-        let vertex_layout = [Some(wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<mesh::Vertex>() as u64,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &attrs,
-        })];
+        // Every pass covers its target with one triangle; the glass and bezel are ray-traced.
         let pipeline = |entry: &str, format| {
-            // The bezel is a mesh and the glass is ray-traced; both are depth-tested, and
-            // everything else covers its target.
-            let mesh = entry == "bezel";
-            let depth = mesh || entry == "glass";
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(entry),
                 layout: Some(&pipeline_layout),
                 vertex: wgpu::VertexState {
                     module: &module,
-                    entry_point: Some(if mesh { "mesh" } else { "quad" }),
+                    entry_point: Some("quad"),
                     compilation_options: Default::default(),
-                    buffers: if mesh { &vertex_layout } else { &[] },
+                    buffers: &[],
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &module,
@@ -465,21 +467,8 @@ impl Renderer {
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
-                // The original culled clockwise faces. Its bezel's visible faces wind
-                // counter-clockwise here, so those stay and the ones facing away are skipped.
-                // The depth test already hid those at every angle the settings allow.
-                primitive: wgpu::PrimitiveState {
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: mesh.then_some(wgpu::Face::Back),
-                    ..Default::default()
-                },
-                depth_stencil: depth.then(|| wgpu::DepthStencilState {
-                    format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: Some(true),
-                    depth_compare: Some(wgpu::CompareFunction::Less),
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
+                primitive: Default::default(),
+                depth_stencil: None,
                 multisample: Default::default(),
                 multiview_mask: None,
                 cache: None,
@@ -488,8 +477,7 @@ impl Renderer {
         let surface = |mode| {
             let format = surface_format(mode);
             SurfacePasses {
-                glass: pipeline("glass", format),
-                bezel: pipeline("bezel", format),
+                surface: pipeline("surface", format),
                 downsample: pipeline("downsample", format),
                 upsample: pipeline("upsample", format),
             }
@@ -669,17 +657,6 @@ impl Renderer {
     fn workspace(&self, plan: &Plan) -> Workspace {
         let device = &self.device;
         let (signal_size, output_size) = (plan.signal, plan.output);
-        let depth = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("depth"),
-            size: gpu::extent(output_size.0, output_size.1),
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Depth32Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let depth_view = depth.create_view(&Default::default());
         let surface = |name, size| Target::with_format(device, name, size, plan.surface_format, 1);
         let source = Target::new(device, "clean signal", signal_size);
         let history = [
@@ -703,8 +680,6 @@ impl Renderer {
         };
         Workspace {
             final_target: Target::new(device, "output", output_size),
-            _depth: depth,
-            depth_view,
             readback: None,
             prepare: Default::default(),
             uniforms,
@@ -779,29 +754,13 @@ impl Renderer {
         let offset = workspace.uniforms.write(&self.queue, SURFACE_SLOT, params);
         let passes = self.pipelines.surface(c.color_mode);
         let bindings = &workspace.bindings;
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("curved glass and bezel"),
-                color_attachments: &[gpu::cleared(&workspace.full.view)],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &workspace.depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_bind_group(0, &bindings.glass[latest], &[offset]);
-            pass.set_pipeline(&passes.glass);
-            pass.draw(0..3, 0..1);
-            if !c.screen_only {
-                draw(&mut pass, &passes.bezel, &self.bezel);
-            }
-        }
+        gpu::fullscreen(
+            encoder,
+            &workspace.full,
+            &passes.surface,
+            &bindings.glass[latest],
+            &[offset],
+        );
         gpu::fullscreen(
             encoder,
             &workspace.down,
@@ -851,6 +810,12 @@ impl Renderer {
                 resource: wgpu::BindingResource::Sampler(s),
             });
         }
+        for (i, t) in self.bezel.iter().enumerate() {
+            entries.push(wgpu::BindGroupEntry {
+                binding: i as u32 + 9,
+                resource: wgpu::BindingResource::TextureView(&t.view),
+            });
+        }
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &self.layout,
@@ -888,15 +853,4 @@ impl Renderer {
             height: final_target.height,
         }
     }
-}
-
-fn draw<'a>(
-    pass: &mut wgpu::RenderPass<'a>,
-    pipeline: &'a wgpu::RenderPipeline,
-    mesh: &'a GpuMesh,
-) {
-    pass.set_pipeline(pipeline);
-    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint16);
-    pass.draw_indexed(0..mesh.count, 0, 0..1);
 }

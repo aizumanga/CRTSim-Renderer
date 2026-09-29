@@ -7,8 +7,7 @@ How the simulation could run outside this app, and what each route needs from th
 - **The effect is a short chain of GPU passes** in `shaders/crtsim.wgsl`, run by `crtsim-core`:
   1. Prepare (`prepare.wgsl`): resize, crop, LUT or palette, grade.
   2. Composite, at signal size. It reads the previous tick's output, which gives persistence.
-  3. The curved glass, ray-traced in a full-screen pass, and the bezel mesh, drawn with depth at
-     output size.
+  3. The curved glass and its bezel, ray-traced together in one full-screen pass at output size.
   4. Bloom, down then up.
   5. Present.
 
