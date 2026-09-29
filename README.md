@@ -156,8 +156,8 @@ The CRT also runs in RetroArch, over any core as it plays, as a shader port of t
 (see [the decision](docs/adr/0003-games-get-shader-ports-not-the-renderer.md)). Each release has
 a `-retroarch.zip` of presets for the shipped looks; **Export → RetroArch shader…** in the app,
 or `crtsim export-retroarch`, writes any look as one. The shaders are in
-[`ports/retroarch`](ports/retroarch), with instructions for using them. The bezel is not ported
-yet, so looks are drawn screen-only.
+[`ports/retroarch`](ports/retroarch), with instructions for using them. The glass and its bezel
+draw as the app draws them, from the same baked bezel.
 
 ## Build and try
 

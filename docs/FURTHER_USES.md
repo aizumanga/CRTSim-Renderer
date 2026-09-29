@@ -118,7 +118,7 @@ glass made full-screen as their reference ([ADR 3](adr/0003-games-get-shader-por
 | --- | --- | --- |
 | 1 | `Renderer::encode`, a persistent uniform buffer, no waits; upgrade wgpu and eframe | Everything below. The app's preview gets faster too. |
 | 2 | `crtsim-web` with an image and webcam demo page | The widest audience, with WGSL as it is. |
-| 3 | Baked mesh textures and a full-screen-only variant, checked against the goldens | Every engine without mesh support. |
+| 3 | ~~Baked mesh textures and a full-screen-only variant, checked against the goldens~~ Done: the glass is ray-traced and the bezel baked, in one full-screen pass | Every engine without mesh support. |
 | 4 | RetroArch slang preset, then ReShade | Emulators and existing PC games. |
 | 5 | Bevy plugin; OBS filter | Rust games; live streams. |
 

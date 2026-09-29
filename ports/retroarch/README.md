@@ -1,8 +1,8 @@
 # CRTSim Renderer for RetroArch
 
 The CRT of [CRTSim Renderer](https://github.com/aizumanga/CRTSim-Renderer) as a RetroArch shader
-preset: the composite signal with its artifacts and glow, the shadow mask, the curved glass and
-its lighting, and bloom, drawn over whatever a core shows. It is a port of J. Kyle Pittman's
+preset: the composite signal with its artifacts and glow, the shadow mask, the curved glass, its
+bezel and their lighting, and bloom, drawn over whatever a core shows. It is a port of J. Kyle Pittman's
 CRTSim, the effect from *Super Win the Game*, and like it is dedicated to the public domain
 (CC0 1.0).
 
@@ -32,4 +32,4 @@ crtsim export-retroarch --look my-look=my-look.json --output-dir my-shaders
 ```
 
 A look's LUT or NES palette travels with it as `<name>-table.png`, a strip of the table's
-slices. The bezel is not ported yet, so every look is drawn screen-only.
+slices. **Screen only** turns the bezel off, as it does in the app.

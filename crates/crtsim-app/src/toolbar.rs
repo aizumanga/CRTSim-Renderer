@@ -86,7 +86,7 @@ impl App {
                         .button("RetroArch shader…")
                         .on_hover_text(
                             "These settings as a shader preset for RetroArch, drawn over a \
-                             game as it plays. The bezel is not ported yet.",
+                             game as it plays.",
                         )
                         .clicked()
                     {
