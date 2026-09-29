@@ -110,6 +110,9 @@ handles). Porting the shaders is less work and more robust.
 
 ## Suggested order
 
+Decided since: games get shader ports, RetroArch first and then ReShade, with the renderer's
+glass made full-screen as their reference ([ADR 3](adr/0003-games-get-shader-ports-not-the-renderer.md)).
+
 | Step | Work | Unlocks |
 | --- | --- | --- |
 | 1 | `Renderer::encode`, a persistent uniform buffer, no waits; upgrade wgpu and eframe | Everything below. The app's preview gets faster too. |

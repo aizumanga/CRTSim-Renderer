@@ -14,16 +14,18 @@ one frame persists into the next. A video is a sequence with a timing and a fram
 **Warm-up**: the ticks a new sequence runs before the frame it keeps, so a still or a video's
 first frame already has the glow of a picture that has been on screen.
 
-**Live sequence**: a sequence paced by its host's own frames rather than a video's rate. It
+**Host sequence**: a sequence paced by its host's own frames rather than a video's rate. It
 starts without warm-up, so the glow builds as a set's would, and each frame's glow decays by how
 long that frame lasted. A new output size keeps its history; a new signal size or colour mode
 starts it again.
+_Avoid_: live sequence, since live preview means something else.
 
 **Host**: the program whose picture the CRT is drawn from and into, such as an emulator or a
 game, as opposed to the app, which renders files.
 
 **Shader port**: the effect rewritten in a host's own shader language, as passes the host runs
-on every frame of its picture, rather than this renderer running inside the host.
+on every frame of its picture, rather than this renderer running inside the host. See
+[the decision](docs/adr/0003-games-get-shader-ports-not-the-renderer.md).
 
 **Bezel**: the moulded surround of the picture tube, lit and reflecting the glass.
 _Avoid_: frame, which already means a picture in a sequence.
