@@ -10,7 +10,7 @@ It is not an official product or an exact reconstruction of a commercial game's 
 
 - PNG/JPEG/WebP/BMP/GIF input and PNG export; an original test card when input is omitted.
 - Animated GIF and WebP open as animations, decoded without FFmpeg; videos, GIFs and animated WebPs export to MP4, MKV, WebM, GIF or animated WebP.
-- The original curved-screen and frame meshes, including colors, normals, UVs and reflection weights.
+- The original curved screen, ray-traced as the sphere its mesh was cut from, with the same UVs, normals, rounded outline and edge shading; the original bezel mesh with its colors, normals, UVs and reflection weights.
 - Composite artifacts, horizontal ringing, separate RGB persistence, shadow mask, lighting, edge reflections and bloom.
 - Deterministic still jobs, cleared feedback buffers, phase A/B/stable/alternating selection and configurable warm-up.
 - Logical signal and output resolution presets; custom dimensions; JSON settings.

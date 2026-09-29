@@ -134,7 +134,39 @@ fn shade(v: Surface, bezel: bool) -> vec4<f32> {
     }
     return vec4(color*mix(vec3(1.),v.color.rgb,p.surface.x),1.);
 }
-@fragment fn screen(v: Surface) -> @location(0) vec4<f32> { return shade(v,false); }
+// The screen's glass, ray-traced rather than drawn as the original's mesh, which was a cap of
+// this sphere: its UVs, normals, rounded outline and darkened edges are all functions of where
+// a ray meets it. A host that can only draw full-screen passes draws it the same way.
+const GLASS_CENTRE = vec3(4.,0.,0.);
+const GLASS_RADIUS = 4.;
+// The outline is a superellipse in UV space; its edge shading follows the same curves inward.
+const GLASS_CORNER = 11.54;
+struct Glass { @builtin(frag_depth) depth: f32, @location(0) color: vec4<f32> };
+@fragment fn glass(q: Quad) -> Glass {
+    let ndc=vec2(q.position.x/p.size.z*2.-1.,1.-q.position.y/p.size.w*2.);
+    // The camera looks along +x from 1/tan(fov/2) in front, with z up and -y to the right.
+    let spread=-1./p.camera.x;
+    let ray=normalize(vec3(1.,-ndc.x*spread*p.size.z/p.size.w,ndc.y*spread));
+    let to=p.camera.xyz-GLASS_CENTRE;
+    let b=dot(to,ray);
+    let reach=b*b-dot(to,to)+GLASS_RADIUS*GLASS_RADIUS;
+    let hit=p.camera.xyz+ray*(-b-sqrt(max(reach,0.)));
+    var v: Surface;
+    v.uv=vec2((4./3.-hit.y)*0.375,(1.-hit.z)*0.5);
+    let edge=abs(v.uv*2.-vec2(1.));
+    let radius=pow(pow(edge.x,GLASS_CORNER)+pow(edge.y,GLASS_CORNER),1./GLASS_CORNER);
+    v.normal=(hit-GLASS_CENTRE)/GLASS_RADIUS;
+    v.color=vec4(vec3(1.-0.5*pow(radius,6.)),1.);
+    v.reflection=0.;
+    v.camera=p.camera.xyz-hit; v.light=p.light.xyz-hit;
+    var o: Glass;
+    o.color=shade(v,false);
+    // A ray that misses the glass lies at the far plane, which the depth test turns away, so
+    // everything above stays in uniform control flow for the mask's derivatives.
+    let clip=p.mvp*vec4(hit,1.);
+    o.depth=select(clip.z/clip.w,1.,reach<0. || radius>1.);
+    return o;
+}
 @fragment fn bezel(v: Surface) -> @location(0) vec4<f32> { return shade(v,true); }
 
 fn blur(uv: vec2<f32>, swap: bool) -> vec4<f32> {

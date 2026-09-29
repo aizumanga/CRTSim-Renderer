@@ -7,7 +7,8 @@ How the simulation could run outside this app, and what each route needs from th
 - **The effect is a short chain of GPU passes** in `shaders/crtsim.wgsl`, run by `crtsim-core`:
   1. Prepare (`prepare.wgsl`): resize, crop, LUT or palette, grade.
   2. Composite, at signal size. It reads the previous tick's output, which gives persistence.
-  3. The curved screen and bezel meshes, drawn with depth at output size.
+  3. The curved glass, ray-traced in a full-screen pass, and the bezel mesh, drawn with depth at
+     output size.
   4. Bloom, down then up.
   5. Present.
 
@@ -75,9 +76,10 @@ app, and a settings screen can reuse `crtsim_core::settings::SETTINGS`: names, r
 defaults, already described once.
 
 **b. Emulators and any PC game: RetroArch slang and ReShade.** This is where most CRT-shader
-users are. Neither can draw arbitrary meshes, so the port's key move is to **bake the meshes into
-textures**. Render, once, the curved screen's UV mapping, normals and the bezel's colour and
-lighting weights to textures at output size. Every stage then becomes a full-screen pass. naga,
+users are. Neither can draw arbitrary meshes. The glass needs none: it is a cap of a sphere, which the
+renderer now ray-traces in a full-screen pass. The bezel is an irregular mesh, so its surface is
+baked into textures, seen straight on, and each pixel steps a ray across it. Every stage then
+becomes a full-screen pass. naga,
 already a dependency, translates WGSL to GLSL and HLSL as a starting point. The history target is
 slang's `PassFeedback` and a persistent texture in ReShade.
 

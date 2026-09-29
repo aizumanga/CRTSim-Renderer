@@ -132,7 +132,7 @@ struct Pipelines {
 
 /// What follows the signal: the curved glass and its bezel, then the bloom's two blurs.
 struct SurfacePasses {
-    screen: wgpu::RenderPipeline,
+    glass: wgpu::RenderPipeline,
     bezel: wgpu::RenderPipeline,
     downsample: wgpu::RenderPipeline,
     upsample: wgpu::RenderPipeline,
@@ -244,7 +244,6 @@ pub struct Renderer {
     /// In binding order: point and linear filtering clamped to the edge, then repeating.
     samplers: [wgpu::Sampler; 4],
     pipelines: Pipelines,
-    screen: GpuMesh,
     bezel: GpuMesh,
     artifacts: Target,
     mask: Target,
@@ -412,7 +411,6 @@ impl Renderer {
         Ok(Self {
             artifacts: gpu::artifacts(&device, &queue)?,
             mask: gpu::shadow_mask(&device, &queue)?,
-            screen: GpuMesh::new(&device, &queue, mesh::SCREEN)?,
             bezel: GpuMesh::new(&device, &queue, mesh::BEZEL)?,
             device,
             queue,
@@ -443,8 +441,10 @@ impl Renderer {
             attributes: &attrs,
         })];
         let pipeline = |entry: &str, format| {
-            // The screen and bezel are meshes, depth-tested; everything else covers its target.
-            let mesh = entry == "screen" || entry == "bezel";
+            // The bezel is a mesh and the glass is ray-traced; both are depth-tested, and
+            // everything else covers its target.
+            let mesh = entry == "bezel";
+            let depth = mesh || entry == "glass";
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(entry),
                 layout: Some(&pipeline_layout),
@@ -464,7 +464,7 @@ impl Renderer {
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
-                // The original culled clockwise faces. Its meshes' visible faces wind
+                // The original culled clockwise faces. Its bezel's visible faces wind
                 // counter-clockwise here, so those stay and the ones facing away are skipped.
                 // The depth test already hid those at every angle the settings allow.
                 primitive: wgpu::PrimitiveState {
@@ -472,7 +472,7 @@ impl Renderer {
                     cull_mode: mesh.then_some(wgpu::Face::Back),
                     ..Default::default()
                 },
-                depth_stencil: mesh.then(|| wgpu::DepthStencilState {
+                depth_stencil: depth.then(|| wgpu::DepthStencilState {
                     format: wgpu::TextureFormat::Depth32Float,
                     depth_write_enabled: Some(true),
                     depth_compare: Some(wgpu::CompareFunction::Less),
@@ -487,7 +487,7 @@ impl Renderer {
         let surface = |mode| {
             let format = surface_format(mode);
             SurfacePasses {
-                screen: pipeline("screen", format),
+                glass: pipeline("glass", format),
                 bezel: pipeline("bezel", format),
                 downsample: pipeline("downsample", format),
                 upsample: pipeline("upsample", format),
@@ -795,7 +795,8 @@ impl Renderer {
                 multiview_mask: None,
             });
             pass.set_bind_group(0, &bindings.glass[latest], &[offset]);
-            draw(&mut pass, &passes.screen, &self.screen);
+            pass.set_pipeline(&passes.glass);
+            pass.draw(0..3, 0..1);
             if !c.screen_only {
                 draw(&mut pass, &passes.bezel, &self.bezel);
             }
