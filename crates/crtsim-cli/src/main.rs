@@ -2,7 +2,7 @@ use anyhow::{ensure, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use crtsim_core::{
     config::{self, Config, Phase},
-    mesh, PrepareOn, Renderer, Sequence,
+    mesh, retroarch, PrepareOn, Renderer, Sequence,
 };
 use image::{DynamicImage, ImageOutputFormat};
 use std::{
@@ -62,6 +62,14 @@ enum Command {
         #[arg(long)]
         general: bool,
     },
+    /// Write looks as RetroArch shader presets into a NEW directory: the shipped looks, or
+    /// your own, each given as NAME=SETTINGS.json.
+    ExportRetroarch {
+        #[arg(short, long)]
+        output_dir: PathBuf,
+        #[arg(long = "look", value_name = "NAME=SETTINGS.json")]
+        looks: Vec<String>,
+    },
     /// Validate original meshes or export all attributes to portable JSON.
     InspectMeshes {
         #[arg(long)]
@@ -119,6 +127,28 @@ fn main() -> Result<()> {
             };
             let mut file = new_file(&output)?;
             file.write_all(serde_json::to_string_pretty(&c)?.as_bytes())?;
+        }
+        Command::ExportRetroarch { output_dir, looks } => {
+            let looks = if looks.is_empty() {
+                retroarch::shipped()
+            } else {
+                looks
+                    .iter()
+                    .map(|look| {
+                        let (name, path) = look
+                            .split_once('=')
+                            .context("Give each look as NAME=SETTINGS.json")?;
+                        let bytes =
+                            fs::read(path).with_context(|| format!("Cannot read {path}"))?;
+                        Ok((name.to_string(), Config::from_json_slice(&bytes)?))
+                    })
+                    .collect::<Result<_>>()?
+            };
+            let looks: Vec<_> = looks.iter().map(|(name, c)| (name.as_str(), c)).collect();
+            retroarch::write(&output_dir, &retroarch::export(&looks)?)?;
+            for (name, _) in &looks {
+                println!("{}", output_dir.join(format!("{name}.slangp")).display());
+            }
         }
         Command::InspectMeshes { export_dir } => {
             if let Some(ref dir) = export_dir {

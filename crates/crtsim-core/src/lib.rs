@@ -5,6 +5,7 @@ pub mod input;
 pub mod mesh;
 pub mod nes_luts;
 pub mod palette;
+pub mod retroarch;
 mod sequence;
 pub mod settings;
 #[cfg(test)]
