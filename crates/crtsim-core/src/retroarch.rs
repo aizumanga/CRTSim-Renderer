@@ -5,7 +5,7 @@
 //! The port draws what the renderer draws, pass for pass, at the size the host gives it: the
 //! core's own picture is the signal, and the screen is the viewport. What the port leaves to
 //! RetroArch -- resizing, source edits, the export size and warm-up -- a preset does not hold.
-//! Until the bezel is ported, every look is drawn screen-only.
+//! The bezel is drawn from the same baked images the renderer draws it from (see `bezel`).
 
 use crate::config::{ColorMode, Config, Fit, MaskRepeats, Phase};
 use crate::settings::{Control, SETTINGS};
@@ -36,8 +36,8 @@ const SOURCES: &[(&str, &str)] = &[
         include_str!("../../../ports/retroarch/composite.slang"),
     ),
     (
-        "glass.slang",
-        include_str!("../../../ports/retroarch/glass.slang"),
+        "surface.slang",
+        include_str!("../../../ports/retroarch/surface.slang"),
     ),
     (
         "bloom-down.slang",
@@ -102,6 +102,14 @@ pub fn export(looks: &[(&str, &Config)]) -> Result<Vec<File>> {
             &strip(&identity_table()),
         )?,
     ];
+    let bezel = crate::bezel::maps()?;
+    for (name, image) in [
+        ("shape", &bezel.shape),
+        ("uv", &bezel.uv),
+        ("normal", &bezel.normal),
+    ] {
+        files.push(png(&format!("{SHADERS}/bezel-{name}.png"), image)?);
+    }
     files.extend(
         SOURCES
             .iter()
@@ -185,6 +193,11 @@ const NUMBERS: &[(&str, &[&str])] = &[
     ("specular", &["CRTSIM_SPECULAR"]),
     ("specular_power", &["CRTSIM_SPECULAR_POWER"]),
     ("rim", &["CRTSIM_RIM"]),
+    ("reflection", &["CRTSIM_REFLECTION"]),
+    (
+        "frame_color",
+        &["CRTSIM_BEZEL_R", "CRTSIM_BEZEL_G", "CRTSIM_BEZEL_B"],
+    ),
     (
         "light_position",
         &["CRTSIM_LIGHT_X", "CRTSIM_LIGHT_Y", "CRTSIM_LIGHT_Z"],
@@ -265,6 +278,12 @@ fn parameters() -> Vec<Parameter> {
             step: 0.01,
             value: Value::Derived(|_| 4. / 3.),
         },
+        choice(
+            "CRTSIM_SCREEN_ONLY",
+            "Screen only, without the bezel (off, on)",
+            1.,
+            |c| flag(c.screen_only),
+        ),
         choice(
             "CRTSIM_MASK_ANTIALIAS",
             "Filter mask when shrinking (off, on)",
@@ -370,10 +389,13 @@ fn pragmas() -> String {
 
 /// The textures a preset loads. None may share a parameter's name: RetroArch and librashader
 /// read a preset's `NAME = value` lines by name alone, so a clash turns one into the other.
-const TEXTURES: [&str; 3] = [
+const TEXTURES: [&str; 6] = [
     "CRTSIM_COLOUR_TABLE",
     "CRTSIM_ARTIFACT_PATTERN",
     "CRTSIM_SHADOW_MASK",
+    "CRTSIM_BEZEL_SHAPE",
+    "CRTSIM_BEZEL_UV",
+    "CRTSIM_BEZEL_NORMAL",
 ];
 
 /// A pass of the preset: its shader and how RetroArch sizes, stores and samples it.
@@ -404,8 +426,8 @@ const PASSES: &[Pass] = &[
         surface: false,
     },
     Pass {
-        shader: "glass.slang",
-        alias: Some("CRTSIM_GLASS"),
+        shader: "surface.slang",
+        alias: Some("CRTSIM_SURFACE"),
         scale: Some(("viewport", 1.)),
         linear: true,
         surface: true,
@@ -471,6 +493,17 @@ fn preset(c: &Config, table: &str) -> String {
     line("CRTSIM_SHADOW_MASK_linear = true".into());
     line("CRTSIM_SHADOW_MASK_mipmap = true".into());
     line("CRTSIM_SHADOW_MASK_wrap_mode = repeat".into());
+    // The bezel's images are read texel by texel, and the shape filtered as well, for the
+    // depth's high byte a ray steps on.
+    for (name, file, filtered) in [
+        ("CRTSIM_BEZEL_SHAPE", "bezel-shape.png", true),
+        ("CRTSIM_BEZEL_UV", "bezel-uv.png", false),
+        ("CRTSIM_BEZEL_NORMAL", "bezel-normal.png", false),
+    ] {
+        line(format!("{name} = {SHADERS}/{file}"));
+        line(format!("{name}_linear = {filtered}"));
+        line(format!("{name}_wrap_mode = clamp_to_edge"));
+    }
     let parameters = parameters();
     line(String::new());
     line(format!(
@@ -585,7 +618,7 @@ mod tests {
             for word in source.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
                 let is_texture = TEXTURES.contains(&word)
                     || word.starts_with("CRTSIM_SIGNAL")
-                    || word == "CRTSIM_GLASS";
+                    || word == "CRTSIM_SURFACE";
                 if word.starts_with("CRTSIM_") && !is_texture {
                     assert!(names.contains(&word), "{shader} reads {word}, not declared");
                 }

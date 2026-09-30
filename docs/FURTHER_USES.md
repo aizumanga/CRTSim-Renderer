@@ -7,8 +7,7 @@ How the simulation could run outside this app, and what each route needs from th
 - **The effect is a short chain of GPU passes** in `shaders/crtsim.wgsl`, run by `crtsim-core`:
   1. Prepare (`prepare.wgsl`): resize, crop, LUT or palette, grade.
   2. Composite, at signal size. It reads the previous tick's output, which gives persistence.
-  3. The curved glass, ray-traced in a full-screen pass, and the bezel mesh, drawn with depth at
-     output size.
+  3. The curved glass and its bezel, ray-traced together in one full-screen pass at output size.
   4. Bloom, down then up.
   5. Present.
 
@@ -119,7 +118,7 @@ glass made full-screen as their reference ([ADR 3](adr/0003-games-get-shader-por
 | --- | --- | --- |
 | 1 | `Renderer::encode`, a persistent uniform buffer, no waits; upgrade wgpu and eframe | Everything below. The app's preview gets faster too. |
 | 2 | `crtsim-web` with an image and webcam demo page | The widest audience, with WGSL as it is. |
-| 3 | Baked mesh textures and a full-screen-only variant, checked against the goldens | Every engine without mesh support. |
+| 3 | ~~Baked mesh textures and a full-screen-only variant, checked against the goldens~~ Done: the glass is ray-traced and the bezel baked, in one full-screen pass | Every engine without mesh support. |
 | 4 | RetroArch slang preset, then ReShade | Emulators and existing PC games. |
 | 5 | Bevy plugin; OBS filter | Rust games; live streams. |
 

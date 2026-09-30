@@ -131,7 +131,7 @@ struct App {
     history: model::History,
     input: Arc<RgbaImage>,
     source_name: String,
-    /// Where the source is on disk; none for the test card.
+    /// Where the source is on disk; none for the test cards.
     source_path: Option<PathBuf>,
     original: TextureHandle,
     rendered: Option<Displayed>,
@@ -428,6 +428,13 @@ impl App {
         let card = config::test_card();
         self.set_source(None, "Built-in test card".into(), None, card.clone(), &card);
     }
+    /// Opens the video test card at `frame`. It is drawn rather than read, so it opens as an
+    /// animation does, without a file or FFmpeg.
+    fn show_video_test_card(&mut self, frame: u64) {
+        let video = crtsim_media::test_clip();
+        let frames = video.frames.unwrap_or(1);
+        self.request_video(video.path.clone(), frame, Some((video, frames)));
+    }
     fn load(&mut self, path: PathBuf) {
         self.stop_playback();
         if path
@@ -454,6 +461,21 @@ impl App {
         self.send(Job::Load(path));
     }
     fn load_video(&mut self, path: PathBuf, frame: u64, reuse: bool) {
+        let cached = self
+            .timeline
+            .as_ref()
+            .filter(|_| reuse)
+            .map(|t| (t.video.clone(), t.frames));
+        self.request_video(path, frame, cached);
+    }
+    /// Loads `frame` of the video at `path`, or of `cached`, a video already probed, with its
+    /// frame count.
+    fn request_video(
+        &mut self,
+        path: PathBuf,
+        frame: u64,
+        cached: Option<(crtsim_media::Video, u64)>,
+    ) {
         self.stop_playback();
         let cancel = Arc::new(AtomicBool::new(false));
         self.work = Work::Loading(Some(cancel.clone()));
@@ -461,11 +483,7 @@ impl App {
         self.send(Job::LoadVideo {
             path,
             frame,
-            cached: self
-                .timeline
-                .as_ref()
-                .filter(|_| reuse)
-                .map(|t| (t.video.clone(), t.frames)),
+            cached,
             cancel,
         });
     }

@@ -1,5 +1,5 @@
 #version 450
-// CC0. The glass with its bloom added, encoded for the display.
+// CC0. The glass and bezel with their bloom added, encoded for the display.
 
 #include "parameters.inc"
 
@@ -24,11 +24,11 @@ void main() {
 layout(location = 0) in vec2 vTexCoord;
 layout(location = 0) out vec4 FragColor;
 layout(set = 0, binding = 2) uniform sampler2D Source;
-layout(set = 0, binding = 3) uniform sampler2D CRTSIM_GLASS;
+layout(set = 0, binding = 3) uniform sampler2D CRTSIM_SURFACE;
 
 void main() {
     bool linear = global.CRTSIM_LINEAR > 0.5;
-    vec3 base = textureLod(CRTSIM_GLASS, vTexCoord, 0.0).rgb;
+    vec3 base = textureLod(CRTSIM_SURFACE, vTexCoord, 0.0).rgb;
     vec3 blurred = textureLod(Source, vTexCoord, 0.0).rgb;
     float lum = display_luma(blurred, linear);
     vec3 colored = blurred / max(lum, 0.000001) * pow(max(lum, 0.0), global.CRTSIM_BLOOM_POWER);

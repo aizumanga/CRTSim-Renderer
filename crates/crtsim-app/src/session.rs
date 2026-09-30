@@ -1,10 +1,10 @@
 //! The session: the project the app saves every two seconds and offers to recover on the next
 //! start, and the project files opened and saved during it.
-use crate::{app_data, project, App, Dialog};
+use crate::{app_data, project, timeline::Timeline, App, Dialog};
 use anyhow::Result;
 use app_data::Store;
 use eframe::egui;
-use project::Project;
+use project::{BuiltIn, Project};
 use std::{path::PathBuf, time::Duration};
 use web_time::Instant;
 
@@ -140,6 +140,16 @@ impl App {
                 .source_path
                 .clone()
                 .filter(|_| !cfg!(target_arch = "wasm32")),
+            // A built-in source opens again anywhere, a browser included.
+            built_in: if self
+                .timeline
+                .as_ref()
+                .is_some_and(Timeline::is_video_test_card)
+            {
+                BuiltIn::VideoTestCard
+            } else {
+                BuiltIn::TestCard
+            },
             frame: self.timeline.as_ref().map_or(0, |t| t.shown),
             config: self.config.clone(),
             options: self.video_options.clone(),
@@ -211,6 +221,10 @@ impl App {
             } else {
                 self.load(source.clone());
             }
+        } else if p.built_in == BuiltIn::VideoTestCard {
+            let frame = p.frame.min(crtsim_core::test_clip::FRAMES - 1);
+            self.session.restoring(p);
+            self.show_video_test_card(frame);
         } else {
             self.show_test_card();
             self.apply_project(p);
@@ -294,6 +308,7 @@ mod tests {
         Project {
             version: 1,
             source: None,
+            built_in: BuiltIn::TestCard,
             frame,
             config: crtsim_core::config::Config::general(),
             options: Default::default(),
@@ -358,6 +373,61 @@ mod tests {
         let mut next = Session::default();
         next.load(&store, false);
         assert_eq!(next.recent(), expected);
+    }
+
+    /// The video test card opens without a file, plays, and a project saved with it opens it
+    /// again at the same frame rather than looking for a file.
+    #[test]
+    #[ignore = "requires a Vulkan adapter"]
+    fn the_video_test_card_plays_and_a_project_opens_it_again() {
+        use crate::{worker, Smoke};
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let open = || {
+            App::new(
+                &ctx,
+                worker::Gpu::Own(wgpu::Backends::VULKAN),
+                Ok(Store::temporary()),
+                None,
+                Some(Smoke::new("unused-smoke.png".into())),
+            )
+        };
+        let started = Instant::now();
+        let waited = |app: &mut App| {
+            app.receive(&ctx);
+            assert!(app.error.is_none(), "{:?}", app.error);
+            assert!(started.elapsed() < Duration::from_secs(180), "stalled");
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        let mut app = open();
+        app.show_video_test_card(540);
+        while !app.work.is_idle() {
+            waited(&mut app);
+        }
+        assert_eq!(app.source_name, "Video test card");
+        assert_eq!(app.source_path, None);
+        assert_eq!(*app.input, crtsim_core::test_clip::frame(540));
+        app.config.output = "320x240".into();
+        app.config.warmup = 3;
+        let project = dir.path().join("clip.crtsim");
+        app.save_project_file(project.clone());
+        // The last second plays to the end.
+        app.start_playback();
+        while app.playback.is_some() {
+            app.tick_playback(&ctx);
+            waited(&mut app);
+        }
+        assert_eq!(app.status, "Playback finished");
+        assert!(app.timeline.as_ref().unwrap().shown > 580);
+
+        let mut reopened = open();
+        reopened.open_project(project);
+        while reopened.timeline.is_none() || !reopened.work.is_idle() {
+            waited(&mut reopened);
+        }
+        assert_eq!(reopened.source_name, "Video test card");
+        assert_eq!(reopened.timeline.as_ref().unwrap().shown, 540);
+        assert_eq!(reopened.config.output, "320x240");
     }
 
     #[test]

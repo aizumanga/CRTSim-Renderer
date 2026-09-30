@@ -18,10 +18,30 @@ const MAX_BYTES: u64 = 64 * 1024 * 1024;
 pub struct Project {
     pub(crate) version: u32,
     pub(crate) source: Option<PathBuf>,
+    /// What stands in for a source file when there is none.
+    #[serde(default, skip_serializing_if = "BuiltIn::is_test_card")]
+    pub(crate) built_in: BuiltIn,
     pub(crate) frame: u64,
     pub(crate) config: Config,
     pub(crate) options: Options,
     pub(crate) queue: Vec<batch::Item>,
+}
+
+/// A source the app makes itself, which a project without a source file opens.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BuiltIn {
+    /// The test card, as every project without a source opened before there was a choice.
+    /// Left out of the file, so such projects are saved as they always were.
+    #[default]
+    TestCard,
+    VideoTestCard,
+}
+
+impl BuiltIn {
+    fn is_test_card(&self) -> bool {
+        *self == Self::TestCard
+    }
 }
 
 /// Reads and checks the project at `path`. Paths saved relative to it are resolved against
@@ -87,6 +107,7 @@ mod tests {
         let p = Project {
             version: 1,
             source: Some("input.png".into()),
+            built_in: BuiltIn::TestCard,
             frame: 7,
             config: c.clone(),
             options: Options::default(),
@@ -113,5 +134,29 @@ mod tests {
         bad.version = 99;
         save(&path, &bad).unwrap();
         assert!(read(&path).is_err());
+    }
+
+    #[test]
+    fn a_project_of_the_video_test_card_says_so_and_others_are_saved_as_before() {
+        let project = |built_in| Project {
+            version: 1,
+            source: None,
+            built_in,
+            frame: 150,
+            config: Config::general(),
+            options: Options::default(),
+            queue: vec![],
+        };
+        let card = to_bytes(&project(BuiltIn::TestCard)).unwrap();
+        assert!(!String::from_utf8(card.clone())
+            .unwrap()
+            .contains("built_in"));
+        let clip = to_bytes(&project(BuiltIn::VideoTestCard)).unwrap();
+        assert!(String::from_utf8(clip.clone())
+            .unwrap()
+            .contains(r#""built_in": "video-test-card""#));
+        for (bytes, built_in) in [(card, BuiltIn::TestCard), (clip, BuiltIn::VideoTestCard)] {
+            assert_eq!(parse(&bytes, Path::new(".")).unwrap(), project(built_in));
+        }
     }
 }

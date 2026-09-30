@@ -13,7 +13,7 @@ struct Params {
     light: vec4<f32>,
     camera: vec4<f32>,
     bloom: vec4<f32>, // amount, power, spread, unused
-    processing: vec4<f32>, // linear-light surface/bloom path, interlaced, field scanned this tick
+    processing: vec4<f32>, // linear-light surface/bloom path, interlaced, field scanned this tick, screen only
 };
 @group(0) @binding(0) var<uniform> p: Params;
 @group(0) @binding(1) var source: texture_2d<f32>;
@@ -70,20 +70,11 @@ fn display_luma(c: vec3<f32>) -> f32 {
     return vec4(clamp(color,vec3(0.),vec3(1.)),1.);
 }
 
-struct MeshInput {
-    @location(0) position: vec3<f32>, @location(1) normal: vec3<f32>,
-    @location(2) color: vec4<f32>, @location(3) uv: vec2<f32>, @location(4) reflection: f32,
-};
+// A point of the glass or the bezel, with what shading it needs.
 struct Surface {
-    @builtin(position) position: vec4<f32>, @location(0) normal: vec3<f32>,
-    @location(1) color: vec4<f32>, @location(2) uv: vec2<f32>,
-    @location(3) reflection: f32, @location(4) camera: vec3<f32>, @location(5) light: vec3<f32>,
+    normal: vec3<f32>, color: vec4<f32>, uv: vec2<f32>,
+    reflection: f32, camera: vec3<f32>, light: vec3<f32>,
 };
-@vertex fn mesh(v: MeshInput) -> Surface {
-    var o: Surface; o.position=p.mvp*vec4(v.position,1.); o.normal=v.normal;
-    o.color=v.color; o.uv=v.uv; o.reflection=v.reflection;
-    o.camera=p.camera.xyz-v.position; o.light=p.light.xyz-v.position; return o;
-}
 // Reproduce D3D9's black border including bilinear filtering at the boundary.
 fn border_load(xy: vec2<i32>) -> vec3<f32> {
     let sz=vec2<i32>(textureDimensions(source));
@@ -97,12 +88,15 @@ fn black_border(uv: vec2<f32>) -> vec3<f32> {
     return mix(mix(border_load(xy),border_load(xy+vec2(1,0)),f.x),
         mix(border_load(xy+vec2(0,1)),border_load(xy+vec2(1,1)),f.x),f.y);
 }
-fn crt(uv: vec2<f32>, bezel: bool) -> vec3<f32> {
+// The signal on the glass at `uv`, through the mask; `across` and `down` are how uv changes
+// from one pixel to the next, which say how small the mask is drawn.
+fn crt(uv: vec2<f32>, across: vec2<f32>, down: vec2<f32>, bezel: bool) -> vec3<f32> {
     let scaled=(uv-vec2(0.5))*p.geometry.xy+vec2(0.5);
     let density=p.mask.xy*select(vec2(1.),vec2(1.,0.5),bezel);
     let mask_uv=scaled*density;
     let texels=vec2<f32>(textureDimensions(mask_tex));
-    let footprint=max(length(dpdx(mask_uv)*texels),length(dpdy(mask_uv)*texels));
+    let scale=p.geometry.xy*density*texels;
+    let footprint=max(length(across*scale),length(down*scale));
     let lod=select(0.,max(log2(max(footprint,0.000001)),0.),p.surface.w>0.5);
     var grid=textureSampleLevel(mask_tex,linear_repeat,mask_uv,lod).rgb;
     grid=mix(vec3(1.),grid+vec3(p.mask.z),p.mask.w);
@@ -116,13 +110,13 @@ fn safe_normalize(v: vec3<f32>) -> vec3<f32> {
     if dot(v,v)<0.000000000001 { return vec3(0.); }
     return normalize(v);
 }
-fn shade(v: Surface, bezel: bool) -> vec4<f32> {
+fn shade(v: Surface, across: vec2<f32>, down: vec2<f32>, bezel: bool) -> vec4<f32> {
     let n=safe_normalize(v.normal); let cam=safe_normalize(v.camera); let light=safe_normalize(v.light);
     let diffuse=max(dot(n,light),0.);
     let halfvec=safe_normalize(light+cam);
     let spec=pow(max(dot(n,halfvec),0.),p.lighting.z);
     let fres=pow(1.-dot(cam,n),2.)*p.lighting.w;
-    var color=crt(v.uv,bezel);
+    var color=crt(v.uv,across,down,bezel);
     if bezel {
         let hemi=(dot(n,vec3(0.,0.,1.))*0.5+0.5)*0.4+0.3;
         let bezel_color=select(p.bezel.rgb,srgb_decode(p.bezel.rgb),p.processing.x>0.5);
@@ -136,38 +130,144 @@ fn shade(v: Surface, bezel: bool) -> vec4<f32> {
 }
 // The screen's glass, ray-traced rather than drawn as the original's mesh, which was a cap of
 // this sphere: its UVs, normals, rounded outline and darkened edges are all functions of where
-// a ray meets it. A host that can only draw full-screen passes draws it the same way.
+// a ray meets it.
 const GLASS_CENTRE = vec3(4.,0.,0.);
 const GLASS_RADIUS = 4.;
 // The outline is a superellipse in UV space; its edge shading follows the same curves inward.
 const GLASS_CORNER = 11.54;
-struct Glass { @builtin(frag_depth) depth: f32, @location(0) color: vec4<f32> };
-@fragment fn glass(q: Quad) -> Glass {
+// The bezel, baked from its mesh seen straight on (crtsim-core's bezel module): a depth for
+// each point across it, and what the mesh holds there, 16-bit values split over two channels.
+@group(0) @binding(9) var bezel_shape: texture_2d<f32>;
+@group(0) @binding(10) var bezel_uv: texture_2d<f32>;
+@group(0) @binding(11) var bezel_normal: texture_2d<f32>;
+const BEZEL_HALF = vec2(1.6533334,1.32);
+const BEZEL_NEAR = -0.1;
+const BEZEL_FAR = 0.33;
+const BEZEL_OPENING = vec2(1.24,0.95);
+// Steps across the bezel's depth, then halvings of the step a ray first passes the surface in.
+const BEZEL_STEPS = 32;
+const BEZEL_HALVINGS = 7;
+const NOTHING = 1e9;
+
+fn pair(hi: f32, lo: f32) -> f32 { return (round(hi*255.)*256.+round(lo*255.))/65534.; }
+// Where (y, z) falls on the bezel's grid, in texels.
+fn bezel_texel(yz: vec2<f32>) -> vec2<f32> {
+    let size=vec2<f32>(textureDimensions(bezel_shape));
+    return (BEZEL_HALF-yz)/(2.*BEZEL_HALF)*size-vec2(0.5);
+}
+fn bezel_load(t: texture_2d<f32>, xy: vec2<i32>) -> vec4<f32> {
+    let size=vec2<i32>(textureDimensions(t));
+    return textureLoad(t,clamp(xy,vec2(0),size-vec2(1)),0);
+}
+fn bezel_depth_at(xy: vec2<i32>) -> f32 {
+    let size=vec2<i32>(textureDimensions(bezel_shape));
+    let texel=bezel_load(bezel_shape,xy);
+    let empty=any(xy<vec2(0)) || any(xy>=size) || (texel.r>0.999 && texel.g>0.999);
+    return select(mix(BEZEL_NEAR,BEZEL_FAR,pair(texel.r,texel.g)),NOTHING,empty);
+}
+// The bezel's depth at (y, z), blended between texels; nothing where any of them is empty.
+fn bezel_depth(yz: vec2<f32>) -> f32 {
+    let t=bezel_texel(yz); let xy=vec2<i32>(floor(t)); let f=fract(t);
+    let a=bezel_depth_at(xy); let b=bezel_depth_at(xy+vec2(1,0));
+    let c=bezel_depth_at(xy+vec2(0,1)); let d=bezel_depth_at(xy+vec2(1,1));
+    let blended=mix(mix(a,b,f.x),mix(c,d,f.x),f.y);
+    return select(blended,NOTHING,max(max(a,b),max(c,d))>=NOTHING);
+}
+// Each image's texels decoded, blended between texels at (y, z).
+fn bezel_pairs(t: texture_2d<f32>, yz: vec2<f32>) -> vec2<f32> {
+    let g=bezel_texel(yz); let xy=vec2<i32>(floor(g)); let f=fract(g);
+    let decode=array(bezel_load(t,xy),bezel_load(t,xy+vec2(1,0)),bezel_load(t,xy+vec2(0,1)),
+        bezel_load(t,xy+vec2(1,1)));
+    var v: array<vec2<f32>,4>;
+    for (var i=0; i<4; i++) { v[i]=vec2(pair(decode[i].r,decode[i].g),pair(decode[i].b,decode[i].a)); }
+    return mix(mix(v[0],v[1],f.x),mix(v[2],v[3],f.x),f.y);
+}
+fn bezel_bytes(yz: vec2<f32>) -> vec2<f32> {
+    let g=bezel_texel(yz); let xy=vec2<i32>(floor(g)); let f=fract(g);
+    let a=bezel_load(bezel_shape,xy).ba; let b=bezel_load(bezel_shape,xy+vec2(1,0)).ba;
+    let c=bezel_load(bezel_shape,xy+vec2(0,1)).ba; let d=bezel_load(bezel_shape,xy+vec2(1,1)).ba;
+    return mix(mix(a,b,f.x),mix(c,d,f.x),f.y);
+}
+// The point a ray from the camera along `ray` meets at depth x.
+fn along(ray: vec3<f32>, x: f32) -> vec3<f32> {
+    return p.camera.xyz+ray*((x-p.camera.x)/ray.x);
+}
+// Where the ray first meets the bezel, NOTHING when it does not: stepping across its depths on
+// the depth's high byte, filtered by the sampler, then halving the step it passed the surface
+// in on the full depth. It takes no derivatives, so it may stop at the first step inside.
+fn bezel_hit(ray: vec3<f32>) -> f32 {
+    let step=(BEZEL_FAR-BEZEL_NEAR)/f32(BEZEL_STEPS);
+    let size=vec2<f32>(textureDimensions(bezel_shape));
+    var before=BEZEL_NEAR-step; var after=NOTHING;
+    for (var i=0; i<=BEZEL_STEPS; i++) {
+        let x=BEZEL_NEAR+step*f32(i);
+        let at=(bezel_texel(along(ray,x).yz)+vec2(0.5))/size;
+        let coarse=mix(BEZEL_NEAR,BEZEL_FAR,
+            textureSampleLevel(bezel_shape,linear_clamp,at,0.).r*255.*256./65534.);
+        if x>=coarse && all(at>=vec2(0.)) && all(at<=vec2(1.)) { after=x; break; }
+        before=x;
+    }
+    var low=before; var high=after;
+    for (var i=0; i<BEZEL_HALVINGS; i++) {
+        let middle=0.5*(low+high);
+        let inside=middle>=bezel_depth(along(ray,middle).yz);
+        high=select(high,middle,inside);
+        low=select(middle,low,inside);
+    }
+    let found=after<NOTHING && bezel_depth(along(ray,high).yz)<NOTHING;
+    return select(NOTHING,high,found);
+}
+// Whether a ray can meet the bezel at all: not if it stays within the opening's clear box
+// across the bezel's whole depth.
+fn may_meet_bezel(ray: vec3<f32>) -> bool {
+    let near=abs(along(ray,BEZEL_NEAR).yz); let far=abs(along(ray,BEZEL_FAR).yz);
+    return any(max(near,far)>=BEZEL_OPENING);
+}
+// The glass and its bezel, each pixel showing whichever its ray meets first.
+@fragment fn surface(q: Quad) -> @location(0) vec4<f32> {
     let ndc=vec2(q.position.x/p.size.z*2.-1.,1.-q.position.y/p.size.w*2.);
     // The camera looks along +x from 1/tan(fov/2) in front, with z up and -y to the right.
     let spread=-1./p.camera.x;
     let ray=normalize(vec3(1.,-ndc.x*spread*p.size.z/p.size.w,ndc.y*spread));
+
     let to=p.camera.xyz-GLASS_CENTRE;
     let b=dot(to,ray);
     let reach=b*b-dot(to,to)+GLASS_RADIUS*GLASS_RADIUS;
-    let hit=p.camera.xyz+ray*(-b-sqrt(max(reach,0.)));
-    var v: Surface;
-    v.uv=vec2((4./3.-hit.y)*0.375,(1.-hit.z)*0.5);
-    let edge=abs(v.uv*2.-vec2(1.));
+    let glass_at=p.camera.xyz+ray*(-b-sqrt(max(reach,0.)));
+    var glass: Surface;
+    glass.uv=vec2((4./3.-glass_at.y)*0.375,(1.-glass_at.z)*0.5);
+    let edge=abs(glass.uv*2.-vec2(1.));
     let radius=pow(pow(edge.x,GLASS_CORNER)+pow(edge.y,GLASS_CORNER),1./GLASS_CORNER);
-    v.normal=(hit-GLASS_CENTRE)/GLASS_RADIUS;
-    v.color=vec4(vec3(1.-0.5*pow(radius,6.)),1.);
-    v.reflection=0.;
-    v.camera=p.camera.xyz-hit; v.light=p.light.xyz-hit;
-    var o: Glass;
-    o.color=shade(v,false);
-    // A ray that misses the glass lies at the far plane, which the depth test turns away, so
-    // everything above stays in uniform control flow for the mask's derivatives.
-    let clip=p.mvp*vec4(hit,1.);
-    o.depth=select(clip.z/clip.w,1.,reach<0. || radius>1.);
-    return o;
+    glass.normal=(glass_at-GLASS_CENTRE)/GLASS_RADIUS;
+    glass.color=vec4(vec3(1.-0.5*pow(radius,6.)),1.);
+    glass.reflection=0.;
+    glass.camera=p.camera.xyz-glass_at; glass.light=p.light.xyz-glass_at;
+    let glass_depth=select(glass_at.x,NOTHING,reach<0. || radius>1.);
+
+    // Only rays that may meet the bezel step across it. Nothing here takes a derivative, so
+    // the branch leaves the mask's derivatives below defined.
+    var bezel_depth=NOTHING;
+    if p.processing.w<0.5 && may_meet_bezel(ray) { bezel_depth=bezel_hit(ray); }
+    let bezel_at=along(ray,min(bezel_depth,BEZEL_FAR));
+    var bezel: Surface;
+    bezel.uv=bezel_pairs(bezel_uv,bezel_at.yz);
+
+    // How each surface's uv changes between pixels, taken here, where every pixel runs, so
+    // that each pixel need only shade the surface it shows.
+    let glass_across=dpdx(glass.uv); let glass_down=dpdy(glass.uv);
+    let bezel_across=dpdx(bezel.uv); let bezel_down=dpdy(bezel.uv);
+    if bezel_depth<glass_depth {
+        let facing=bezel_pairs(bezel_normal,bezel_at.yz)*2.-vec2(1.);
+        bezel.normal=vec3(-sqrt(max(1.-dot(facing,facing),0.)),facing);
+        let bytes=bezel_bytes(bezel_at.yz);
+        bezel.color=vec4(vec3(bytes.x),1.);
+        bezel.reflection=bytes.y;
+        bezel.camera=p.camera.xyz-bezel_at; bezel.light=p.light.xyz-bezel_at;
+        return shade(bezel,bezel_across,bezel_down,true);
+    }
+    if glass_depth<NOTHING { return shade(glass,glass_across,glass_down,false); }
+    return vec4(0.,0.,0.,1.);
 }
-@fragment fn bezel(v: Surface) -> @location(0) vec4<f32> { return shade(v,true); }
 
 fn blur(uv: vec2<f32>, swap: bool) -> vec4<f32> {
     var offsets=array<vec2<f32>,7>(vec2(0.,0.),vec2(0.,1.),vec2(0.,-1.),

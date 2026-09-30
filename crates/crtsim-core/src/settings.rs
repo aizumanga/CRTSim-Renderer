@@ -327,8 +327,12 @@ pub static SETTINGS: &[Setting] = &[
     ),
     Setting::numbers(
         "frame_color",
-        "Frame color",
-        Numbers::color(Lighting, access!(frame_color)),
+        "Bezel color",
+        Numbers::color(Lighting, access!(frame_color)).named(&[
+            "Bezel red",
+            "Bezel green",
+            "Bezel blue",
+        ]),
     ),
     Setting::numbers(
         "diffuse",

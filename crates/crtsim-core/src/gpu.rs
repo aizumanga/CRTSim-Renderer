@@ -1,7 +1,6 @@
-//! GPU building blocks the passes share: render targets, reading them back, the meshes, and the
+//! GPU building blocks the passes share: render targets, reading them back, and the
 //! textures loaded once per renderer.
 
-use crate::mesh;
 use anyhow::{ensure, Context, Result};
 use image::RgbaImage;
 
@@ -147,35 +146,6 @@ impl Readback {
         drop(mapped);
         self.buffer.unmap();
         RgbaImage::from_raw(target.width, target.height, pixels).context("invalid readback length")
-    }
-}
-
-pub(crate) struct GpuMesh {
-    pub vertices: wgpu::Buffer,
-    pub indices: wgpu::Buffer,
-    pub count: u32,
-}
-
-impl GpuMesh {
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, bytes: &[u8]) -> Result<Self> {
-        let m = mesh::Mesh::read(bytes)?;
-        Ok(Self {
-            vertices: filled(
-                device,
-                queue,
-                "mesh vertices",
-                bytemuck::cast_slice(&m.vertices),
-                wgpu::BufferUsages::VERTEX,
-            ),
-            indices: filled(
-                device,
-                queue,
-                "mesh indices",
-                bytemuck::cast_slice(&m.indices),
-                wgpu::BufferUsages::INDEX,
-            ),
-            count: m.indices.len() as u32,
-        })
     }
 }
 

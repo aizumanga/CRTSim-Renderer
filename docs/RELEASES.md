@@ -1,5 +1,17 @@
 # Portable releases (Phase 4)
 
+## v0.9.0
+
+- The RetroArch presets draw the bezel, as the app does: the curved glass and its bezel, lit, with the screen's
+  picture reflected in the bezel's edge. **Screen only**, the bezel's colour and its edge reflection are preset
+  settings now.
+- **File → Video test card** plays ten seconds of original pixel-art gameplay, drawn by the app, to see a look on
+  moving pixels before exporting it to RetroArch. It needs no file and no FFmpeg, in the desktop and web apps alike.
+- The app draws the bezel from the same baked surface as RetroArch, in one pass with the glass. Renders move by a
+  fraction of a step across the bezel, and by more on a few pixels of its outline and the screen's corners.
+- The bezel's colour setting is called **Bezel color**; presets keep its `frame_color` key and load as before.
+- A project that holds the video test card opens only in this version or later.
+
 ## v0.8.0
 
 - The CRT runs in RetroArch, over any core as it plays: `CRTSim-Renderer-v0.8.0-retroarch.zip` holds presets for

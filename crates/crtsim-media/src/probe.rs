@@ -59,6 +59,9 @@ pub enum Source {
     /// A video whose container is read here and whose frames the host decodes, as a
     /// browser does with WebCodecs.
     Demuxed(std::sync::Arc<crate::demux::Demuxed>),
+    /// The video test card, whose frames are drawn here (`crtsim_core::test_clip`). It has no
+    /// file and no other tracks.
+    TestClip,
 }
 
 impl Video {
@@ -82,7 +85,7 @@ impl Video {
                     .get(frame as usize)
                     .map_or(self.duration, |&sample| video.samples[sample].time)
             }
-            Source::Ffmpeg => frame as f64 / self.fps,
+            Source::Ffmpeg | Source::TestClip => frame as f64 / self.fps,
         }
         .min(self.duration)
     }

@@ -23,6 +23,17 @@ impl App {
                         self.show_test_card();
                         ui.close();
                     }
+                    if ui
+                        .button("Video test card")
+                        .on_hover_text(
+                            "Ten seconds of original pixel-art gameplay, to see these settings \
+                             on moving pixels.",
+                        )
+                        .clicked()
+                    {
+                        self.show_video_test_card(0);
+                        ui.close();
+                    }
                     ui.separator();
                     self.project_menu(ui, ctx);
                 });
@@ -86,7 +97,7 @@ impl App {
                         .button("RetroArch shader…")
                         .on_hover_text(
                             "These settings as a shader preset for RetroArch, drawn over a \
-                             game as it plays. The bezel is not ported yet.",
+                             game as it plays.",
                         )
                         .clicked()
                     {
