@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **NES palette** can be made **the game's** way, exactly as Super Win the Game makes it: every colour its Tint, Tint I and
+  Tint Q give matches the game's own output, as does its 32-step table, which takes the NES palette the game's art is
+  drawn in (beginning `7C7C7C 0000FC 0000BC`) onto them. The **Super Win the Game** preset uses it. **From the composite
+  signal**, the palette until now, stays for art in MAME's NES palette, and looks saved with a palette keep it.
 - **NTSC blending** works as Super Win the Game's NTSC Blending does, which the game's code shows: each tick shows half
   the setting of the other pattern, so the game's 0.35 mixes them 17.5/82.5 rather than 35/65, and 1 is their average.
   The **Super Win the Game** preset keeps 0.35 and now blends as the game does.

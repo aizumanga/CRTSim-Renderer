@@ -32,9 +32,9 @@ pub fn builtins() -> Vec<Entry> {
         entry(
             "Super Win the Game",
             "The game's own CRT options: the public reference with a 30° field of view, NTSC \
-             blending at 0.35 and its NTSC palette (Tint 5.18, I 1.75, Q 1.00). The palette's \
-             decoder stands in for the game's unpublished one; it recolours art in MAME's NES \
-             palette.",
+             blending at 0.35 and its NTSC palette (Tint 5.18, I 1.75, Q 1.00), made as the \
+             game makes it. The palette recolours art in the NES palette the game's is drawn \
+             in.",
             Config {
                 fov: 30.,
                 phase: Phase::Alternating,
@@ -132,7 +132,7 @@ pub fn builtins() -> Vec<Entry> {
         ),
         entry(
             "Warm analog",
-            "An optional hue/chroma grade, not the unpublished game palette.",
+            "An optional hue/chroma grade, not the game's NES palette.",
             Config {
                 hue: -8.,
                 chroma: 0.85,
@@ -245,8 +245,8 @@ mod tests {
         assert_eq!(game.lut_strength, 1.);
         let palette = game.palette.unwrap();
         assert_eq!(
-            (palette.tint, palette.tint_i, palette.tint_q),
-            (5.18, 1.75, 1.)
+            (palette.tint, palette.tint_i, palette.tint_q, palette.model),
+            (5.183186, 1.75, 1., crtsim_core::palette::Model::Game)
         );
         let reference = Config::default();
         assert_eq!(

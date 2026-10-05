@@ -230,6 +230,7 @@ pub static SETTINGS: &[Setting] = &[
         "Tint Q",
         Numbers::slider(Color, palette!(tint_q), 0.0..=4.).accepting((Included(0.), Included(10.))),
     ),
+    Setting::other("palette.model", "NES palette model"),
     Setting::other("color_mode", "Color processing"),
     Setting::numbers(
         "hue",

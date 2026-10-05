@@ -166,8 +166,14 @@ fn gpu_prepare_matches_cpu_prepare() {
                 c.lut_strength = next(1.).abs();
             }
         } else if case % 4 == 2 {
+            // Both models: the game's 32-step table and the signal's 64-step one.
             c.palette = Some(crate::palette::NesPalette {
                 tint: 5.18 + next(1.),
+                model: if case % 8 == 2 {
+                    crate::palette::Model::Game
+                } else {
+                    crate::palette::Model::Signal
+                },
                 ..Default::default()
             });
         }

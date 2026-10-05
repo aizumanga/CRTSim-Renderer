@@ -1,5 +1,6 @@
 pub mod bezel;
 pub mod config;
+pub mod game_palette;
 mod gpu;
 mod gpu_prepare;
 pub mod input;

@@ -156,7 +156,7 @@ pub struct Config {
     /// between the two fields, and the rows it skips only decay by `persistence`. Meant for
     /// 480- or 576-row signals, as an interlaced set drew them. Off draws every row every tick.
     pub interlace: bool,
-    /// Optional YIQ hue rotation, in degrees. Not the game's unpublished NES palette LUT.
+    /// Optional YIQ hue rotation, in degrees. Not the game's NES palette (`palette`).
     pub hue: f32,
     pub chroma: f32,
 }
@@ -537,9 +537,16 @@ mod tests {
             (5., 2., 0.5)
         );
         assert!(c.lut_in_use().unwrap().name.starts_with("NES palette"));
-        // Controls it leaves out take the game's defaults.
+        // Controls it leaves out take the game's defaults; without a model, as palettes were
+        // saved before the game's own existed, it decodes the signal.
         let c = Config::from_json_slice(br#"{"palette":{}}"#).unwrap();
-        assert_eq!(c.palette, Some(crate::palette::NesPalette::default()));
+        assert_eq!(
+            c.palette,
+            Some(crate::palette::NesPalette {
+                model: crate::palette::Model::Signal,
+                ..Default::default()
+            })
+        );
         let both = Config {
             lut: Some(std::sync::Arc::new(crate::nes_luts::load(0).unwrap())),
             ..c

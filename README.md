@@ -18,7 +18,7 @@ It is not an official product or an exact reconstruction of a commercial game's 
 - Clean/signal/full-CRT debugging and mesh validation/export without a GPU.
 - Native wgpu backends: Vulkan on Linux, DX12 on Windows and Metal on macOS.
 
-Installers and the original game's unpublished NES palette LUT are not included. A separate CC0 collection of 38 NES LUTs from MAME Goodies is included under **Color & LUT → LUT gallery…**. Platform compilation does not prove visual parity between drivers.
+Installers and files from Super Win the Game are not included; its NTSC palette is made by the app, as the game makes it. A separate CC0 collection of 38 NES LUTs from MAME Goodies is included under **Color & LUT → LUT gallery…**. Platform compilation does not prove visual parity between drivers.
 See [the implementation plan](docs/PLAN.md) and [validation notes](docs/VALIDATION.md).
 
 ## Desktop app
@@ -65,12 +65,15 @@ use it; the general-image presets keep a fixed 128 × 224 mask. Presets saved wi
 **Super Win the Game** uses the game's own CRT options on top of the public reference: a 30° field of view, **NTSC blending**
 at 0.35 and its **NTSC palette**. NTSC blending moves the two composite artifact patterns towards each other in the game's
 units, so alternating ticks mix them 17.5/82.5 and 82.5/17.5 instead of switching cleanly; 0, the default, is the public
-source's switch, and 1 shows their average on every tick. **NES palette
-from the composite signal** (Color & LUT) builds the NES palette from its signal with the game's **Tint**, **Tint I** and
-**Tint Q**, and recolours art drawn in MAME's NES palette, as the included NES LUTs expect. The game's decoder is unpublished:
-this one decodes the NES's measured signal levels, fitted to FirebrandX's Composite Direct capture, and treats the game's
-defaults as the standard decode, so it is close to the game rather than exact. **LUT strength**, the game's NTSC Palette
-slider, mixes any LUT or the palette with the original colours.
+source's switch, and 1 shows their average on every tick. **NES palette** (Color & LUT) makes the palette from the game's
+**Tint**, **Tint I** and **Tint Q**, one of two ways. **The game's** makes it exactly as Super Win the Game does, matching
+the game's own output bit for bit, and recolours art drawn in the NES palette the game's art uses (the one beginning
+`7C7C7C 0000FC 0000BC`); its table has the game's 32 steps per channel, each taking the colour of the nearest art colour.
+**From the composite signal** decodes the NES's measured signal levels instead, fitted to FirebrandX's Composite Direct
+capture, and recolours art drawn in MAME's NES palette, as the included NES LUTs expect. **LUT strength**, the game's NTSC
+Palette slider, mixes any LUT or the palette with the original colours. The game samples its table nearest in red and green
+and blended in blue; the app blends all three, which moves the game's own art colours by 0.2 steps on average and one
+of them by 9.
 **Optional color grade** rotates hue and changes chroma in YIQ before the composite simulation. Neutral values leave the prepared signal unchanged.
 It is an artistic grade, not the private NES palette LUT or a full NTSC decoder.
 **Linear light (experimental)** decodes the SDR signal for glass sampling, performs lighting and bloom with RGBA16Float intermediates,

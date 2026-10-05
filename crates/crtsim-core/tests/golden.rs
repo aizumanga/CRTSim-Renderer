@@ -382,7 +382,12 @@ fn prepare_cases(renderer: &Renderer) -> Vec<(&'static str, RgbaImage)> {
             "prepare-nes-palette",
             &mame_chart,
             Config {
-                palette: Some(Default::default()),
+                // The model for MAME's colours, which this chart is.
+                palette: Some(crtsim_core::palette::NesPalette {
+                    model: crtsim_core::palette::Model::Signal,
+                    tint: 5.18,
+                    ..Default::default()
+                }),
                 ..nearest("64x32")
             },
         ),

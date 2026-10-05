@@ -172,17 +172,36 @@ Persistence is applied once per update with no frame-time correction, as the men
 *Hypothesis:* one engine update per presented frame at 60 Hz with VSync on. Needs a capture of
 consecutive frames.
 
-### The NTSC palette (static + runtime)
+### The NTSC palette (static + runtime; fully decoded in session 2)
 
 `ConfigCallback_RebuildNTSCLUT` runs at start-up and when Tint, I or Q change:
 
-1. `PaletteGen::MakePalette(pal[256], Tint, IScalar, QScalar)` synthesises the NES palette from
-   YIQ (`FromYIQ`: R = Y + 0.9563 I + 0.621 Q, G = Y − 0.2721 I − 0.6474 Q,
-   B = Y − 1.107 I + 1.7046 Q, out-of-gamut colours scaled back toward their luma), 64 entries.
-2. `PaletteGen::MakePaletteLUT(image, pal)` reads **`nes_palette_w_trans.pal`** (RIFF PAL in
-   `Valkyrie.npk`; the familiar FCEUX-style palette starting `7C7C7C 0000FC 0000BC`) as the
-   *source* colours and builds a 32³ LUT taking each source entry to the generated one, with
-   `PaletteGen::InterpolatePoints` filling the space between.
+1. **`PaletteGen::MakePalette(pal[256], Tint, IScalar, QScalar)`** fills 64 entries, four luma
+   rows of 16, from per-row signal levels lo = (−0.117, 0, 0.308, 0.715) and
+   hi = (0.397, 0.681, 1, 1):
+   - colour `r0` is grey at hi, `rD` grey at lo, `rE`/`rF` black; entry 255 is magenta (the
+     transparency marker);
+   - colours `r1`…`rC` are hue k = 0…11 at θ = Tint + k·30°, with
+     Y = (hi + lo)/2 and chroma (I·sin θ, Q·cos θ) **normalised to unit length** and scaled by
+     hi − lo. I and Q therefore only steer each hue's direction in the IQ plane; saturation
+     comes from the row's levels alone.
+2. **`PaletteGen::FromYIQ`**: R = Y + 0.9563 I + 0.621 Q, G = Y − 0.2721 I − 0.6474 Q,
+   B = Y − 1.107 I + 1.7046 Q. While any channel exceeds 1.00001 the chroma is scaled by the
+   product of `(1 − Y)/chroma_c` over the channels above 1. Then channels are clipped to [0, 1],
+   rescaled together by `Y / luma(clipped)` to keep the luma, and converted as
+   `trunc(v·256)` clamped to 0–255.
+3. **`PaletteGen::MakePaletteLUT(image, pal)`** reads **`nes_palette_w_trans.pal`** (RIFF PAL in
+   `Valkyrie.npk`: the widely used NES palette starting `7C7C7C 0000FC 0000BC`) as the source
+   colours. Each of the 32³ cells, at levels `trunc(k/31·255)`, takes the generated colour of
+   the **nearest** of the source colours `00`…`3D`: hues 0–13 of each row, scanned hue by hue,
+   first of equal distances winning. **`InterpolatePoints` is not used**; session 1 guessed
+   wrongly from the symbol list.
+
+Session 2 checked a prototype and then the port in `crates/crtsim-core/src/game_palette.rs`
+against the game run under gdb (`scripts/palette_oracle.py`): 60 Tint/I/Q settings, every
+entry identical, and the whole default LUT identical. The port's tests pin digests of the
+game's output, so the repository holds no game data. The x87 code was traced by hand; one
+constant (the 330° step) is a unit in the last place off `f32` 330°, which the port keeps.
 
 At the defaults this is a strong grade. Over the whole LUT grid the mean change is 31–40 steps
 per channel (max 185); mid grey 131 → 101.
@@ -210,9 +229,10 @@ Game** preset (`crates/crtsim-app/src/gallery.rs`) unless a row says otherwise.
 | Bloom | 1/16 target, 7 taps, spread 0.025, `ColorPow` | same | same | match |
 | NTSC phase blend | lerp alternates `p + (0.5 − p)·0.35` = 0.175 / 0.825 | 0 / 1 | the game's formula since session 2 (was `blending` / `1 − blending` = 0.35 / 0.65 at `d833e36`) | **fixed**: was the same setting at twice the strength |
 | Phase blend without VSync | constant 0.5 | — | `Stable` phase = 0.5 | match |
-| NTSC palette: source side | `nes_palette_w_trans.pal` (FCEUX-style) | — | MAME's NES palette | **difference** |
-| NTSC palette: decoder | `MakePalette` (YIQ, Tint/I/Q) | — | measured PPU levels, fitted to FirebrandX | **difference**: mean 18.8 steps over the 55 non-black entries, renderer much less saturated (e.g. `16`: game 227,32,0, renderer 159,61,36; `2A`: 20,255,95 vs 105,215,81). Greys agree within 1 step |
-| NTSC palette: LUT | 32³, point-sampled in R and G, blue interpolated | — | 64³, trilinear, inverse-distance⁴ fill | **difference** |
+| NTSC palette: source side | `nes_palette_w_trans.pal` (`7C7C7C 0000FC …`) | — | the game's, in the **game** model since session 2 (MAME's in the signal model) | **fixed** |
+| NTSC palette: generator | `MakePalette` (YIQ, Tint/I/Q) | — | the game's, ported, in the **game** model (the signal decoder, mean 18.8 steps off at the defaults, remains as its own model) | **fixed**: bit-exact on 60 settings |
+| NTSC palette: table | 32³ nearest source colour | — | the same, in the game model | **fixed**: bit-exact at the defaults |
+| NTSC palette: sampling | point in R and G, blue interpolated | — | trilinear | **difference**: 0.2 steps on the game's art colours on average, 9 on one |
 | Final pass | `ColorPow(c, 2^−Brightness)` | — | — | match at Brightness 0 (default assumed) |
 
 A side-by-side image of the three palettes (game source, game generated, this renderer's
@@ -221,8 +241,7 @@ decoder) is left out of the repository because it is game-derived data;
 
 ## Unresolved
 
-1. **`PaletteGen::InterpolatePoints`**: how the LUT fills between palette entries. The dumped
-   LUT holds the answer at its grid points; the algorithm is not yet read.
+1. ~~How the LUT fills between palette entries~~: nearest source colour (session 2).
 2. Texture formats behind the engine's enums 1 and 2 (sRGB or not, 8-bit or not).
 3. What `NBaseGame+0x50` is (it forces `NTSCLerp` to 0.5).
 4. Whether the engine updates once per presented frame, and how parity behaves on dropped or
@@ -241,12 +260,9 @@ None of these are made yet. In order of how much they would close the gap:
    game's formula, so the setting is in the game's units and the preset's 0.35 means what the
    game's does. Unit tests check 0, 0.35 and 1; the golden case moved to 0.7, which renders the
    same image as the old 0.35.
-2. **A game-exact palette.** Port `MakePalette` and `FromYIQ` (from the disassembly, checked
-   bit-for-bit against the dumped palette at default and two non-default Tint/I/Q), take the
-   source side from the game's palette, and either port `InterpolatePoints` or, until then,
-   validate against the dumped LUT. Keep the current decoder as its own option: it answers a
-   different question (the NES's real signal), which this research does not judge. *Validate:*
-   generated palette identical to the game's; LUT within ±1 step at all 32³ grid points.
+2. **A game-exact palette.** *Done in session 2:* the **game** palette model
+   (`game_palette.rs`), used by the Super Win the Game preset; looks saved before keep the
+   signal decoder.
 3. **The game's LUT sampling**, point in R and G with blue interpolated, as an option for
    exactness. *Validate:* NTSC Frame for a 256-colour ramp image matches the game's.
 4. **Bezel overscan and mask density** to the game's values in the SWTG preset. Only visible in
@@ -273,6 +289,8 @@ scripts/configvars.py GAME/SuperGame_NFML dis.txt 0812e4f0   # ValkyrieGame::reg
 scripts/annot.py GAME/SuperGame_NFML dis.txt 08090c70 --brief # CompositeMaterial::SetParam
 scripts/capture_ntsc_lut.sh GAME out/                        # palette.bin, ntsc_lut.bin
 scripts/compare_palette.py out/palette.bin
+(cd GAME && ORACLE_OUT=$PWD/palettes.json N_PAL=53 LD_LIBRARY_PATH=. \
+    gdb -q -batch -x ../scripts/palette_oracle.py ./SuperGame_NFML)   # the 60 test settings
 ```
 
 Function addresses (`nm -C SuperGame_NFML`): `CRTBaseMaterial::SetParam` 08081c60,
