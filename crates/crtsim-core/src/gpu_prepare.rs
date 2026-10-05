@@ -13,7 +13,7 @@
 
 use crate::config::{Config, Filter};
 use crate::gpu::{self, Target, FORMAT};
-use crate::workflow::Lut;
+use crate::workflow::{Lut, Sampling};
 use bytemuck::{Pod, Zeroable};
 use image::RgbaImage;
 use std::sync::Arc;
@@ -84,7 +84,15 @@ impl Params {
             lut_min,
             lut_max,
             grade: [hue_sin, hue_cos, c.chroma, flag(c.grades())],
-            lut_strength: [c.lut_strength, 0., 0., 0.],
+            lut_strength: [
+                c.lut_strength,
+                flag(
+                    c.lut_in_use()
+                        .is_some_and(|lut| lut.sampling == Sampling::NearestRedGreen),
+                ),
+                0.,
+                0.,
+            ],
         }
     }
 }
@@ -356,6 +364,7 @@ impl Pipelines {
                     domain_min: [0.; 3],
                     domain_max: [1.; 3],
                     values: vec![[0.; 3]],
+                    sampling: Default::default(),
                 },
             ),
         }

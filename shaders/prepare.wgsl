@@ -13,7 +13,7 @@ struct Prepare {
     lut_min: vec4<f32>, // domain min, enabled
     lut_max: vec4<f32>, // domain max, size
     grade: vec4<f32>, // hue sin, cos, chroma, enabled
-    lut_strength: vec4<f32>, // share of the LUT's colour, unused
+    lut_strength: vec4<f32>, // share of the LUT's colour, nearest in red and green, unused
 };
 @group(0) @binding(0) var<uniform> p: Prepare;
 @group(0) @binding(1) var input: texture_2d<f32>;
@@ -54,9 +54,12 @@ fn apply_lut(k: vec3<f32>) -> vec3<f32> {
     let last=u32(p.lut_max.w)-1u;
     let xyz=clamp((k/255.-p.lut_min.xyz)/(p.lut_max.xyz-p.lut_min.xyz),vec3(0.),vec3(1.))
         *f32(last);
-    let lo=vec3<u32>(floor(xyz));
-    let hi=min(lo+vec3(1u),vec3(last));
-    let f=xyz-vec3<f32>(lo);
+    // Nearest in red and green, as Super Win the Game reads its palette's table, blends only
+    // blue; otherwise all three blend.
+    let nearest=p.lut_strength.y>0.5;
+    let lo=vec3<u32>(select(floor(xyz),vec3(floor(xyz.xy+vec2(0.5)),floor(xyz.z)),nearest));
+    let hi=select(min(lo+vec3(1u),vec3(last)),vec3(lo.xy,min(lo.z+1u,last)),nearest);
+    let f=select(xyz-vec3<f32>(lo),vec3(0.,0.,xyz.z-f32(lo.z)),nearest);
     var out=vec3(0.);
     for (var z=0u; z<2u; z++) {
         for (var y=0u; y<2u; y++) {

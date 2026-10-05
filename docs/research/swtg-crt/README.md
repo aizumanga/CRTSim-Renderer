@@ -232,7 +232,7 @@ Game** preset (`crates/crtsim-app/src/gallery.rs`) unless a row says otherwise.
 | NTSC palette: source side | `nes_palette_w_trans.pal` (`7C7C7C 0000FC …`) | — | the game's, in the **game** model since session 2 (MAME's in the signal model) | **fixed** |
 | NTSC palette: generator | `MakePalette` (YIQ, Tint/I/Q) | — | the game's, ported, in the **game** model (the signal decoder, mean 18.8 steps off at the defaults, remains as its own model) | **fixed**: bit-exact on 60 settings |
 | NTSC palette: table | 32³ nearest source colour | — | the same, in the game model | **fixed**: bit-exact at the defaults |
-| NTSC palette: sampling | point in R and G, blue interpolated | — | trilinear | **difference**: 0.2 steps on the game's art colours on average, 9 on one |
+| NTSC palette: sampling | point in R and G, blue interpolated | — | the same for the game's table (`Sampling::NearestRedGreen`), app and RetroArch, since session 3; trilinear for other tables | **fixed**: matches a transcription of the game's shader at every 8-bit level |
 | Final pass | `ColorPow(c, 2^−Brightness)` | — | — | match at Brightness 0 (default assumed) |
 
 A side-by-side image of the three palettes (game source, game generated, this renderer's
@@ -263,8 +263,12 @@ None of these are made yet. In order of how much they would close the gap:
 2. **A game-exact palette.** *Done in session 2:* the **game** palette model
    (`game_palette.rs`), used by the Super Win the Game preset; looks saved before keep the
    signal decoder.
-3. **The game's LUT sampling**, point in R and G with blue interpolated, as an option for
-   exactness. *Validate:* NTSC Frame for a 256-colour ramp image matches the game's.
+3. **The game's LUT sampling.** *Done in session 3:* the game's table carries
+   `Sampling::NearestRedGreen`, which the CPU and GPU prepare steps and the RetroArch port
+   honour. A test transcribes the game's `DoPost` (its texture coordinates and point
+   sampling) and matches it at every 8-bit level of each axis. With it, every art colour
+   comes out as its palette entry except grey `2D`, which the game blends 59% towards grey
+   `00` through its blue slice, as the app now does.
 4. **Bezel overscan and mask density** to the game's values in the SWTG preset. Only visible in
    the bezel's reflection.
 5. **Measure the glass and bezel approximations** against `screen.m3d`/`frame.m3d` rasterised

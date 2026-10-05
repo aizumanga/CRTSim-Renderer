@@ -71,9 +71,8 @@ the game's own output bit for bit, and recolours art drawn in the NES palette th
 `7C7C7C 0000FC 0000BC`); its table has the game's 32 steps per channel, each taking the colour of the nearest art colour.
 **From the composite signal** decodes the NES's measured signal levels instead, fitted to FirebrandX's Composite Direct
 capture, and recolours art drawn in MAME's NES palette, as the included NES LUTs expect. **LUT strength**, the game's NTSC
-Palette slider, mixes any LUT or the palette with the original colours. The game samples its table nearest in red and green
-and blended in blue; the app blends all three, which moves the game's own art colours by 0.2 steps on average and one
-of them by 9.
+Palette slider, mixes any LUT or the palette with the original colours. The game's table is read as the game reads it,
+nearest in red and green and blended in blue, here and in RetroArch; other tables blend in all three.
 **Optional color grade** rotates hue and changes chroma in YIQ before the composite simulation. Neutral values leave the prepared signal unchanged.
 It is an artistic grade, not the private NES palette LUT or a full NTSC decoder.
 **Linear light (experimental)** decodes the SDR signal for glass sampling, performs lighting and bloom with RGBA16Float intermediates,

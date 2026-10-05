@@ -7,7 +7,7 @@
 //! where it stores them, and its intermediates, which the x87 keeps wider, are carried in
 //! `f64`.
 
-use crate::workflow::Lut;
+use crate::workflow::{Lut, Sampling};
 
 /// Each luma row's low and high signal level: grey at the low level is colour 0x?D, grey at the
 /// high level colour 0x?0, and the hues sit half-way with the difference as their chroma.
@@ -187,7 +187,8 @@ fn from_yiq(y: f32, i: f32, q: f32) -> [u8; 3] {
 }
 
 /// The game's colour table: for each of its 32 levels per channel, the colour [`colors`] gives
-/// the nearest of the [`SOURCE`] palette's colours 0x00-0x?D, the first of equals winning.
+/// the nearest of the [`SOURCE`] palette's colours 0x00-0x?D, the first of equals winning. It
+/// is read as the game reads it, nearest in red and green and blended in blue.
 pub fn lut(colors: &[[u8; 3]; 64], name: String) -> Lut {
     let points: Vec<([f64; 3], usize)> = (0..14)
         .flat_map(|hue| (0..4).map(move |row| hue + 16 * row))
@@ -222,6 +223,7 @@ pub fn lut(colors: &[[u8; 3]; 64], name: String) -> Lut {
         domain_min: [0.; 3],
         domain_max: [1.; 3],
         values,
+        sampling: Sampling::NearestRedGreen,
     }
 }
 
@@ -298,5 +300,75 @@ mod tests {
             let [r, g, b] = grey[0x10 + hue];
             assert!(r == g && g == b, "{hue}: {r} {g} {b}");
         }
+    }
+}
+
+#[cfg(test)]
+mod sampling_tests {
+    use super::*;
+
+    /// The game's NTSC pass, `ntsc.fx`'s `DoPost` at full strength, written out as its shader
+    /// computes it: two texture coordinates into the 1024x32 table, point-sampled, and the
+    /// two blue slices around the colour blended.
+    fn as_the_game_reads(table: &Lut, colour: [f32; 3]) -> [f32; 3] {
+        let res = 32_f32;
+        let [r, g, b] = colour;
+        let (b_lo, b_hi) = ((b * (res - 1.)).floor(), (b * (res - 1.)).ceil());
+        let alpha = b * (res - 1.) - b_lo;
+        let uv = |slice: f32| {
+            [
+                slice / res + r * (res - 1.) / (res * res) + 0.5 / (res * res),
+                g * (res - 1.) / res + 0.5 / res,
+            ]
+        };
+        // Point sampling picks the texel the coordinate falls in.
+        let texel = |[u, v]: [f32; 2]| {
+            let (x, y) = ((u * 1024.).floor() as usize, (v * 32.).floor() as usize);
+            table.values[x % 32 + 32 * (y + 32 * (x / 32))]
+        };
+        let (low, high) = (texel(uv(b_lo)), texel(uv(b_hi)));
+        std::array::from_fn(|c| low[c] + (high[c] - low[c]) * alpha)
+    }
+
+    #[test]
+    fn the_table_is_read_as_the_game_reads_it() {
+        let table = lut(&colors(5.183186, 1.75, 1.), String::new());
+        assert_eq!(table.sampling, Sampling::NearestRedGreen);
+        // Every 8-bit level along each axis, the others at a spread of levels.
+        for level in 0..=255_u8 {
+            for other in [0_u8, 37, 128, 200, 255] {
+                for axis in 0..3 {
+                    let mut colour = [f32::from(other) / 255.; 3];
+                    colour[axis] = f32::from(level) / 255.;
+                    let (ours, game) = (table.sample(colour), as_the_game_reads(&table, colour));
+                    for c in 0..3 {
+                        assert!(
+                            (ours[c] - game[c]).abs() < 1e-5,
+                            "{colour:?}: {ours:?} for {game:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_games_art_colours_come_out_as_its_palette() {
+        let colors = colors(5.183186, 1.75, 1.);
+        let mut image = image::RgbaImage::from_fn(14, 4, |x, y| {
+            let [r, g, b] = SOURCE[x as usize + 16 * y as usize];
+            image::Rgba([r, g, b, 255])
+        });
+        lut(&colors, String::new()).apply(&mut image);
+        let missed: Vec<usize> = (0..56)
+            .map(|n| n % 14 + 16 * (n / 14))
+            .filter(|&index| {
+                let p = image.get_pixel((index % 16) as u32, (index / 16) as u32);
+                [p[0], p[1], p[2]] != colors[index]
+            })
+            .collect();
+        // All but grey 0x2D (120): its blue falls between slices 14 and 15, and the game blends
+        // in slice 15, whose cell is grey 0x00's (124).
+        assert_eq!(missed, [0x2D]);
     }
 }

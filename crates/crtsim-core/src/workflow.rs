@@ -140,7 +140,31 @@ pub struct Lut {
     pub domain_min: [f32; 3],
     pub domain_max: [f32; 3],
     pub values: Vec<[f32; 3]>,
+    /// How a colour between the lattice's samples is read. Left out of a saved table that
+    /// blends, as every table was saved before there was a choice.
+    #[serde(default, skip_serializing_if = "Sampling::is_trilinear")]
+    pub sampling: Sampling,
 }
+
+/// How a table is read between its lattice's samples.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Sampling {
+    /// Blended between the eight samples around the colour, as a 3D texture filters.
+    #[default]
+    Trilinear,
+    /// The nearest sample in red and green, blended in blue only, as Super Win the Game reads
+    /// its NTSC palette's table: its red and green come from a point-sampled texture and only
+    /// its blue slices are blended by its shader.
+    NearestRedGreen,
+}
+
+impl Sampling {
+    fn is_trilinear(&self) -> bool {
+        *self == Self::Trilinear
+    }
+}
+
 impl Lut {
     pub fn parse_cube(name: String, text: &str) -> Result<Self> {
         ensure!(text.len() <= 16 * 1024 * 1024, "LUT exceeds 16 MB");
@@ -150,6 +174,7 @@ impl Lut {
             domain_min: [0.; 3],
             domain_max: [1.; 3],
             values: vec![],
+            sampling: Sampling::Trilinear,
         };
         for line in text.lines() {
             let line = line.split('#').next().unwrap_or("").trim();
@@ -222,36 +247,59 @@ impl Lut {
     /// table alone, 0 leaves the image as it is.
     pub fn apply_with_strength(&self, image: &mut RgbaImage, strength: f32) {
         for p in image.pixels_mut() {
-            let xyz: [f32; 3] = std::array::from_fn(|i| {
-                ((p[i] as f32 / 255. - self.domain_min[i])
-                    / (self.domain_max[i] - self.domain_min[i]))
-                    .clamp(0., 1.)
-                    * (self.size - 1) as f32
-            });
-            let lo = xyz.map(|v| v.floor() as usize);
-            let hi = lo.map(|v| (v + 1).min(self.size - 1));
-            let f: [f32; 3] = std::array::from_fn(|i| xyz[i] - lo[i] as f32);
-            let mut out = [0.; 3];
-            for z in 0..2 {
-                for y in 0..2 {
-                    for x in 0..2 {
-                        let index = (if x == 0 { lo[0] } else { hi[0] })
-                            + self.size * (if y == 0 { lo[1] } else { hi[1] })
-                            + self.size * self.size * (if z == 0 { lo[2] } else { hi[2] });
-                        let weight = (if x == 0 { 1. - f[0] } else { f[0] })
-                            * (if y == 0 { 1. - f[1] } else { f[1] })
-                            * (if z == 0 { 1. - f[2] } else { f[2] });
-                        for (i, v) in out.iter_mut().enumerate() {
-                            *v += self.values[index][i] * weight;
-                        }
-                    }
-                }
-            }
+            let out = self.sample([0, 1, 2].map(|i| p[i] as f32 / 255.));
             for i in 0..3 {
                 let mixed = out[i] * strength + (p[i] as f32 / 255.) * (1. - strength);
                 p[i] = (mixed.clamp(0., 1.) * 255.).round() as u8;
             }
         }
+    }
+    /// The table at `colour`, read between its samples as its `sampling` says.
+    pub fn sample(&self, colour: [f32; 3]) -> [f32; 3] {
+        let xyz: [f32; 3] = std::array::from_fn(|i| {
+            ((colour[i] - self.domain_min[i]) / (self.domain_max[i] - self.domain_min[i]))
+                .clamp(0., 1.)
+                * (self.size - 1) as f32
+        });
+        let nearest = |axis: usize| self.sampling == Sampling::NearestRedGreen && axis < 2;
+        let lo: [usize; 3] = std::array::from_fn(|i| {
+            if nearest(i) {
+                (xyz[i] + 0.5).floor() as usize
+            } else {
+                xyz[i].floor() as usize
+            }
+        });
+        let hi: [usize; 3] = std::array::from_fn(|i| {
+            if nearest(i) {
+                lo[i]
+            } else {
+                (lo[i] + 1).min(self.size - 1)
+            }
+        });
+        let f: [f32; 3] = std::array::from_fn(|i| {
+            if nearest(i) {
+                0.
+            } else {
+                xyz[i] - lo[i] as f32
+            }
+        });
+        let mut out = [0.; 3];
+        for z in 0..2 {
+            for y in 0..2 {
+                for x in 0..2 {
+                    let index = (if x == 0 { lo[0] } else { hi[0] })
+                        + self.size * (if y == 0 { lo[1] } else { hi[1] })
+                        + self.size * self.size * (if z == 0 { lo[2] } else { hi[2] });
+                    let weight = (if x == 0 { 1. - f[0] } else { f[0] })
+                        * (if y == 0 { 1. - f[1] } else { f[1] })
+                        * (if z == 0 { 1. - f[2] } else { f[2] });
+                    for (i, v) in out.iter_mut().enumerate() {
+                        *v += self.values[index][i] * weight;
+                    }
+                }
+            }
+        }
+        out
     }
 }
 
