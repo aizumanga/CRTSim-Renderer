@@ -4,9 +4,11 @@
 
 - **NTSC blending** works as Super Win the Game's NTSC Blending does, which the game's code shows: each tick shows half
   the setting of the other pattern, so the game's 0.35 mixes them 17.5/82.5 rather than 35/65, and 1 is their average.
-  The **Super Win the Game** preset keeps 0.35 and now blends as the game does. A saved look with another non-zero value
-  blends half as far as before; doubling a value up to 0.5 keeps its picture. RetroArch presets read the setting the
-  same way.
+  The **Super Win the Game** preset keeps 0.35 and now blends as the game does.
+- Presets, projects, sessions and files with an embedded look are saved as settings version 2. Those saved before,
+  as version 1 or with no version, open with their NTSC blending doubled, so they look as they did; a value past 0.5,
+  which blended beyond the average, opens above the slider's 1 and keeps its picture too. Earlier versions of the app
+  cannot open settings saved by this one. RetroArch presets read the setting the same way.
 
 ## v0.9.0
 

@@ -265,7 +265,9 @@ pub static SETTINGS: &[Setting] = &[
     Setting::numbers(
         "ntsc_blending",
         "NTSC blending",
-        Numbers::slider(Signal, access!(ntsc_blending), 0.0..=1.),
+        // The game's slider; settings migrated from version 1 may hold up to twice it.
+        Numbers::slider(Signal, access!(ntsc_blending), 0.0..=1.)
+            .accepting((Included(0.), Included(2.))),
     ),
     Setting::numbers(
         "barrel",

@@ -1,6 +1,6 @@
 use anyhow::{bail, ensure, Result};
 use image::{imageops, Rgba, RgbaImage};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
@@ -86,8 +86,18 @@ pub enum ColorMode {
     LinearLight,
 }
 
+/// The version settings are saved as. Version 2 measures NTSC blending in Super Win the Game's
+/// units, twice version 1's; settings saved as version 1, or with no version, are migrated as
+/// they load.
+pub const VERSION: u32 = 2;
+
+/// Settings saved with no version are the first version's.
+fn unversioned() -> u32 {
+    1
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(default, deny_unknown_fields)]
+#[serde(remote = "Self", default, deny_unknown_fields)]
 pub struct Config {
     pub source: crate::workflow::SourceEdit,
     pub screen_only: bool,
@@ -98,6 +108,7 @@ pub struct Config {
     /// The NES palette made from its composite signal, with the game's Tint controls, in place
     /// of a LUT. See `palette`.
     pub palette: Option<crate::palette::NesPalette>,
+    #[serde(default = "unversioned")]
     pub version: u32,
     pub signal: String,
     pub output: String,
@@ -114,7 +125,8 @@ pub struct Config {
     /// Super Win the Game's NTSC Blending. With alternating phase, ticks show half this much of
     /// the other pattern and then the other way round: 0 switches cleanly between them, as the
     /// public source does, the game's 0.35 mixes them 17.5/82.5, and 1 shows their average on
-    /// every tick. Stable phase always shows the average.
+    /// every tick. Up to 2, past the average, holds what version 1 settings could. Stable phase
+    /// always shows the average.
     pub ntsc_blending: f32,
     pub persistence: [f32; 3],
     pub overscan: f32,
@@ -157,7 +169,7 @@ impl Default for Config {
             lut: None,
             lut_strength: 1.,
             palette: None,
-            version: 1,
+            version: VERSION,
             signal: "original".into(),
             output: "reference".into(),
             fit: Fit::Reference,
@@ -212,7 +224,32 @@ pub fn validate_size((w, h): (u32, u32)) -> Result<()> {
     );
     Ok(())
 }
+// Every route that reads settings, from a preset to a project's batch queue, deserializes a
+// `Config`, so migrating here reaches them all.
+impl<'de> Deserialize<'de> for Config {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let mut config = Config::deserialize(deserializer)?;
+        config.migrate();
+        Ok(config)
+    }
+}
+
+impl Serialize for Config {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        Config::serialize(self, serializer)
+    }
+}
+
 impl Config {
+    /// Brings settings saved by an earlier version to this one's meaning, keeping their picture.
+    fn migrate(&mut self) {
+        if self.version == 1 {
+            // Version 1's blending was half the game's: the same picture is twice the value.
+            self.ntsc_blending *= 2.;
+            self.version = 2;
+        }
+    }
+
     /// The starting point for ordinary images rather than 256x224 game frames: square pixels,
     /// smooth resizing, contain fitting, neutral saturation, and the reference's mask density
     /// whatever the signal, since an image's rows are not a picture tube's. `default` stays the
@@ -261,7 +298,10 @@ impl Config {
         let value: serde_json::Value = serde_json::from_slice(bytes)?;
         let version = value.get("version").and_then(serde_json::Value::as_u64);
         if let Some(version) = version {
-            ensure!(version == 1, "unsupported config version {version}");
+            ensure!(
+                (1..=u64::from(VERSION)).contains(&version),
+                "unsupported config version {version}"
+            );
         }
         let config: Self = serde_json::from_value(value)?;
         config.validate()?;
@@ -277,7 +317,7 @@ impl Config {
             self.lut.is_none() || self.palette.is_none(),
             "Use either a LUT or the NES palette, not both"
         );
-        ensure!(self.version == 1, "unsupported config version");
+        ensure!(self.version == VERSION, "unsupported config version");
         ensure!(self.warmup <= 240, "warmup must be <=240 ticks");
         crate::settings::validate(self)
     }
@@ -546,10 +586,31 @@ mod tests {
             Config::from_json_slice(b"{\"signal\":\"native\"}")
                 .unwrap()
                 .version,
-            1
+            VERSION
         );
-        let error = Config::from_json_slice(b"{\"version\":2}").unwrap_err();
-        assert!(error.to_string().contains("unsupported config version 2"));
+        let error = Config::from_json_slice(b"{\"version\":3}").unwrap_err();
+        assert!(error.to_string().contains("unsupported config version 3"));
+    }
+
+    #[test]
+    fn version_1_blending_is_doubled_to_keep_its_picture() {
+        let blending = |json: &str| {
+            Config::from_json_slice(json.as_bytes())
+                .unwrap()
+                .ntsc_blending
+        };
+        assert_eq!(blending(r#"{"version":1,"ntsc_blending":0.35}"#), 0.7);
+        assert_eq!(blending(r#"{"ntsc_blending":0.35}"#), 0.7);
+        // Past the average, which version 1 allowed, stays where it was.
+        assert_eq!(blending(r#"{"version":1,"ntsc_blending":1.0}"#), 2.);
+        assert_eq!(blending(r#"{"version":2,"ntsc_blending":0.35}"#), 0.35);
+        // Settings nested in other files, such as a project's, migrate too.
+        let nested: Vec<Config> =
+            serde_json::from_str(r#"[{"version":1,"ntsc_blending":0.25}]"#).unwrap();
+        assert_eq!((nested[0].version, nested[0].ntsc_blending), (VERSION, 0.5));
+        // Saved again, they are the current version and load unchanged.
+        let saved = serde_json::to_vec(&nested[0]).unwrap();
+        assert_eq!(Config::from_json_slice(&saved).unwrap(), nested[0]);
     }
     #[test]
     fn presets_and_limits() {

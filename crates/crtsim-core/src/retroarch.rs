@@ -13,6 +13,7 @@ use crate::workflow::Lut;
 use anyhow::{ensure, Result};
 use image::{ImageFormat, Rgba, RgbaImage};
 use std::fmt::Write as _;
+use std::ops::Bound;
 
 /// Where a preset finds the port's shaders and textures, relative to it.
 const SHADERS: &str = "shaders/crtsim-renderer";
@@ -314,10 +315,14 @@ fn parameters() -> Vec<Parameter> {
             .find(|s| s.key == *key)
             .expect("a setting the port reads is in the table");
         let numbers = setting.numbers.as_ref().expect("a numeric setting");
-        let (min, max) = match &numbers.control {
+        let (min, mut max) = match &numbers.control {
             Control::Slider { span, .. } => (*span.start(), *span.end()),
             Control::Color => (0., 1.),
         };
+        // A look may hold more than its slider shows; RetroArch's range has to reach it.
+        if let Bound::Included(valid) = numbers.valid.1 {
+            max = max.max(valid);
+        }
         for (index, name) in names.iter().enumerate() {
             all.push(Parameter {
                 name,
