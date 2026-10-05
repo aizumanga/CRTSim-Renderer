@@ -208,7 +208,7 @@ Game** preset (`crates/crtsim-app/src/gallery.rs`) unless a row says otherwise.
 | FOV | 30° | 15° | preset 30° (default 15°) | match (preset) |
 | Lighting, light position | CRTSim's, (−10, −5, 10) | same | same | match |
 | Bloom | 1/16 target, 7 taps, spread 0.025, `ColorPow` | same | same | match |
-| NTSC phase blend | lerp alternates `p + (0.5 − p)·0.35` = 0.175 / 0.825 | 0 / 1 | alternates `blending` / `1 − blending` = 0.35 / 0.65 | **difference**: same setting, half the strength. The game's 0.35 is the renderer's 0.175 |
+| NTSC phase blend | lerp alternates `p + (0.5 − p)·0.35` = 0.175 / 0.825 | 0 / 1 | the game's formula since session 2 (was `blending` / `1 − blending` = 0.35 / 0.65 at `d833e36`) | **fixed**: was the same setting at twice the strength |
 | Phase blend without VSync | constant 0.5 | — | `Stable` phase = 0.5 | match |
 | NTSC palette: source side | `nes_palette_w_trans.pal` (FCEUX-style) | — | MAME's NES palette | **difference** |
 | NTSC palette: decoder | `MakePalette` (YIQ, Tint/I/Q) | — | measured PPU levels, fitted to FirebrandX | **difference**: mean 18.8 steps over the 55 non-black entries, renderer much less saturated (e.g. `16`: game 227,32,0, renderer 159,61,36; `2A`: 20,255,95 vs 105,215,81). Greys agree within 1 step |
@@ -237,10 +237,10 @@ decoder) is left out of the repository because it is game-derived data;
 
 None of these are made yet. In order of how much they would close the gap:
 
-1. **NTSC Blending scale.** Map the game's NTSCBlend onto the renderer's blending as
-   `blending = NTSCBlend / 2` (or change `tick` to the game's formula and keep its units), and
-   set the preset to the game's 0.35 in those units. *Validate:* composite output of two
-   consecutive ticks equals the game's formula at 0, 0.35 and 1.
+1. **NTSC Blending scale.** *Done in session 2:* `Params::tick` and the RetroArch port use the
+   game's formula, so the setting is in the game's units and the preset's 0.35 means what the
+   game's does. Unit tests check 0, 0.35 and 1; the golden case moved to 0.7, which renders the
+   same image as the old 0.35.
 2. **A game-exact palette.** Port `MakePalette` and `FromYIQ` (from the disassembly, checked
    bit-for-bit against the dumped palette at default and two non-default Tint/I/Q), take the
    source side from the game's palette, and either port `InterpolatePoints` or, until then,

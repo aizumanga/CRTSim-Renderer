@@ -54,10 +54,10 @@ vec3 previous_at(ivec2 xy) {
 }
 
 // How far this tick shows the second artifact pattern over the first: stable phase shows their
-// average; A and B one each, moved towards the other by the blending; alternating swaps them
-// every tick, as an NTSC set's did.
+// average; A and B one each, moved towards it by the blending as Super Win the Game's NTSC
+// Blending does, so 1 is the average; alternating swaps them every tick, as an NTSC set's did.
 float phase() {
-    float a = global.CRTSIM_NTSC_BLENDING, b = 1.0 - global.CRTSIM_NTSC_BLENDING;
+    float a = 0.5 * global.CRTSIM_NTSC_BLENDING, b = 1.0 - a;
     int mode = int(global.CRTSIM_PHASE + 0.5);
     if (mode == 1) return a;
     if (mode == 2) return b;

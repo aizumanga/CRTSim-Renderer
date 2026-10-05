@@ -102,9 +102,10 @@ impl Params {
     }
 
     /// The composite phase for `tick`, and the field it scans when interlaced. `blending` moves
-    /// the two phases towards each other.
+    /// the two phases towards their average as the game's NTSC Blending does: its `NTSCLerp` is
+    /// `p + (0.5 - p) * blending` for the tick's phase `p` of 0 or 1.
     fn tick(&mut self, phase: Phase, blending: f32, tick: u64) {
-        let (a, b) = (blending, 1. - blending);
+        let (a, b) = (0.5 * blending, 1. - 0.5 * blending);
         self.signal[3] = match phase {
             Phase::Stable => 0.5,
             Phase::A => a,

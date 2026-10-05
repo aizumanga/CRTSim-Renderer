@@ -1,5 +1,13 @@
 # Portable releases (Phase 4)
 
+## Unreleased
+
+- **NTSC blending** works as Super Win the Game's NTSC Blending does, which the game's code shows: each tick shows half
+  the setting of the other pattern, so the game's 0.35 mixes them 17.5/82.5 rather than 35/65, and 1 is their average.
+  The **Super Win the Game** preset keeps 0.35 and now blends as the game does. A saved look with another non-zero value
+  blends half as far as before; doubling a value up to 0.5 keeps its picture. RetroArch presets read the setting the
+  same way.
+
 ## v0.9.0
 
 - The RetroArch presets draw the bezel, as the app does: the curved glass and its bezel, lit, with the screen's

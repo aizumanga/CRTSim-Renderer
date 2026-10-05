@@ -63,8 +63,9 @@ original did, so a finer signal gets a finer mask. Original CRTSim and the line-
 use it; the general-image presets keep a fixed 128 × 224 mask. Presets saved with fixed columns and rows keep them.
 
 **Super Win the Game** uses the game's own CRT options on top of the public reference: a 30° field of view, **NTSC blending**
-at 0.35 and its **NTSC palette**. NTSC blending moves the two composite artifact patterns towards each other, so alternating
-ticks mix them 35/65 and 65/35 instead of switching cleanly; 0, the default, is the public source's switch. **NES palette
+at 0.35 and its **NTSC palette**. NTSC blending moves the two composite artifact patterns towards each other in the game's
+units, so alternating ticks mix them 17.5/82.5 and 82.5/17.5 instead of switching cleanly; 0, the default, is the public
+source's switch, and 1 shows their average on every tick. **NES palette
 from the composite signal** (Color & LUT) builds the NES palette from its signal with the game's **Tint**, **Tint I** and
 **Tint Q**, and recolours art drawn in MAME's NES palette, as the included NES LUTs expect. The game's decoder is unpublished:
 this one decodes the NES's measured signal levels, fitted to FirebrandX's Composite Direct capture, and treats the game's
