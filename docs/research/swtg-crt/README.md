@@ -225,6 +225,7 @@ Game** preset (`crates/crtsim-app/src/gallery.rs`) unless a row says otherwise.
 | Screen geometry | `screen.m3d`, rasterised | same | ray-traced sphere fitted to it, analytic edge dimming | intentional extension; error vs mesh **unmeasured** |
 | Bezel geometry | `frame.m3d` | same | baked from `frame.m3d`, ray-marched | intentional extension; **unmeasured** |
 | FOV | 30° | 15° | preset 30° (default 15°) | match (preset) |
+| Artifact pattern orientation | flipped against the picture; second sample one row up (Linux build, session 4) | row *y* and the row below | as public CRTSim | **difference** (Linux build); Windows unknown |
 | Lighting, light position | CRTSim's, (−10, −5, 10) | same | same | match |
 | Bloom | 1/16 target, 7 taps, spread 0.025, `ColorPow` | same | same | match |
 | NTSC phase blend | lerp alternates `p + (0.5 − p)·0.35` = 0.175 / 0.825 | 0 / 1 | the game's formula since session 2 (was `blending` / `1 − blending` = 0.35 / 0.65 at `d833e36`) | **fixed**: was the same setting at twice the strength |
@@ -239,17 +240,72 @@ A side-by-side image of the three palettes (game source, game generated, this re
 decoder) is left out of the repository because it is game-derived data;
 `scripts/compare_palette.py` reproduces the numbers.
 
+## Frame-by-frame comparison (session 4)
+
+The same 256×224 probe went through the running game and through this renderer at `7ea9d64`,
+and each CRT pass was compared.
+
+**How.** `scripts/capture_shim.c`, an `LD_PRELOAD` library, wraps the game's GL calls. It
+tells the CRT shader programs apart by uniforms only each declares and logs every uniform it
+is drawn with. Once triggered it replaces the Clean Frame texture with the probe before every
+NTSC pass, and reads back what each CRT pass drew. The engine binds render targets for drawing
+only (`GL_DRAW_FRAMEBUFFER`), so the read framebuffer is pointed at them for each read.
+`scripts/play_to_gameplay.sh` plays from the title into the first scene of a new game,
+where no menu or static overlays the CRT. 40 frames are let pass so the scene's glow decays,
+then two consecutive frames are kept. `scripts/render_probe` renders the probe through the
+**Super Win the Game** look as a 60-frame alternating sequence, and `scripts/compare_passes.py`
+pairs frames by the artifact lerp each used.
+
+**Runtime confirmation (runtime).** The logged uniforms are what the static reading predicted,
+among them `NTSCLerp` alternating 0.825 / 0.175 frame to frame, `Tuning_Persistence`
+(0.7, 0.525, 0.42), `camPos` (−3.732, 0, 0), `UVScalar` (1, 0.9796), `Tuning_LightPos`
+(−10, −5, 10), `MonitorColor` (0.06, 0.06, 0.06, 0), `BloomScale` (0.01875, 0.025), and an
+80×60 bloom target in a 1280×960 window. The game's saved `Config.ini` holds Brightness 0
+and FOV 30.
+
+**Results**, in 8-bit steps, the probe, 1280×960, steady state:
+
+| Pass | Default settings | Composite artifacts off (both) |
+| --- | --- | --- |
+| NTSC (prepared signal) | **identical**, both frames | identical |
+| Composite | mean 1.6, worst 152, 7.7% past 2 | mean 0.26, worst 2 |
+| Surface: glass + bezel, before bloom | — | mean 0.50, 1.8% past 2, 0.1% past 8 |
+| Final, before HUD | mean 1.4, 12.7% past 2 | mean 0.75, 6.4% past 2, 0.6% past 8 |
+
+- **NTSC: exact.** The palette, its table and the table's sampling (sessions 2–3) match the
+  game to the bit on real output.
+- **Composite: one difference, the artifact pattern's orientation.** Re-running `composite.fx`
+  on the game's own captured inputs (`scripts/composite_model.py`) reproduces its output within
+  1 step only with the artifact texture held top row first. The game's render targets hold the
+  picture bottom row first, so in this Linux build the pattern is **flipped vertically against
+  the picture**, and its second sample (`uv + RcpScrHeight`) lies one row *up* the picture. This
+  renderer and public CRTSim (Direct3D, where both are top first) sample row *y* and the row
+  below; the same model reproduces this renderer's composite within 1 step that way. Nothing
+  else in the pass differs. With artifacts off what remains is at most 2 steps, red and green
+  only, from rounding the glow's history to 8 bits each frame.
+- **Surface: close.** The differences are faint moiré where the mask is sampled at slightly
+  different places (the game interpolates UVs across its mesh; this renderer computes them
+  where a ray meets the sphere), and lines along the glass's outline and the bezel's edge.
+- **Final:** the surface's differences, spread a little by the bloom.
+
+Whether the Windows build, on Direct3D 9, flips the pattern too is not known: its textures and
+render targets would both be top first, as in public CRTSim. Matching "the game" here may
+depend on which build is meant.
+
 ## Unresolved
 
 1. ~~How the LUT fills between palette entries~~: nearest source colour (session 2).
-2. Texture formats behind the engine's enums 1 and 2 (sRGB or not, 8-bit or not).
+2. Texture formats behind the engine's enums 1 and 2. The exact NTSC match (session 4) says
+   8-bit RGBA without sRGB conversion, at least for the NTSC Frame.
 3. What `NBaseGame+0x50` is (it forces `NTSCLerp` to 0.5).
-4. Whether the engine updates once per presented frame, and how parity behaves on dropped or
-   repeated frames. Needs consecutive-frame capture.
-5. `MonitorColor` from BorderBrightness, the Video.Brightness default, and the vertex colours
-   `Tuning_Dimming` reads from `screen.m3d`, all unchecked.
+4. ~~Whether parity flips once per presented frame~~: it does, frame to frame (session 4).
+   Behaviour on dropped or repeated frames is still unchecked.
+5. ~~`MonitorColor` and the Brightness default~~: (0.06, 0.06, 0.06, 0) and 0 (session 4).
+   The vertex colours `Tuning_Dimming` reads from `screen.m3d` are still unchecked.
+8. Whether the Windows build flips the artifact pattern as the Linux build does.
 6. How large the renderer's analytic glass and baked bezel errors are against the meshes the
-   game rasterises.
+   game rasterises: about 0.5 steps on average over the probe, before bloom (session 4); not
+   yet broken down by region.
 7. Viewport handling of the 4:3 target aspect in non-4:3 windows.
 
 ## Proposals
@@ -274,9 +330,14 @@ None of these are made yet. In order of how much they would close the gap:
 5. **Measure the glass and bezel approximations** against `screen.m3d`/`frame.m3d` rasterised
    with the game's camera, before deciding anything there.
 
-Then, for fidelity claims about whole frames: feed the same 256×224 test images to the game (by
-replacing the Clean Frame under gdb, or a capture of it) and to the renderer, and compare the
-NTSC, composite and final outputs pass by pass.
+6. **Artifact pattern orientation**, if the Linux build is the one to match: sample the
+   pattern at `(223 − y)` and the row before it (or flip the texture and step up), in the
+   composite pass and the RetroArch port, perhaps as a setting since public CRTSim and maybe
+   the Windows build go the other way. *Validate:* `composite_model.py` and a recapture,
+   composite within 1 step at default settings.
+
+Frame-by-frame comparison is set up (session 4); more probes, motion and other settings can go
+through it.
 
 ## Reproducing
 
@@ -296,6 +357,25 @@ scripts/compare_palette.py out/palette.bin
 (cd GAME && ORACLE_OUT=$PWD/palettes.json N_PAL=53 LD_LIBRARY_PATH=. \
     gdb -q -batch -x ../scripts/palette_oracle.py ./SuperGame_NFML)   # the 60 test settings
 ```
+
+Frame by frame (session 4), with the game copy in `GAME` and these scripts in `SCRIPTS`:
+
+```bash
+apt-get install gcc-multilib xdotool
+gcc -m32 -shared -fPIC -O2 -o shim.so SCRIPTS/capture_shim.c -ldl
+SCRIPTS/probe.py out/extracted/nes_palette_w_trans.pal probe   # probe.png, probe.rgba
+SCRIPTS/play_to_gameplay.sh GAME shim.so run                   # leaves the game in a scene
+printf "input $PWD/probe.rgba\nframes 2\nskip 40\ntag probe\n" > run/go; sleep 8
+kill $(cat run/game.pid)
+(cd SCRIPTS/render_probe && cargo build --release)             # then:
+render_probe probe.rgba ren 42 40
+SCRIPTS/compare_passes.py run probe ren cmp
+```
+
+With artifacts off, set `NTSC: 0` in the game's `Config.ini` (under the run's home folder,
+`.local/share/Minor Key Games/Super Win the Game/Config`) before starting it, and run
+`ARTIFACTS=0 render_probe …`; `BLOOM=0` gives the surface before bloom, which compares with the
+game's `monitor` pass.
 
 Function addresses (`nm -C SuperGame_NFML`): `CRTBaseMaterial::SetParam` 08081c60,
 `NTSCMaterial::SetParam` 080c7610, `ValkyrieGame::CreateAssets` 08144ae0,

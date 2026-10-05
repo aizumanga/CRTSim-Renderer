@@ -1,0 +1,16 @@
+# Renders a probe through this renderer's Super Win the Game look for frame-by-frame comparison.
+# Not part of the workspace; build it from this directory.
+[package]
+name = "render_probe"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+crtsim-core = { path = "../../../../../crates/crtsim-core" }
+image = { version = "0.24.9", default-features = false, features = ["png"] }
+pollster = "0.3"
+wgpu = "30.0.1"
+anyhow = "1"
