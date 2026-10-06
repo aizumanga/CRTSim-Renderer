@@ -232,6 +232,10 @@ fn run(
 /// A plan's encoder and what finishes its file: FFmpeg, fed the rendered frames as raw RGBA
 /// through `Feed`, while they are rendered.
 struct Ffmpeg<'p, P: Encoding> {
+    /// First, so an export that stops early stops its encoder before the temporary files
+    /// below are deleted: Windows cannot delete a file a running FFmpeg holds open.
+    encoder: Process,
+    feed: Feed,
     plan: &'p P,
     output: PathBuf,
     cancel: Arc<AtomicBool>,
@@ -239,8 +243,6 @@ struct Ffmpeg<'p, P: Encoding> {
     destination: tempfile::NamedTempFile,
     encoded: PathBuf,
     metadata: PathBuf,
-    encoder: Process,
-    feed: Feed,
 }
 
 impl<'p, P: Encoding> Ffmpeg<'p, P> {
@@ -273,6 +275,8 @@ impl<'p, P: Encoding> Ffmpeg<'p, P> {
         let mut encoder = Process::spawn(&mut plan.encoder(&encoded), cancel)?;
         let feed = Feed::start(encoder.stdin());
         Ok(Self {
+            encoder,
+            feed,
             plan,
             output: output.to_owned(),
             cancel: cancel.clone(),
@@ -280,8 +284,6 @@ impl<'p, P: Encoding> Ffmpeg<'p, P> {
             destination,
             encoded,
             metadata,
-            encoder,
-            feed,
         })
     }
 

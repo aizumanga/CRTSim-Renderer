@@ -174,12 +174,11 @@ pub fn preview_frame(video: &Video, frame: u64, cancel: &Arc<AtomicBool>) -> Res
         frame: Some(frame),
         limit: None,
     };
-    decode_one(
-        video,
-        &request,
-        cancel,
-        "FFmpeg did not return the requested frame",
-    )
+    let missing = match video.source {
+        Source::Ffmpeg => "FFmpeg did not return the requested frame".to_owned(),
+        _ => format!("The animation has no frame {}", frame + 1),
+    };
+    decode_one(video, &request, cancel, &missing)
 }
 
 /// Runs a decode that stops after one frame and returns it. `missing` is the error when it
