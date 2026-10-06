@@ -46,7 +46,7 @@ impl File {
         match self {
             Self::Path(path) => {
                 let file = std::fs::File::open(path)
-                    .with_context(|| format!("Cannot read {}", path.display()))?;
+                    .with_context(|| format!("Cannot read {}", crate::file_name(path)))?;
                 ensure!(file.metadata()?.len() <= limit, too_large());
                 let mut bytes = vec![];
                 file.take(limit + 1).read_to_end(&mut bytes)?;
@@ -131,14 +131,25 @@ pub fn imported(
     cancel: &Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<(Config, Option<crtsim_media::Options>)> {
     let path = file.path();
-    if crtsim_media::MediaKind::of(path) == crtsim_media::MediaKind::Video {
-        let preset = match file {
-            File::Bytes { bytes, .. } => {
-                crtsim_media::import_preset_from_bytes(path, bytes, input)?
-            }
-            // A video on disk can be large: FFmpeg reads only its comment.
-            File::Path(path) => crtsim_media::import_preset(path, input, cancel)?,
-        };
+    let preset = match file {
+        // Only a PNG is read as an image on the desktop; FFmpeg reads any other file's
+        // comment, a video's, without reading the whole of it.
+        File::Path(path)
+            if !path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("png")) =>
+        {
+            Some(crtsim_media::import_preset(path, input, cancel)?)
+        }
+        // A browser hands over the whole file, which is read here when it is a video.
+        File::Bytes { bytes, .. }
+            if crtsim_media::MediaKind::of(path) == crtsim_media::MediaKind::Video =>
+        {
+            Some(crtsim_media::import_preset_from_bytes(path, bytes, input)?)
+        }
+        _ => None,
+    };
+    if let Some(preset) = preset {
         return Ok((preset.config, Some(preset.video_options)));
     }
     let bytes = file.read(IMAGE_LIMIT, "Image file")?;
