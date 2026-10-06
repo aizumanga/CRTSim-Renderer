@@ -5,6 +5,7 @@ and what that does to the picture when both are shaded alike, as the game shades
 
 usage: measure_surfaces.py BEZEL_MAPS_DIR COMPOSITE.png OUT_DIR [WIDTH HEIGHT FOV]
   BEZEL_MAPS_DIR  what bezel_maps writes
+  GLASS=formula   measures the glass as the renderer drew it until session 7
   COMPOSITE.png   a 256x224 composite frame to shade with (rows top first)
 Writes OUT_DIR/report.txt and maps of each error."""
 import sys, os
@@ -17,7 +18,7 @@ W, H, FOV = (int(sys.argv[4]), int(sys.argv[5]), float(sys.argv[6])) if len(sys.
 assets = os.path.join(os.path.dirname(__file__), '../../../../assets/original-crtsim')
 os.makedirs(out, exist_ok=True)
 ref = s.rasterize(s.read_m3d(f'{assets}/screen.m3d'), s.read_m3d(f'{assets}/frame.m3d'), W, H, FOV)
-app = s.approximate(s.Bezel(maps), W, H, FOV)
+app = s.approximate(s.Bezel(maps), W, H, FOV, formula=os.environ.get('GLASS') == 'formula')
 comp = np.asarray(Image.open(comp_path).convert('RGB')) / 255.
 mask = np.asarray(Image.open(f'{assets}/mask.bmp').convert('RGB')) / 255.
 levels = s.mask_levels(mask)

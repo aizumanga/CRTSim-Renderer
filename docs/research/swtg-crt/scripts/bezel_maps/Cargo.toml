@@ -1,4 +1,4 @@
-# Writes the bezel images the renderer bakes from frame.m3d, for measuring them against the mesh.
+# Writes the bezel and glass images the renderer bakes from the meshes, to measure them against those.
 # Not part of the workspace; build it from this directory.
 [package]
 name = "bezel_maps"

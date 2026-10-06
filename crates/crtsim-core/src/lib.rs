@@ -1,6 +1,7 @@
 pub mod bezel;
 pub mod config;
 pub mod game_palette;
+pub mod glass;
 mod gpu;
 mod gpu_prepare;
 pub mod input;
@@ -253,6 +254,8 @@ pub struct Renderer {
     pipelines: Pipelines,
     /// The bezel as the surface pass traces it, in the order `bezel::Maps` lists them.
     bezel: [Target; 3],
+    /// The glass's shade and outline, baked from its mesh.
+    glass: Target,
     artifacts: Target,
     mask: Target,
     prepare_pipelines: gpu_prepare::Pipelines,
@@ -369,7 +372,7 @@ impl Renderer {
             },
             count: None,
         }];
-        for binding in (1..=4).chain(9..=11) {
+        for binding in (1..=4).chain(9..=12) {
             entries.push(wgpu::BindGroupLayoutEntry {
                 binding,
                 visibility: wgpu::ShaderStages::FRAGMENT,
@@ -431,6 +434,12 @@ impl Renderer {
                     target.upload(&queue, image);
                     target
                 })
+            },
+            glass: {
+                let map = glass::map()?;
+                let target = Target::new(&device, "glass", map.dimensions());
+                target.upload(&queue, &map);
+                target
             },
             device,
             queue,
@@ -818,7 +827,7 @@ impl Renderer {
                 resource: wgpu::BindingResource::Sampler(s),
             });
         }
-        for (i, t) in self.bezel.iter().enumerate() {
+        for (i, t) in self.bezel.iter().chain([&self.glass]).enumerate() {
             entries.push(wgpu::BindGroupEntry {
                 binding: i as u32 + 9,
                 resource: wgpu::BindingResource::TextureView(&t.view),

@@ -13,7 +13,7 @@ meshes keep grey), `reflection`, and `point` (HxWx3, where the ray meets the sur
 
 The camera is the game's: at (-cot(fov/2), 0, 0) looking along +x, z up, -y to the right, with
 the vertical field of view `fov`."""
-import struct
+import os, struct
 import numpy as np
 from PIL import Image
 
@@ -122,7 +122,10 @@ def rasterize(screen, frame, width, height, fov):
 
 GLASS_CENTRE = np.array([4., 0., 0.])
 GLASS_RADIUS = 4.
+# Until session 7 the glass's outline and shade were a formula: a superellipse of this corner
+# exponent, shaded 1 - 0.5 r^6. Since, they are baked from the mesh (crtsim-core's glass.rs).
 GLASS_CORNER = 11.54
+GLASS_EDGE = 1 / 64
 BEZEL_HALF = np.array([1.6533334, 1.32])
 BEZEL_NEAR, BEZEL_FAR = -0.1, 0.33
 BEZEL_OPENING = np.array([1.24, 0.95])
@@ -134,6 +137,21 @@ class Bezel:
         load = lambda n: np.asarray(Image.open(f'{folder}/{n}.png').convert('RGBA'), float) / 255
         self.shape, self.uv, self.normal = load('shape'), load('uv'), load('normal')
         self.size = np.array([self.shape.shape[1], self.shape.shape[0]], float)
+        self.glass = load('glass') if os.path.exists(f'{folder}/glass.png') else None
+
+    def glass_baked(self, uv):
+        """`glass_baked`: the mesh's shade and the distance to its outline at uv."""
+        h, w = self.glass.shape[:2]
+        g = np.clip(uv, 0, 1) * [w - 1, h - 1]
+        xy = np.floor(g).astype(int)
+        f = g - xy
+        def dec(xy):
+            v = self.load(self.glass, xy)
+            return np.stack([self.pair(v[..., 0], v[..., 1]), self.pair(v[..., 2], v[..., 3])], -1)
+        fx, fy = f[..., :1], f[..., 1:]
+        v = (dec(xy) * (1 - fx) + dec(xy + [1, 0]) * fx) * (1 - fy) + \
+            (dec(xy + [0, 1]) * (1 - fx) + dec(xy + [1, 1]) * fx) * fy
+        return v[..., 0], -GLASS_EDGE + v[..., 1] * 2 * GLASS_EDGE
 
     def texel(self, yz):
         return (BEZEL_HALF - yz) / (2 * BEZEL_HALF) * self.size - 0.5
@@ -195,8 +213,9 @@ class Bezel:
                (r(xy + [0, 1]) * (1 - fx) + r(xy + [1, 1]) * fx) * fy
 
 
-def approximate(bezel, width, height, fov, screen_only=False):
-    """`surface()`: the sphere's glass and the ray-marched bezel, nearest wins."""
+def approximate(bezel, width, height, fov, screen_only=False, formula=False):
+    """`surface()`: the sphere's glass and the ray-marched bezel, nearest wins. `formula` draws
+    the glass's outline and shade as the renderer did until session 7."""
     cam, ray = rays(width, height, fov)
     out = empty(height, width)
     along = lambda x: cam + ray * ((x - cam[0]) / ray[..., 0])[..., None]
@@ -205,9 +224,14 @@ def approximate(bezel, width, height, fov, screen_only=False):
     reach = b * b - to @ to + GLASS_RADIUS ** 2
     glass_at = cam + ray * (-b - np.sqrt(np.maximum(reach, 0)))[..., None]
     guv = np.stack([(4 / 3 - glass_at[..., 1]) * 0.375, (1 - glass_at[..., 2]) * 0.5], -1)
-    edge = np.abs(guv * 2 - 1)
-    radius = (edge[..., 0] ** GLASS_CORNER + edge[..., 1] ** GLASS_CORNER) ** (1 / GLASS_CORNER)
-    glass_depth = np.where((reach < 0) | (radius > 1), NOTHING, glass_at[..., 0])
+    if formula:
+        edge = np.abs(guv * 2 - 1)
+        radius = (edge[..., 0] ** GLASS_CORNER + edge[..., 1] ** GLASS_CORNER) ** (1 / GLASS_CORNER)
+        shade, outside = 1 - 0.5 * radius ** 6, radius > 1
+    else:
+        shade, distance = bezel.glass_baked(guv)
+        outside = (guv < 0).any(-1) | (guv > 1).any(-1) | (distance < 0)
+    glass_depth = np.where((reach < 0) | outside, NOTHING, glass_at[..., 0])
 
     bezel_depth = np.full((height, width), NOTHING)
     if not screen_only:
@@ -240,7 +264,6 @@ def approximate(bezel, width, height, fov, screen_only=False):
     out['kind'][is_glass], out['kind'][is_bezel] = 1, 2
     out['uv'][is_glass] = guv[is_glass]
     out['normal'][is_glass] = ((glass_at - GLASS_CENTRE) / GLASS_RADIUS)[is_glass]
-    shade = 1 - 0.5 * radius ** 6
     out['shade'][is_glass] = shade[is_glass]
     out['color'][is_glass] = np.stack([shade] * 3 + [np.ones_like(shade)], -1)[is_glass]
     out['point'][is_glass] = glass_at[is_glass]

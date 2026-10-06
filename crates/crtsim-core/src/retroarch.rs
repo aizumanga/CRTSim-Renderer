@@ -111,6 +111,7 @@ pub fn export(looks: &[(&str, &Config)]) -> Result<Vec<File>> {
     ] {
         files.push(png(&format!("{SHADERS}/bezel-{name}.png"), image)?);
     }
+    files.push(png(&format!("{SHADERS}/glass.png"), &crate::glass::map()?)?);
     files.extend(
         SOURCES
             .iter()
@@ -412,13 +413,14 @@ fn pragmas() -> String {
 
 /// The textures a preset loads. None may share a parameter's name: RetroArch and librashader
 /// read a preset's `NAME = value` lines by name alone, so a clash turns one into the other.
-const TEXTURES: [&str; 6] = [
+const TEXTURES: [&str; 7] = [
     "CRTSIM_COLOUR_TABLE",
     "CRTSIM_ARTIFACT_PATTERN",
     "CRTSIM_SHADOW_MASK",
     "CRTSIM_BEZEL_SHAPE",
     "CRTSIM_BEZEL_UV",
     "CRTSIM_BEZEL_NORMAL",
+    "CRTSIM_GLASS",
 ];
 
 /// A pass of the preset: its shader and how RetroArch sizes, stores and samples it.
@@ -516,12 +518,13 @@ fn preset(c: &Config, table: &str) -> String {
     line("CRTSIM_SHADOW_MASK_linear = true".into());
     line("CRTSIM_SHADOW_MASK_mipmap = true".into());
     line("CRTSIM_SHADOW_MASK_wrap_mode = repeat".into());
-    // The bezel's images are read texel by texel, and the shape filtered as well, for the
-    // depth's high byte a ray steps on.
+    // The bezel's and the glass's images are read texel by texel, and the bezel's shape
+    // filtered as well, for the depth's high byte a ray steps on.
     for (name, file, filtered) in [
         ("CRTSIM_BEZEL_SHAPE", "bezel-shape.png", true),
         ("CRTSIM_BEZEL_UV", "bezel-uv.png", false),
         ("CRTSIM_BEZEL_NORMAL", "bezel-normal.png", false),
+        ("CRTSIM_GLASS", "glass.png", false),
     ] {
         line(format!("{name} = {SHADERS}/{file}"));
         line(format!("{name}_linear = {filtered}"));

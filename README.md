@@ -11,7 +11,7 @@ It is not an official product or an exact reconstruction of a commercial game's 
 - PNG/JPEG/WebP/BMP/GIF input and PNG export; an original test card when input is omitted.
 - Animated GIF and WebP open as animations, decoded without FFmpeg; videos, GIFs and animated WebPs export to MP4, MKV, WebM, GIF or animated WebP.
 - **File → Video test card** opens ten seconds of original side-scrolling pixel-art gameplay at 256x224 and 60 frames per second, drawn by the app, to see a look on moving pixels before exporting it. It opens and plays without a file or FFmpeg, and exports like an opened animation.
-- The original curved screen, ray-traced as the sphere its mesh was cut from, with the same UVs, normals, rounded outline and edge shading; the original bezel, baked from its mesh with its colors, normals, UVs and reflection weights and traced the same way, so both draw in one full-screen pass.
+- The original curved screen, ray-traced as the sphere its mesh was cut from, with the same UVs and normals, and the mesh's own outline and edge shading baked across its UVs; the original bezel, baked from its mesh with its colors, normals, UVs and reflection weights and traced the same way, so both draw in one full-screen pass.
 - Composite artifacts, horizontal ringing, separate RGB persistence, shadow mask, lighting, edge reflections and bloom.
 - Deterministic still jobs, cleared feedback buffers, phase A/B/stable/alternating selection and configurable warm-up.
 - Logical signal and output resolution presets; custom dimensions; JSON settings.

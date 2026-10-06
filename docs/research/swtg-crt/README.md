@@ -357,6 +357,54 @@ the mesh model, inside the surfaces:
   texels are coarse: UV p99 0.77 signal pixels, reflection p99 5 steps.
 - **Outlines are where it shows**: the polygon against the superellipse, and the bezel's edge.
 
+*Correction (session 7):* of the 940 pixels, 452 are at the bezel's outer rim, where the mesh
+shows the bezel and the renderer nothing, not at the screen's outline.
+
+## The mesh's glass, baked (session 7)
+
+Proposal 7, made. `screen.m3d` is a 49×49 grid of vertices on the sphere, and its UVs are exactly
+the renderer's `((4/3 − y)·0.375, (1 − z)·0.5)` (to 6·10⁻⁸), so its outline and shading can be
+indexed by the UV the sphere already gives. `crtsim-core`'s `glass.rs` bakes them into one
+1024×768 image across UV 0 to 1, each value over two bytes:
+
+- **shade**: each texel's vertex colour blended across the triangle it lies in, as GL blends it;
+  texels just outside the outline carry the nearest triangle's blend on past its edge, so the
+  bilinear read stays true up to the edge;
+- **edge**: the distance to the outline (the 192 edges only one triangle has), in mesh units,
+  positive inside, within ±1/64. Blended between texels it puts the outline on the polygon's
+  straight segments.
+
+The surface pass (`crtsim.wgsl`, `surface.slang`) reads both where the ray meets the sphere, in
+place of the superellipse and `1 − 0.5·r⁶`. At the mesh's vertices the image gives each vertex's
+colour within 0.28 steps inside and 0.66 at the four corners, and its outline within 0.0002
+units (a test checks both).
+
+**Checked first**, as in session 6: the renderer's surface pass against the port in
+`surfaces.py`, now reading `bezel_maps`' `glass.png`, mask and artifacts off: glass within 1 step
+on every one of 1 076 284 pixels, bezel as before. The RetroArch parity cases stay within 1 step
+of the renderer.
+
+**Results** (`measure_surfaces.py`; `GLASS=formula` gives session 6's):
+
+| | Formula (session 6) | Baked (session 7) |
+| --- | ---: | ---: |
+| Glass shade, mean / max steps | 0.83 / 2.6 | 0.006 / 0.58 |
+| Pixels showing a different surface | 940 | 576 |
+| … glass in the meshes, not in the renderer | 36 | 0 |
+| … bezel in the meshes, glass in the renderer | 452 | 36 |
+| … bezel in the meshes, nothing in the renderer | 452 | 540 |
+| Picture, whole, mean steps | 0.46 | 0.30 |
+| Picture, glass inside | 0.45 | 0.30 |
+| Picture, outline band (4 px) | 3.9 (18 506 px) | 2.1 (13 054 px) |
+
+Every pixel the mesh shows as glass, the renderer now does too. The 576 left are where the meshes show the
+bezel: 540 at its outer rim, which the ray march misses at grazing angles, and 36 at its inner
+lip, in front of the glass. Those come from the bezel's bake, not the glass. Inside the glass,
+what remains is the faceted UVs (0.29 steps, as session 6 found): the mesh's mask shifts from
+triangle to triangle and the sphere's does not. Baking the mesh's UVs would remove that too, but
+would bring the faceting into the renderer's picture, which is a choice about fidelity to the
+game, not a gap in the measurement.
+
 ## Unresolved
 
 1. ~~How the LUT fills between palette entries~~: nearest source colour (session 2).
@@ -366,12 +414,12 @@ the mesh model, inside the surfaces:
 4. ~~Whether parity flips once per presented frame~~: it does, frame to frame (session 4).
    Behaviour on dropped or repeated frames is still unchecked.
 5. ~~`MonitorColor` and the Brightness default~~: (0.06, 0.06, 0.06, 0) and 0 (session 4).
-   The vertex colours `Tuning_Dimming` reads from `screen.m3d`: 15 greys, against the
-   renderer's formula 0.62 steps on average at the vertices (session 6).
+   The vertex colours `Tuning_Dimming` reads from `screen.m3d`: 15 greys, which the renderer
+   reads baked since session 7.
 8. Whether the Windows build flips the artifact pattern as the Linux build does.
 6. ~~How large the glass and bezel approximations are~~: measured (session 6), 0.46 steps
-   on average over the probe, most of it the mesh's shade bands and faceted UVs, and the
-   outline.
+   on average over the probe; 0.30 since the glass's shade and outline are baked (session 7),
+   most of what is left the mesh's faceted UVs and the bezel's rim.
 7. Viewport handling of the 4:3 target aspect in non-4:3 windows.
 
 ## Proposals
@@ -403,11 +451,11 @@ None of these are made yet. In order of how much they would close the gap:
    residual as with artifacts off; final mean 0.72 (from 1.4). A RetroArch parity case covers
    it. The Super Win the Game preset turns it on, matching the Linux build.
 
-7. **Glass shade and outline from the mesh** (optional): bake `screen.m3d`'s vertex colours,
-   and its outline, into an image as the bezel's are, and read them where the ray meets the
-   sphere. *Expected:* the glass's 0.33-step shade term and most of the outline band gone;
-   the faceted UVs (0.29) would stay unless the mesh's UVs were baked too.
-   *Validate:* `measure_surfaces.py`.
+7. **Glass shade and outline from the mesh.** *Done in session 7:* `glass.rs` bakes
+   `screen.m3d`'s vertex colours and outline across the glass's UVs; the surface pass and the
+   RetroArch port read them (`glass.png`). Glass shade from 0.83 steps to 0.006, every
+   pixel the mesh shows as glass shown as glass, picture 0.46 → 0.30. Goldens
+   regenerated: about 0.1 step on average, more on the outline's pixels.
 
 Frame-by-frame comparison is set up (session 4); more probes, motion and other settings can go
 through it.
@@ -450,8 +498,9 @@ With artifacts off, set `NTSC: 0` in the game's `Config.ini` (under the run's ho
 `ARTIFACTS=0 render_probe …`; `BLOOM=0` gives the surface before bloom, which compares with the
 game's `monitor` pass.
 
-Glass and bezel against the meshes (session 6), no game needed beyond a composite frame to
-shade with (any 256×224 PNG works):
+Glass and bezel against the meshes (sessions 6 and 7), no game needed beyond a composite frame
+to shade with (any 256×224 PNG works); `GLASS=formula` measures the glass as drawn before
+session 7:
 
 ```bash
 (cd SCRIPTS/bezel_maps && cargo build --release)    # then: bezel_maps maps
