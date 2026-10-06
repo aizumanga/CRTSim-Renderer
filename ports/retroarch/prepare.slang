@@ -7,6 +7,7 @@
 layout(std140, set = 0, binding = 0) uniform UBO {
     mat4 MVP;
     float CRTSIM_TABLE;
+    float CRTSIM_TABLE_NEAREST;
     float CRTSIM_LUT_STRENGTH;
     float CRTSIM_HUE;
     float CRTSIM_CHROMA;
@@ -43,6 +44,13 @@ vec3 apply_table(vec3 k) {
     ivec3 lo = ivec3(floor(xyz));
     ivec3 hi = min(lo + ivec3(1), ivec3(last));
     vec3 f = xyz - vec3(lo);
+    // Nearest in red and green, as Super Win the Game reads its palette's table, blends only
+    // blue.
+    if (global.CRTSIM_TABLE_NEAREST > 0.5) {
+        lo.xy = ivec2(floor(xyz.xy + vec2(0.5)));
+        hi.xy = lo.xy;
+        f.xy = vec2(0.0);
+    }
     vec3 out_ = vec3(0.0);
     for (int z = 0; z < 2; z++) {
         for (int y = 0; y < 2; y++) {

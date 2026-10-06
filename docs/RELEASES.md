@@ -1,5 +1,23 @@
 # Portable releases (Phase 4)
 
+## Unreleased
+
+- **Flip artifact pattern** (Signal) draws the composite artifact pattern upside down, each tick blending the row above,
+  as Super Win the Game's Linux build does; with it, the composite signal matches that build's frames within 2 steps.
+  Off by default, as in the public source; the **Super Win the Game** preset turns it on. RetroArch presets carry it.
+- **NES palette** can be made **the game's** way, exactly as Super Win the Game makes it: every colour its Tint, Tint I and
+  Tint Q give matches the game's own output, as does its 32-step table, which takes the NES palette the game's art is
+  drawn in (beginning `7C7C7C 0000FC 0000BC`) onto them. The **Super Win the Game** preset uses it. **From the composite
+  signal**, the palette until now, stays for art in MAME's NES palette, and looks saved with a palette keep it. The
+  game's table is read as the game reads it, nearest in red and green and blended in blue, in the app and in RetroArch.
+- **NTSC blending** works as Super Win the Game's NTSC Blending does, which the game's code shows: each tick shows half
+  the setting of the other pattern, so the game's 0.35 mixes them 17.5/82.5 rather than 35/65, and 1 is their average.
+  The **Super Win the Game** preset keeps 0.35 and now blends as the game does.
+- Presets, projects, sessions and files with an embedded look are saved as settings version 2. Those saved before,
+  as version 1 or with no version, open with their NTSC blending doubled, so they look as they did; a value past 0.5,
+  which blended beyond the average, opens above the slider's 1 and keeps its picture too. Earlier versions of the app
+  cannot open settings saved by this one. RetroArch presets read the setting the same way.
+
 ## v0.9.0
 
 - The RetroArch presets draw the bezel, as the app does: the curved glass and its bezel, lit, with the screen's

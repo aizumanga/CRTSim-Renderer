@@ -4,7 +4,7 @@ struct Params {
     mvp: mat4x4<f32>,
     size: vec4<f32>,
     signal: vec4<f32>, // sharpness, bleed, artifacts, phase
-    persistence: vec4<f32>,
+    persistence: vec4<f32>, // rgb, artifact pattern flipped
     geometry: vec4<f32>, // UV scale xy, overscan, barrel
     mask: vec4<f32>, // repeats xy, brightness, opacity
     lighting: vec4<f32>, // diffuse, specular, power, rim
@@ -44,7 +44,9 @@ fn display_luma(c: vec3<f32>) -> f32 {
 @fragment fn composite(q: Quad) -> @location(0) vec4<f32> {
     let dx = vec2(1./p.size.x,0.);
     // Original artifact tile covers 256x224 logical pixels; do not stretch at new sizes.
-    let auv = q.uv * p.size.xy / vec2(256.,224.);
+    // Flipped, the pattern runs from the bottom up, so the second sample is the row above.
+    let v = select(q.uv.y,1.-q.uv.y,p.persistence.w>0.5);
+    let auv = vec2(q.uv.x,v) * p.size.xy / vec2(256.,224.);
     let a = mix(textureSampleLevel(artifacts,point_repeat,auv,0.),
         textureSampleLevel(artifacts,point_repeat,auv+vec2(0.,1./224.),0.),p.signal.w).rgb;
     let left = textureSampleLevel(source,point_clamp,q.uv-dx,0.).rgb;

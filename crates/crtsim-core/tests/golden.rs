@@ -180,13 +180,13 @@ fn cases(renderer: &Renderer) -> Vec<(&'static str, RgbaImage)> {
     for (name, phase) in [("phase-a", Phase::A), ("phase-b", Phase::B)] {
         cases.push((name, render(&Config { phase, ..base() }).crt));
     }
-    // The blend between the two patterns, at Super Win the Game's setting, seen in the signal
-    // where the composite pass writes it.
+    // The blend between the two patterns, seen in the signal where the composite pass writes
+    // it: 0.7 shows 35% of the other pattern.
     cases.push((
         "ntsc-blending",
         render(&Config {
             phase: Phase::A,
-            ntsc_blending: 0.35,
+            ntsc_blending: 0.7,
             ..base()
         })
         .signal,
@@ -382,7 +382,12 @@ fn prepare_cases(renderer: &Renderer) -> Vec<(&'static str, RgbaImage)> {
             "prepare-nes-palette",
             &mame_chart,
             Config {
-                palette: Some(Default::default()),
+                // The model for MAME's colours, which this chart is.
+                palette: Some(crtsim_core::palette::NesPalette {
+                    model: crtsim_core::palette::Model::Signal,
+                    tint: 5.18,
+                    ..Default::default()
+                }),
                 ..nearest("64x32")
             },
         ),

@@ -100,13 +100,14 @@ fn ntsc_blending_moves_the_two_phases_towards_each_other() {
     assert_eq!(artifact_mix(Phase::A, 0., 0), 0.);
     assert_eq!(artifact_mix(Phase::B, 0., 0), 1.);
     assert_eq!(artifact_mix(Phase::Alternating, 0., 7), 1.);
-    // Super Win the Game's 0.35: each tick mixes in some of the other pattern.
-    assert_eq!(artifact_mix(Phase::A, 0.35, 0), 0.35);
-    assert_eq!(artifact_mix(Phase::B, 0.35, 0), 0.65);
-    assert_eq!(artifact_mix(Phase::Alternating, 0.35, 4), 0.35);
-    assert_eq!(artifact_mix(Phase::Alternating, 0.35, 5), 0.65);
-    // Half-way, every tick shows the average, as stable phase always does.
-    assert_eq!(artifact_mix(Phase::Alternating, 0.5, 1), 0.5);
+    // Super Win the Game's 0.35: each tick mixes in half that of the other pattern, as the
+    // game's NTSCLerp = p + (0.5 - p) * 0.35 does.
+    assert_eq!(artifact_mix(Phase::A, 0.35, 0), 0.175);
+    assert_eq!(artifact_mix(Phase::B, 0.35, 0), 0.825);
+    assert_eq!(artifact_mix(Phase::Alternating, 0.35, 4), 0.175);
+    assert_eq!(artifact_mix(Phase::Alternating, 0.35, 5), 0.825);
+    // Fully blended, every tick shows the average, as stable phase always does.
+    assert_eq!(artifact_mix(Phase::Alternating, 1., 1), 0.5);
     assert_eq!(artifact_mix(Phase::Stable, 0.35, 0), 0.5);
 }
 
@@ -165,8 +166,14 @@ fn gpu_prepare_matches_cpu_prepare() {
                 c.lut_strength = next(1.).abs();
             }
         } else if case % 4 == 2 {
+            // Both models: the game's 32-step table and the signal's 64-step one.
             c.palette = Some(crate::palette::NesPalette {
                 tint: 5.18 + next(1.),
+                model: if case % 8 == 2 {
+                    crate::palette::Model::Game
+                } else {
+                    crate::palette::Model::Signal
+                },
                 ..Default::default()
             });
         }

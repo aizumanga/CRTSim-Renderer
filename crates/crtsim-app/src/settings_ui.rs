@@ -1,6 +1,7 @@
 //! The settings panel: CRT settings by section, then source framing and color.
 use crate::widgets::{choice, numbers, resolution, Keyed};
 use crate::*;
+use crtsim_core::palette::Model;
 
 impl App {
     pub(crate) fn settings(&mut self, ui: &mut egui::Ui) {
@@ -152,7 +153,7 @@ impl App {
                 numbers(ui, &mut self.config, &defaults, settings::Section::Grade);
                 ui.small(
                     "YIQ hue/chroma adjustment. This is an optional grade, not the game's \
-                     unpublished NES palette LUT or a complete NTSC decoder.",
+                     NES palette or a complete NTSC decoder.",
                 );
             });
             ui.checkbox(
@@ -218,6 +219,12 @@ impl App {
                     (Phase::Alternating, "Alternating"),
                 ],
             );
+            ui.checkbox(&mut self.config.flip_artifacts, "Flip artifact pattern")
+                .on_hover_text(
+                    "The composite artifact pattern upside down, each tick blending in the row \
+                     above rather than below, as Super Win the Game's Linux build draws it. Off \
+                     is the public CRTSim source's orientation.",
+                );
             ui.checkbox(&mut self.config.interlace, "Interlaced fields")
                 .on_hover_text(
                     "Each tick scans every other row, alternating fields; the rows it skips \
@@ -329,7 +336,10 @@ impl App {
             });
         crate::chrome::Section::new("Color & LUT").show(ui, |ui| {
             ui.label(match (&self.config.palette, &self.config.lut) {
-                (Some(_), _) => "NES palette from the composite signal",
+                (Some(palette), _) => match palette.model {
+                    Model::Game => "NES palette, the game's",
+                    Model::Signal => "NES palette from the composite signal",
+                },
                 (None, Some(lut)) => lut.name.as_str(),
                 (None, None) => "No LUT",
             });
@@ -345,15 +355,32 @@ impl App {
             }
             let mut generated = self.config.palette.is_some();
             let toggled = ui
-                .checkbox(&mut generated, "NES palette from the composite signal")
+                .checkbox(&mut generated, "NES palette")
                 .on_hover_text(
-                    "Super Win the Game's NTSC palette: the NES's colours decoded from its \
-                     signal, turned by Tint and scaled along I and Q. It recolours images drawn \
-                     in MAME's NES palette, and replaces any LUT.",
+                    "Super Win the Game's NTSC palette, set by Tint, Tint I and Tint Q. It \
+                     recolours images drawn in the NES palette and replaces any LUT.",
                 )
                 .changed();
             if toggled {
                 self.config.set_palette(generated.then(Default::default));
+            }
+            if let Some(palette) = &mut self.config.palette {
+                ui.radio_value(&mut palette.model, Model::Game, "The game's")
+                    .on_hover_text(
+                        "Exactly as Super Win the Game makes it, for art in the NES palette \
+                         its own is drawn in, which begins 7C7C7C 0000FC 0000BC. Tint I and Q \
+                         steer each hue there, not its saturation.",
+                    );
+                ui.radio_value(
+                    &mut palette.model,
+                    Model::Signal,
+                    "From the composite signal",
+                )
+                .on_hover_text(
+                    "The NES's colours decoded from its measured signal, turned by Tint \
+                         and scaled along I and Q, for art in MAME's NES palette, which the \
+                         included NES LUTs also expect.",
+                );
             }
             if self.config.lut.is_some() || self.config.palette.is_some() {
                 let defaults = Config {

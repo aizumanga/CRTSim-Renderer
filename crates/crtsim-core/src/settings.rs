@@ -230,6 +230,7 @@ pub static SETTINGS: &[Setting] = &[
         "Tint Q",
         Numbers::slider(Color, palette!(tint_q), 0.0..=4.).accepting((Included(0.), Included(10.))),
     ),
+    Setting::other("palette.model", "NES palette model"),
     Setting::other("color_mode", "Color processing"),
     Setting::numbers(
         "hue",
@@ -265,7 +266,9 @@ pub static SETTINGS: &[Setting] = &[
     Setting::numbers(
         "ntsc_blending",
         "NTSC blending",
-        Numbers::slider(Signal, access!(ntsc_blending), 0.0..=1.),
+        // The game's slider; settings migrated from version 1 may hold up to twice it.
+        Numbers::slider(Signal, access!(ntsc_blending), 0.0..=1.)
+            .accepting((Included(0.), Included(2.))),
     ),
     Setting::numbers(
         "barrel",
@@ -370,6 +373,7 @@ pub static SETTINGS: &[Setting] = &[
     Setting::other("warmup", "Warm-up ticks"),
     Setting::other("phase", "Phase"),
     Setting::other("interlace", "Interlaced fields"),
+    Setting::other("flip_artifacts", "Flip artifact pattern"),
 ];
 
 /// Checks every numeric setting against what a preset may hold, naming the first that is not.

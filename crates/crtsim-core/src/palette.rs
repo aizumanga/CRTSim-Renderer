@@ -1,16 +1,18 @@
-//! The NES palette from its composite signal, as Super Win the Game's NTSC palette controls
-//! shape it, turned into a colour LUT for images drawn in MAME's NES palette.
+//! The NES palette with Super Win the Game's NTSC palette controls -- Tint, Tint I and Tint Q --
+//! turned into a colour LUT, made one of two ways ([`Model`]):
 //!
-//! The game's own decoder is not public, so this decodes the signal the documented way: the
-//! PPU's measured voltage levels, sampled at the twelve phases of its colour wave and
-//! demodulated against a colour burst at hue 8. A set's colour control sizes chroma by the
-//! burst, which the NES sends larger than broadcast; the resulting 60% and an 8 degree phase
-//! offset are fitted to FirebrandX's Composite Direct capture as the bundled LUT holds it, and
-//! land within 23 steps of it on average. Tint, Tint I and Tint Q keep the game's units:
-//! its defaults (5.18, 1.75 and 1.00) are that standard decode, Tint turns every hue and the
-//! other two scale the I and Q axes. The input side is MAME's palette, which the bundled NES
-//! LUTs also expect, so a frame from MAME -- or art drawn in its colours -- maps exactly, and
-//! colours between its entries follow smoothly rather than being forced onto one.
+//! - **The game's**, exactly as Super Win the Game makes it (`game_palette`), taking the NES
+//!   palette its art is drawn in onto the colours its controls give.
+//! - **From the composite signal**: the NES palette decoded the documented way, from the PPU's
+//!   measured voltage levels, sampled at the twelve phases of its colour wave and demodulated
+//!   against a colour burst at hue 8. A set's colour control sizes chroma by the burst, which
+//!   the NES sends larger than broadcast; the resulting 60% and an 8 degree phase offset are
+//!   fitted to FirebrandX's Composite Direct capture as the bundled LUT holds it, and land
+//!   within 23 steps of it on average. Tint turns every hue and the other two scale the I and
+//!   Q axes, about the game's defaults as the standard decode. The input side is MAME's
+//!   palette, which the bundled NES LUTs also expect, so a frame from MAME -- or art drawn in
+//!   its colours -- maps exactly, and colours between its entries follow smoothly rather than
+//!   being forced onto one.
 
 use crate::workflow::Lut;
 use serde::{Deserialize, Serialize};
@@ -19,7 +21,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-/// The game's NTSC palette controls.
+/// The game's NTSC palette controls, and how the palette is made from them.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct NesPalette {
@@ -29,29 +31,64 @@ pub struct NesPalette {
     pub tint_i: f32,
     /// Scales the Q axis: purple against green.
     pub tint_q: f32,
+    /// Palettes saved before the game's own existed decoded the signal, and keep doing so.
+    #[serde(default = "Model::saved_without_one")]
+    pub model: Model,
+}
+
+/// How the palette is made from the controls.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Model {
+    /// Exactly as Super Win the Game makes it, for art in the NES palette the game's is drawn
+    /// in. I and Q only steer each hue there, never its saturation.
+    #[default]
+    Game,
+    /// Decoded from the NES's composite signal, for art in MAME's NES palette.
+    Signal,
+}
+
+impl Model {
+    fn saved_without_one() -> Self {
+        Self::Signal
+    }
 }
 
 impl Default for NesPalette {
-    /// The game's defaults, which give the standard decode.
+    /// The game's defaults.
     fn default() -> Self {
         Self {
-            tint: 5.18,
+            tint: 5.183186,
             tint_i: 1.75,
             tint_q: 1.,
+            model: Model::Game,
         }
     }
 }
 
-/// Samples along each side of the LUT, as in the bundled NES LUTs.
+/// The controls at which the signal's decode is the standard one, which its Tint turns from
+/// and its I and Q scale from.
+const SIGNAL_NEUTRAL: (f32, f32, f32) = (5.18, 1.75, 1.);
+
+/// Samples along each side of the signal model's LUT, as in the bundled NES LUTs.
 const LUT_SIZE: usize = 64;
 
 impl NesPalette {
-    /// The 64 colours the signal decodes to, in 0-1 RGB, indexed by NES colour number.
+    /// The 64 colours of the palette, in 0-1 RGB, indexed by NES colour number.
     pub fn colors(&self) -> [[f64; 3]; 64] {
-        let neutral = Self::default();
-        let turn = f64::from(self.tint - neutral.tint);
-        let gain_i = f64::from(self.tint_i / neutral.tint_i);
-        let gain_q = f64::from(self.tint_q / neutral.tint_q);
+        match self.model {
+            Model::Game => crate::game_palette::colors(self.tint, self.tint_i, self.tint_q)
+                .map(|color| color.map(|c| f64::from(c) / 255.)),
+            Model::Signal => self.signal_colors(),
+        }
+    }
+
+    /// The 64 colours the signal decodes to.
+    fn signal_colors(&self) -> [[f64; 3]; 64] {
+        let (tint, tint_i, tint_q) = SIGNAL_NEUTRAL;
+        let turn = f64::from(self.tint - tint);
+        let gain_i = f64::from(self.tint_i / tint_i);
+        let gain_q = f64::from(self.tint_q / tint_q);
         std::array::from_fn(|index| {
             let (y, u, v) = decode(index);
             // Tint turns the hue; the gains act on I and Q, which sit 33 degrees round from
@@ -68,8 +105,8 @@ impl NesPalette {
         })
     }
 
-    /// The palette as a LUT from MAME's NES colours to these, shared while the settings stay
-    /// the same, so a renderer can keep it on the GPU. The few palettes used last are kept, so
+    /// The palette as a LUT from the NES colours its model expects to these, shared while the
+    /// settings stay the same, so a renderer can keep it on the GPU. The few palettes used last are kept, so
     /// a preview, an export and a gallery thumbnail with different settings do not keep
     /// replacing each other's.
     pub fn lut(&self) -> Arc<Lut> {
@@ -93,6 +130,26 @@ impl NesPalette {
     }
 
     fn build_lut(&self) -> Lut {
+        let name = format!(
+            "NES palette, {} (tint {:.2}, I {:.2}, Q {:.2})",
+            match self.model {
+                Model::Game => "the game's",
+                Model::Signal => "from the signal",
+            },
+            self.tint,
+            self.tint_i,
+            self.tint_q
+        );
+        match self.model {
+            Model::Game => crate::game_palette::lut(
+                &crate::game_palette::colors(self.tint, self.tint_i, self.tint_q),
+                name,
+            ),
+            Model::Signal => self.signal_lut(name),
+        }
+    }
+
+    fn signal_lut(&self, name: String) -> Lut {
         // Entries MAME draws alike (its blacks, its two whites) share one target: the average.
         let mut points: Vec<([f64; 3], [f64; 3], f64)> = vec![];
         for (from, to) in mame_colors().into_iter().zip(self.colors()) {
@@ -126,14 +183,12 @@ impl NesPalette {
             })
             .collect();
         Lut {
-            name: format!(
-                "NES palette (tint {:.2}, I {:.2}, Q {:.2})",
-                self.tint, self.tint_i, self.tint_q
-            ),
+            name,
             size: LUT_SIZE,
             domain_min: [0.; 3],
             domain_max: [1.; 3],
             values,
+            sampling: Default::default(),
         }
     }
 }
@@ -240,9 +295,17 @@ mod tests {
         color.map(|c| (c * 255.).round() as i32)
     }
 
+    /// The signal model at the game's controls.
+    fn signal() -> NesPalette {
+        NesPalette {
+            model: Model::Signal,
+            ..NesPalette::default()
+        }
+    }
+
     #[test]
     fn the_signal_decodes_to_the_nes_colours_it_is_known_by() {
-        let colors = NesPalette::default().colors();
+        let colors = signal().colors();
         // Greys: black, the four levels of hue 0, and hue 13 at level 0 below black.
         assert_eq!(steps(colors[0x0F]), [0, 0, 0]);
         assert_eq!(steps(colors[0x0D]), [0, 0, 0]);
@@ -272,10 +335,10 @@ mod tests {
 
     #[test]
     fn tint_turns_hues_and_the_gains_scale_chroma() {
-        let neutral = NesPalette::default().colors();
+        let neutral = signal().colors();
         let turned = NesPalette {
             tint: 5.18 + std::f32::consts::PI,
-            ..NesPalette::default()
+            ..signal()
         }
         .colors();
         // Half a turn swaps a hue for its opposite: blue for yellow-ish.
@@ -289,7 +352,7 @@ mod tests {
         let grey = NesPalette {
             tint_i: 0.,
             tint_q: 0.,
-            ..NesPalette::default()
+            ..signal()
         }
         .colors();
         for color in grey {
@@ -301,7 +364,7 @@ mod tests {
     fn the_lut_takes_mames_palette_onto_the_generated_one() {
         let settings = NesPalette {
             tint: 5.5,
-            ..NesPalette::default()
+            ..signal()
         };
         let lut = settings.lut();
         lut.validate().unwrap();
@@ -327,5 +390,35 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod model_tests {
+    use super::*;
+
+    #[test]
+    fn palettes_saved_without_a_model_keep_decoding_the_signal() {
+        let saved: NesPalette = serde_json::from_str(r#"{"tint":5.18}"#).unwrap();
+        assert_eq!(saved.model, Model::Signal);
+        let new: NesPalette = serde_json::from_str(r#"{"model":"game"}"#).unwrap();
+        assert_eq!(new, NesPalette::default());
+        assert_eq!(NesPalette::default().model, Model::Game);
+    }
+
+    #[test]
+    fn the_games_lut_takes_its_art_palette_onto_its_colours() {
+        let settings = NesPalette::default();
+        let lut = settings.lut();
+        lut.validate().unwrap();
+        assert_eq!(lut.size, 32);
+        let colors = crate::game_palette::colors(settings.tint, settings.tint_i, settings.tint_q);
+        // At a table sample, the colour the nearest art colour turns into: grey 0x10 sits on
+        // level 23 of 31 (188.9), and 0x30 near white on level 31.
+        let at = |r: usize, g: usize, b: usize| lut.values[r + 32 * (g + 32 * b)];
+        let expect = |index: usize| colors[index].map(|c| f32::from(c) / 255.);
+        assert_eq!(at(23, 23, 23), expect(0x10));
+        assert_eq!(at(31, 31, 31), expect(0x20));
+        assert_eq!(at(0, 0, 0), expect(0x0D));
     }
 }

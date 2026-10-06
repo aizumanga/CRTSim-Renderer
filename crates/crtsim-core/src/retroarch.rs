@@ -9,10 +9,11 @@
 
 use crate::config::{ColorMode, Config, Fit, MaskRepeats, Phase};
 use crate::settings::{Control, SETTINGS};
-use crate::workflow::Lut;
+use crate::workflow::{Lut, Sampling};
 use anyhow::{ensure, Result};
 use image::{ImageFormat, Rgba, RgbaImage};
 use std::fmt::Write as _;
+use std::ops::Bound;
 
 /// Where a preset finds the port's shaders and textures, relative to it.
 const SHADERS: &str = "shaders/crtsim-renderer";
@@ -234,6 +235,18 @@ fn parameters() -> Vec<Parameter> {
         choice("CRTSIM_TABLE", "Colour table (off, on)", 1., |c| {
             flag(c.lut_in_use().is_some())
         }),
+        // Super Win the Game's palette is read as the game reads it; other tables blend.
+        choice(
+            "CRTSIM_TABLE_NEAREST",
+            "Colour table red and green (blended, nearest)",
+            1.,
+            |c| {
+                flag(
+                    c.lut_in_use()
+                        .is_some_and(|lut| lut.sampling == Sampling::NearestRedGreen),
+                )
+            },
+        ),
         choice(
             "CRTSIM_LINEAR",
             "Linear light (off, on; the linear preset's buffers)",
@@ -253,6 +266,12 @@ fn parameters() -> Vec<Parameter> {
         ),
         // A look made on a still says nothing about a core that switches to 480 rows, so a
         // look that does not interlace leaves it to the picture's size.
+        choice(
+            "CRTSIM_FLIP_ARTIFACTS",
+            "Artifact pattern (as the public source, flipped)",
+            1.,
+            |c| flag(c.flip_artifacts),
+        ),
         choice(
             "CRTSIM_INTERLACE",
             "Interlaced fields (off, on, auto)",
@@ -314,10 +333,14 @@ fn parameters() -> Vec<Parameter> {
             .find(|s| s.key == *key)
             .expect("a setting the port reads is in the table");
         let numbers = setting.numbers.as_ref().expect("a numeric setting");
-        let (min, max) = match &numbers.control {
+        let (min, mut max) = match &numbers.control {
             Control::Slider { span, .. } => (*span.start(), *span.end()),
             Control::Color => (0., 1.),
         };
+        // A look may hold more than its slider shows; RetroArch's range has to reach it.
+        if let Bound::Included(valid) = numbers.valid.1 {
+            max = max.max(valid);
+        }
         for (index, name) in names.iter().enumerate() {
             all.push(Parameter {
                 name,
@@ -529,34 +552,11 @@ fn strip(lut: &Lut) -> RgbaImage {
     RgbaImage::from_fn((n * n) as u32, n as u32, |x, y| {
         let (r, b, g) = (x as usize % n, x as usize / n, y as usize);
         let colour = [r, g, b].map(|v| v as f32 / last);
-        let [r, g, b] = sample(lut, colour).map(|v| (v.clamp(0., 1.) * 255.).round() as u8);
+        let [r, g, b] = lut
+            .sample(colour)
+            .map(|v| (v.clamp(0., 1.) * 255.).round() as u8);
         Rgba([r, g, b, 255])
     })
-}
-
-/// `lut` at `colour`, blended between its lattice as `Lut::apply_with_strength` blends.
-fn sample(lut: &Lut, colour: [f32; 3]) -> [f32; 3] {
-    let n = lut.size;
-    let xyz: [f32; 3] = std::array::from_fn(|i| {
-        ((colour[i] - lut.domain_min[i]) / (lut.domain_max[i] - lut.domain_min[i])).clamp(0., 1.)
-            * (n - 1) as f32
-    });
-    let lo = xyz.map(|v| v.floor() as usize);
-    let hi = lo.map(|v| (v + 1).min(n - 1));
-    let f: [f32; 3] = std::array::from_fn(|i| xyz[i] - lo[i] as f32);
-    let mut out = [0.; 3];
-    for corner in 0..8 {
-        let pick = |axis: usize| corner >> axis & 1 == 1;
-        let at: [usize; 3] = std::array::from_fn(|i| if pick(i) { hi[i] } else { lo[i] });
-        let weight: f32 = (0..3)
-            .map(|i| if pick(i) { f[i] } else { 1. - f[i] })
-            .product();
-        let value = lut.values[at[0] + n * at[1] + n * n * at[2]];
-        for c in 0..3 {
-            out[c] += value[c] * weight;
-        }
-    }
-    out
 }
 
 /// The table a look without one is given, so every preset binds the same textures.
@@ -569,6 +569,7 @@ fn identity_table() -> Lut {
         values: (0..8)
             .map(|i| [i & 1, i >> 1 & 1, i >> 2 & 1].map(|v| v as f32))
             .collect(),
+        sampling: Default::default(),
     }
 }
 

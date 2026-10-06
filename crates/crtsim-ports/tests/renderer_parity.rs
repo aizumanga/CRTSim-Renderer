@@ -128,6 +128,16 @@ fn cases() -> Vec<Case> {
                 ..base()
             },
         ),
+        // The artifact pattern upside down, as the game's Linux build draws it.
+        still(
+            "alternating-flipped",
+            Config {
+                phase: Phase::Alternating,
+                ntsc_blending: 0.35,
+                flip_artifacts: true,
+                ..base()
+            },
+        ),
         still(
             "linear-light",
             Config {
@@ -164,12 +174,24 @@ fn cases() -> Vec<Case> {
                 ..base()
             },
         ),
+        // The game's palette, read nearest in red and green as the game reads it.
         still(
             "nes-palette-graded",
             Config {
                 palette: Some(Default::default()),
                 hue: 20.,
                 chroma: 1.2,
+                ..base()
+            },
+        ),
+        // The signal's, a table in floats read blended in all three.
+        still(
+            "nes-palette-signal",
+            Config {
+                palette: Some(crtsim_core::palette::NesPalette {
+                    model: crtsim_core::palette::Model::Signal,
+                    ..Default::default()
+                }),
                 ..base()
             },
         ),

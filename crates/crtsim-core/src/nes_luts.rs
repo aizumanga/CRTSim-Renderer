@@ -205,6 +205,7 @@ fn decode_strip(name: &str, png: &[u8]) -> Result<Lut> {
         domain_min: [0.; 3],
         domain_max: [1.; 3],
         values,
+        sampling: Default::default(),
     };
     lut.validate()?;
     Ok(lut)
