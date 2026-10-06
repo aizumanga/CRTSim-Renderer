@@ -8,6 +8,10 @@
   again), and the arrow keys step it by 0.1% of its range (**Shift** 1%, **Alt** 0.01%).
 - The NES palette made as the game makes it is called **Super Win the Game's** rather than "the game's".
 - The status bar shows the app's version in its lower right corner.
+- The web app's MP4 and WebM exports embed their preset as the desktop's do, in the container's
+  comment, so either app imports it. The web app's **Import preset from Image/Video…** now reads
+  a preset from an MP4 or WebM as well as a PNG.
+- On the desktop, an animation opened from a browser's bytes exports as a video too.
 
 ## v1.0.1
 

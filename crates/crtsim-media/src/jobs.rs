@@ -313,8 +313,11 @@ pub async fn export_video<S: FrameSource, E: VideoEncoding>(
         start: 0.,
         limit: None,
     };
+    let preset = crate::Preset::comment(config, options)?;
     let encoder = encoder(&settings).await?;
-    let output = made_here::Video::new(video, container, options, rate.fps, encoder, reencode);
+    let output = made_here::Video::new(
+        video, container, preset, options, rate.fps, encoder, reencode,
+    );
     export(&frames, open, render, output, cancel, progress).await
 }
 
@@ -723,10 +726,11 @@ mod tests {
         ))
         .unwrap();
         let name = format!("out.{}", container.extension());
-        (
-            crate::demux::demux(std::path::Path::new(&name), &file).unwrap(),
-            converted.get(),
-        )
+        let name = std::path::Path::new(&name);
+        // The settings it was made with, which an import reads back.
+        let preset = crate::import_preset_from_bytes(name, &file, (256, 224)).unwrap();
+        assert_eq!((preset.config, preset.video_options.audio), (config, audio));
+        (crate::demux::demux(name, &file).unwrap(), converted.get())
     }
 
     #[test]

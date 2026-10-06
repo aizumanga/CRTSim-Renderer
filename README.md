@@ -150,7 +150,9 @@ The same app runs in a browser with WebGPU, as the web app. It opens images, ani
 WebP, and MP4, MOV, WebM or MKV videos you pick or drop on the page (the videos decoded by the
 browser, so the codecs are the browser's), previews and plays them, and saves PNGs, MP4 and WebM videos (encoded by the browser, so the
 formats offered are those it can write), GIF and animated WebP exports and presets as downloads;
-its settings, presets and session stay in the browser. Projects and batch export are
+its settings, presets and session stay in the browser. Its MP4 and WebM exports embed the
+preset as the desktop's do, and **Import preset from Image/Video…** reads one back from a PNG,
+MP4 or WebM, made by either app. Projects and batch export are
 desktop-only for now (see [the web plan](docs/WEB_PLAN.md)).
 
 ```sh

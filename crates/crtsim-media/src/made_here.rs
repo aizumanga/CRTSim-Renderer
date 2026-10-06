@@ -114,12 +114,15 @@ impl<L: AsyncFnMut(&RgbaImage, u8) -> Result<Vec<u8>>> Output for Animation<L> {
 }
 
 /// An MP4 or WebM: frames encoded by the host, such as a browser's WebCodecs, with a keyframe
-/// every two seconds for seeking, and muxed here with the source's sound. Sound the container
-/// holds as it is, is copied; otherwise, or when the options ask for it, `reencode` turns it
-/// into Opus, which both containers hold.
+/// every two seconds for seeking, and muxed here with the source's sound and the preset the
+/// export used, which an import reads back. Sound the container holds as it is, is copied;
+/// otherwise, or when the options ask for it, `reencode` turns it into Opus, which both
+/// containers hold.
 pub struct Video<'v, E, R> {
     video: &'v crate::Video,
     container: Container,
+    /// The preset, as the container's comment.
+    preset: String,
     audio: Audio,
     fps: f64,
     /// Frames between keyframes.
@@ -133,6 +136,7 @@ impl<'v, E, R> Video<'v, E, R> {
     pub fn new(
         video: &'v crate::Video,
         container: Container,
+        preset: String,
         options: &Options,
         fps: f64,
         encoder: E,
@@ -141,6 +145,7 @@ impl<'v, E, R> Video<'v, E, R> {
         Self {
             video,
             container,
+            preset,
             audio: options.audio,
             fps,
             group: (fps * 2.).round().max(1.) as u64,
@@ -226,6 +231,6 @@ where
             fraction: 0.98,
             stage: "Writing the file".into(),
         });
-        mux::write(container, &encoded, audio.as_ref())
+        mux::write(container, &encoded, audio.as_ref(), Some(&self.preset))
     }
 }

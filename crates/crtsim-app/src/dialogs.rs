@@ -327,7 +327,9 @@ impl App {
         // The videos a browser opens are those its container reader knows.
         let extensions = match kind {
             Dialog::File => [crtsim_core::input::IMAGE_EXTENSIONS, WEB_VIDEO_EXTENSIONS].concat(),
-            Dialog::ImportPreset => crtsim_core::input::IMAGE_EXTENSIONS.to_vec(),
+            Dialog::ImportPreset => {
+                [crtsim_core::input::IMAGE_EXTENSIONS, WEB_VIDEO_EXTENSIONS].concat()
+            }
             _ => chooser.extensions,
         };
         self.dialog_open = true;
@@ -392,14 +394,13 @@ impl App {
                 }
             }
             Dialog::LoadPreset | Dialog::ImportPreset => {
-                let preset = match kind {
-                    Dialog::LoadPreset => files::preset_from_json(&bytes, input),
-                    _ => files::preset_from_png(&bytes, input),
-                };
-                match preset {
-                    Ok(c) => {
+                match preset_in(kind, &name, &bytes, input) {
+                    Ok((c, options)) => {
                         self.presets.name = file_stem(Path::new(&name));
                         self.replace_config(c);
+                        if let Some(options) = options {
+                            self.video_options = options;
+                        }
                         self.status = format!("Loaded preset {name}");
                         self.error = None;
                     }
@@ -413,5 +414,72 @@ impl App {
     /// Says that something the desktop app does is not in the web app yet.
     fn not_yet(&mut self, what: &str) {
         self.status = format!("{what} arrives in the web app in a later version");
+    }
+}
+
+/// The preset in the file called `name` that was picked to load or import one: a JSON
+/// preset, or the one a rendered PNG or video holds. A video's also holds the video export
+/// settings it was made with.
+#[cfg_attr(
+    all(not(test), not(target_arch = "wasm32")),
+    expect(dead_code, reason = "the desktop imports presets from files by path")
+)]
+fn preset_in(
+    kind: Dialog,
+    name: &str,
+    bytes: &[u8],
+    input: (u32, u32),
+) -> anyhow::Result<(Config, Option<crtsim_media::Options>)> {
+    let path = Path::new(name);
+    match kind {
+        Dialog::LoadPreset => files::preset_from_json(bytes, input).map(|c| (c, None)),
+        _ if crtsim_media::MediaKind::of(path) == crtsim_media::MediaKind::Video => {
+            let preset = crtsim_media::import_preset_from_bytes(path, bytes, input)?;
+            Ok((preset.config, Some(preset.video_options)))
+        }
+        _ => files::preset_from_png(bytes, input).map(|c| (c, None)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crtsim_media::mux;
+
+    /// A video's preset, picked as a browser hands it over, brings its settings and its video
+    /// export settings.
+    #[test]
+    fn a_preset_imports_from_a_picked_video() {
+        let config = Config {
+            bloom: 0.5,
+            ..Config::general()
+        };
+        let options = crtsim_media::Options {
+            audio: crtsim_media::Audio::Mute,
+            ..Default::default()
+        };
+        let preset = serde_json::json!({"version": 1, "config": config, "video_options": options});
+        let video = mux::EncodedVideo {
+            codec: "vp09.00.10.08".into(),
+            description: None,
+            size: (2, 2),
+            packets: vec![mux::Packet {
+                data: vec![0; 4],
+                time: 0.,
+                duration: 0.04,
+                key: true,
+            }],
+        };
+        let comment = format!("CRTSim-Renderer-Preset:{preset}");
+        let file = mux::write(crtsim_media::Container::Webm, &video, None, Some(&comment));
+        let file = file.unwrap();
+        let (imported, options) =
+            preset_in(Dialog::ImportPreset, "made.webm", &file, (256, 224)).unwrap();
+        assert_eq!(imported, config);
+        assert_eq!(options.unwrap().audio, crtsim_media::Audio::Mute);
+        // A video without one says so.
+        let plain = mux::write(crtsim_media::Container::Webm, &video, None, None).unwrap();
+        let error = preset_in(Dialog::ImportPreset, "plain.webm", &plain, (256, 224));
+        assert!(error.unwrap_err().to_string().contains("does not contain"));
     }
 }
