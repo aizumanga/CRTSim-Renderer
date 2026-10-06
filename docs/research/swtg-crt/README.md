@@ -222,8 +222,8 @@ Game** preset (`crates/crtsim-app/src/gallery.rs`) unless a row says otherwise.
 | Mask density on the bezel | (128, 224), as on the screen | (128, 112) on the frame | (128, 112) on the bezel | **difference**, bezel reflection only |
 | Mask texture and mips | `mask.bmp` + box mips, trilinear | `mask.bmp`, D3DX mips | `mask.bmp` + box mips (`halve`) | match |
 | Artifact texture | `artifacts.bmp` | same | same | match |
-| Screen geometry | `screen.m3d`, rasterised | same | ray-traced sphere fitted to it, analytic edge dimming | intentional extension; error vs mesh **unmeasured** |
-| Bezel geometry | `frame.m3d` | same | baked from `frame.m3d`, ray-marched | intentional extension; **unmeasured** |
+| Screen geometry | `screen.m3d`, rasterised | same | ray-traced sphere fitted to it, analytic edge dimming | intentional extension; measured (session 6): shape within 0.016 signal px, picture 0.45 steps inside, from the mesh's shade bands and faceted UVs |
+| Bezel geometry | `frame.m3d` | same | baked from `frame.m3d`, ray-marched | intentional extension; measured (session 6): picture 0.13 steps inside, UV p99 0.77 signal px |
 | FOV | 30° | 15° | preset 30° (default 15°) | match (preset) |
 | Artifact pattern orientation | flipped against the picture; second sample one row up (Linux build, session 4) | row *y* and the row below | either, **Flip artifact pattern** (`flip_artifacts`, session 5), off by default | **matches with the setting on**; Windows build unknown |
 | Lighting, light position | CRTSim's, (−10, −5, 10) | same | same | match |
@@ -292,6 +292,71 @@ Whether the Windows build, on Direct3D 9, flips the pattern too is not known: it
 render targets would both be top first, as in public CRTSim. Matching "the game" here may
 depend on which build is meant.
 
+## Glass and bezel against the meshes (session 6)
+
+The renderer draws the glass as the sphere `screen.m3d` was cut from and steps each ray across
+images baked from `frame.m3d`; the game rasterises the meshes. `scripts/surfaces.py` computes
+both per pixel: `rasterize` meets each pixel's ray with the nearest mesh triangle and blends its
+corners' UV, normal, colour and reflection there (what GL's perspective-correct interpolation
+gives), and `approximate` is `crtsim.wgsl`'s `surface()` ported line for line, reading the
+images `scripts/bezel_maps` writes. `scripts/measure_surfaces.py` compares them at the game's
+camera (FOV 30, 1280×960).
+
+**Both models checked first.** Each was shaded with a numpy port of `screen.fx`/`monitor.fx`
+and compared with real output, mask and artifacts off so only geometry and lighting count:
+
+- the mesh model with the game's captured composite against the game's own surface pass:
+  every one of 1 228 800 pixels within 1 step (rounding), outlines included;
+- the port with the renderer's composite against the renderer's surface: glass within 1 step,
+  bezel within 1 step on 99.97% of its pixels (worst 5, float differences in the ray march).
+
+**Results.** Where both show the same surface:
+
+| | Glass (1 076 212 px) | Bezel (151 648 px) |
+| --- | --- | --- |
+| UV, in signal pixels | mean 0.003, max 0.016 | mean 0.03, p99 0.77, max 1.4 |
+| Normal | mean 0.0007°, max 0.004° | mean 0.0009°, max 0.06° |
+| Shade (vertex colour), 8-bit steps | mean 0.83, max 2.6 | mean 0.26, p99 3.2, max 7.4 |
+| Reflection, 8-bit steps | — | mean 0.30, p99 5.1, max 8.6 |
+
+They disagree on which surface a pixel shows at 940 pixels, all along the screen's outline: the
+mesh's outline is a chain of straight segments between its vertices, the renderer's the smooth
+superellipse they lie on.
+
+**What it costs the picture.** Both shaded alike, as the game shades them, mask on, with the
+game's composite of the probe at default settings (8-bit steps, worst channel per pixel):
+
+| Region | Pixels | Mean | Past 2 | Past 8 | Max |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Whole picture | 1 228 800 | 0.46 | 0.84% | 0.15% | 242 |
+| Glass, inside | 1 067 930 | 0.45 | 0.69% | 0.03% | 58 |
+| Bezel, inside | 142 364 | 0.13 | 0.47% | 0.18% | 25 |
+| Outlines (4 px) | 18 506 | 3.9 | 12.3% | 6.8% | 242 |
+
+The whole-picture mean agrees with the 0.50 measured between the real captures (session 4),
+which also held the composite's rounding. Taking one attribute at a time from the renderer into
+the mesh model, inside the surfaces:
+
+| From the renderer | Glass | Bezel |
+| --- | ---: | ---: |
+| Shade | 0.33 | 0.02 |
+| UV | 0.29 | 0.11 |
+| Reflection | — | 0.04 |
+| Normal, position | 0.00 | 0.00 |
+
+- **The glass's shape is exact.** The sphere puts every point within 0.016 signal pixels of the
+  mesh and its normals within 0.005°. What remains is the mesh's own faceting: its UVs change
+  linearly within each triangle, so the mask's level of detail and phase shift from triangle to
+  triangle. That faint moiré is the UV row; the sphere is the smoother of the two.
+- **The glass's shade cannot come closer as a formula.** `1 − 0.5·r⁶` over the superellipse is
+  already the best fit of its kind (searching corner exponents and powers finds the same), but
+  the mesh stores its vertex colours as bytes, 15 greys in all, and blends them linearly across
+  each triangle: 0.62 steps from the formula at the vertices on average, 1.3 at most. Only the
+  mesh's own colours, baked as the bezel's are, would reproduce those bands.
+- **The bezel's bake is close**, its largest errors at steep or narrow faces where 1024×818
+  texels are coarse: UV p99 0.77 signal pixels, reflection p99 5 steps.
+- **Outlines are where it shows**: the polygon against the superellipse, and the bezel's edge.
+
 ## Unresolved
 
 1. ~~How the LUT fills between palette entries~~: nearest source colour (session 2).
@@ -301,11 +366,12 @@ depend on which build is meant.
 4. ~~Whether parity flips once per presented frame~~: it does, frame to frame (session 4).
    Behaviour on dropped or repeated frames is still unchecked.
 5. ~~`MonitorColor` and the Brightness default~~: (0.06, 0.06, 0.06, 0) and 0 (session 4).
-   The vertex colours `Tuning_Dimming` reads from `screen.m3d` are still unchecked.
+   The vertex colours `Tuning_Dimming` reads from `screen.m3d`: 15 greys, against the
+   renderer's formula 0.62 steps on average at the vertices (session 6).
 8. Whether the Windows build flips the artifact pattern as the Linux build does.
-6. How large the renderer's analytic glass and baked bezel errors are against the meshes the
-   game rasterises: about 0.5 steps on average over the probe, before bloom (session 4); not
-   yet broken down by region.
+6. ~~How large the glass and bezel approximations are~~: measured (session 6), 0.46 steps
+   on average over the probe, most of it the mesh's shade bands and faceted UVs, and the
+   outline.
 7. Viewport handling of the 4:3 target aspect in non-4:3 windows.
 
 ## Proposals
@@ -336,6 +402,12 @@ None of these are made yet. In order of how much they would close the gap:
    settings with it on: composite worst 2, mean 0.26 (from worst 152, mean 1.6), the same
    residual as with artifacts off; final mean 0.72 (from 1.4). A RetroArch parity case covers
    it. The Super Win the Game preset turns it on, matching the Linux build.
+
+7. **Glass shade and outline from the mesh** (optional): bake `screen.m3d`'s vertex colours,
+   and its outline, into an image as the bezel's are, and read them where the ray meets the
+   sphere. *Expected:* the glass's 0.33-step shade term and most of the outline band gone;
+   the faceted UVs (0.29) would stay unless the mesh's UVs were baked too.
+   *Validate:* `measure_surfaces.py`.
 
 Frame-by-frame comparison is set up (session 4); more probes, motion and other settings can go
 through it.
@@ -377,6 +449,14 @@ With artifacts off, set `NTSC: 0` in the game's `Config.ini` (under the run's ho
 `.local/share/Minor Key Games/Super Win the Game/Config`) before starting it, and run
 `ARTIFACTS=0 render_probe …`; `BLOOM=0` gives the surface before bloom, which compares with the
 game's `monitor` pass.
+
+Glass and bezel against the meshes (session 6), no game needed beyond a composite frame to
+shade with (any 256×224 PNG works):
+
+```bash
+(cd SCRIPTS/bezel_maps && cargo build --release)    # then: bezel_maps maps
+SCRIPTS/measure_surfaces.py maps composite.png measure   # report.txt and error maps
+```
 
 Function addresses (`nm -C SuperGame_NFML`): `CRTBaseMaterial::SetParam` 08081c60,
 `NTSCMaterial::SetParam` 080c7610, `ValkyrieGame::CreateAssets` 08144ae0,

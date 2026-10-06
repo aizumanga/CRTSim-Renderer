@@ -1,0 +1,13 @@
+# Writes the bezel images the renderer bakes from frame.m3d, for measuring them against the mesh.
+# Not part of the workspace; build it from this directory.
+[package]
+name = "bezel_maps"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+crtsim-core = { path = "../../../../../crates/crtsim-core" }
+anyhow = "1"
