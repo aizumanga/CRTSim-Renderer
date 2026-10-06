@@ -328,6 +328,7 @@ pub static SETTINGS: &[Setting] = &[
         "Edge reflection",
         Numbers::slider(Bloom, access!(reflection), 0.0..=2.),
     ),
+    Setting::other("reflection_as_screen", "Reflection as on the screen"),
     Setting::numbers(
         "frame_color",
         "Bezel color",
@@ -335,6 +336,15 @@ pub static SETTINGS: &[Setting] = &[
             "Bezel red",
             "Bezel green",
             "Bezel blue",
+        ]),
+    ),
+    Setting::numbers(
+        "backdrop_color",
+        "Backdrop color",
+        Numbers::color(Lighting, access!(backdrop_color)).named(&[
+            "Backdrop red",
+            "Backdrop green",
+            "Backdrop blue",
         ]),
     ),
     Setting::numbers(

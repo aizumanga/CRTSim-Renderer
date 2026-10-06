@@ -201,6 +201,14 @@ const NUMBERS: &[(&str, &[&str])] = &[
         &["CRTSIM_BEZEL_R", "CRTSIM_BEZEL_G", "CRTSIM_BEZEL_B"],
     ),
     (
+        "backdrop_color",
+        &[
+            "CRTSIM_BACKDROP_R",
+            "CRTSIM_BACKDROP_G",
+            "CRTSIM_BACKDROP_B",
+        ],
+    ),
+    (
         "light_position",
         &["CRTSIM_LIGHT_X", "CRTSIM_LIGHT_Y", "CRTSIM_LIGHT_Z"],
     ),
@@ -303,6 +311,12 @@ fn parameters() -> Vec<Parameter> {
             "Screen only, without the bezel (off, on)",
             1.,
             |c| flag(c.screen_only),
+        ),
+        choice(
+            "CRTSIM_REFLECTION_AS_SCREEN",
+            "Bezel reflection (as the public source, as the screen)",
+            1.,
+            |c| flag(c.reflection_as_screen),
         ),
         choice(
             "CRTSIM_MASK_ANTIALIAS",

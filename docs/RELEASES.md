@@ -1,7 +1,21 @@
 # Portable releases (Phase 4)
 
-## Unreleased
+## v1.0.0
 
+The **Super Win the Game** preset now draws the CRT as the shipped game does, checked against the game's own frames:
+its palette and colour table, its NTSC blending, the screen mesh's outline and shading, the bezel's reflection and the
+backdrop around it. All but the screen mesh are settings of their own, off in the other looks; the
+screen's outline and shading move every look by a fraction of a step. Presets and projects saved before open as they
+looked. The research behind it, and how to reproduce it from a copy of the game, is in
+`docs/research/swtg-crt/README.md`.
+
+- **Backdrop color** (Frame & lighting) fills the sides of an output wider than 4:3, past the bezel, where the
+  renderer drew black. Black by default; the **Super Win the Game** preset uses the game's grey backdrop, 1/16,
+  which brings a 16:9 frame from 1.76 steps off the game's on average to 0.85. RetroArch presets carry it.
+- **Reflection as on the screen** (Bloom & reflections) has the bezel reflect the picture with the screen's overscan
+  and mask density, as Super Win the Game does, where the public source reverses the overscan and halves the mask's
+  rows there. The **Super Win the Game** preset turns it on; with the overscan changed, the bezel's reflection now
+  matches the game's within a fraction of a step. Off by default. RetroArch presets carry it.
 - The screen's outline and darkened edges are the original mesh's, baked across the glass's UVs as the bezel is baked:
   its 192-sided outline and its 15 greys blended across each triangle, where a formula drew a smooth outline and
   shading before. Measured against the mesh as Super Win the Game draws it, the glass's shade moves from 0.83 steps

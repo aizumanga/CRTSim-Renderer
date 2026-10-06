@@ -9,11 +9,12 @@ struct Params {
     mask: vec4<f32>, // repeats xy, brightness, opacity
     lighting: vec4<f32>, // diffuse, specular, power, rim
     surface: vec4<f32>, // dimming, reflection, saturation, unused
-    bezel: vec4<f32>,
+    bezel: vec4<f32>, // colour, reflection as on the screen
     light: vec4<f32>,
     camera: vec4<f32>,
     bloom: vec4<f32>, // amount, power, spread, unused
     processing: vec4<f32>, // linear-light surface/bloom path, interlaced, field scanned this tick, screen only
+    backdrop: vec4<f32>, // colour where neither the glass nor the bezel is
 };
 @group(0) @binding(0) var<uniform> p: Params;
 @group(0) @binding(1) var source: texture_2d<f32>;
@@ -94,7 +95,10 @@ fn black_border(uv: vec2<f32>) -> vec3<f32> {
 // from one pixel to the next, which say how small the mask is drawn.
 fn crt(uv: vec2<f32>, across: vec2<f32>, down: vec2<f32>, bezel: bool) -> vec3<f32> {
     let scaled=(uv-vec2(0.5))*p.geometry.xy+vec2(0.5);
-    let density=p.mask.xy*select(vec2(1.),vec2(1.,0.5),bezel);
+    // The public source reflects half the mask's rows in the bezel, and the overscan
+    // unreciprocated; Super Win the Game reflects them as the screen shows them.
+    let as_screen=!bezel || p.bezel.w>0.5;
+    let density=p.mask.xy*select(vec2(1.,0.5),vec2(1.),as_screen);
     let mask_uv=scaled*density;
     let texels=vec2<f32>(textureDimensions(mask_tex));
     let scale=p.geometry.xy*density*texels;
@@ -102,7 +106,7 @@ fn crt(uv: vec2<f32>, across: vec2<f32>, down: vec2<f32>, bezel: bool) -> vec3<f
     let lod=select(0.,max(log2(max(footprint,0.000001)),0.),p.surface.w>0.5);
     var grid=textureSampleLevel(mask_tex,linear_repeat,mask_uv,lod).rgb;
     grid=mix(vec3(1.),grid+vec3(p.mask.z),p.mask.w);
-    let over=select(1./p.geometry.z,p.geometry.z,bezel);
+    let over=select(p.geometry.z,1./p.geometry.z,as_screen);
     var pos=(scaled-vec2(0.5))*over;
     pos=pos+pos*p.geometry.w*dot(pos,pos)+vec2(0.5);
     let emissive=black_border(pos)*grid;
@@ -276,7 +280,7 @@ fn may_meet_bezel(ray: vec3<f32>) -> bool {
         return shade(bezel,bezel_across,bezel_down,true);
     }
     if glass_depth<NOTHING { return shade(glass,glass_across,glass_down,false); }
-    return vec4(0.,0.,0.,1.);
+    return vec4(select(p.backdrop.rgb,srgb_decode(p.backdrop.rgb),p.processing.x>0.5),1.);
 }
 
 fn blur(uv: vec2<f32>, swap: bool) -> vec4<f32> {

@@ -141,12 +141,19 @@ pub struct Config {
     pub mask_repeats: MaskRepeats,
     pub dimming: f32,
     pub reflection: f32,
+    /// The bezel reflects the picture with the screen's overscan and mask density, as Super
+    /// Win the Game draws it. Off, as the public source draws it, the reflection takes the
+    /// overscan unreciprocated and half the mask's rows.
+    pub reflection_as_screen: bool,
     pub diffuse: f32,
     pub specular: f32,
     pub specular_power: f32,
     pub rim: f32,
     pub light_position: [f32; 3],
     pub frame_color: [f32; 3],
+    /// What shows where neither the glass nor the bezel is, past the bezel's edges in an output
+    /// wider than 4:3. Super Win the Game draws a backdrop there, grey at 1/16.
+    pub backdrop_color: [f32; 3],
     pub fov: f32,
     pub bloom: f32,
     pub bloom_power: f32,
@@ -186,6 +193,7 @@ impl Default for Config {
             artifacts: 0.5,
             ntsc_blending: 0.,
             flip_artifacts: false,
+            reflection_as_screen: false,
             persistence: [0.7, 0.525, 0.42],
             overscan: 1.,
             barrel: -0.115,
@@ -201,6 +209,7 @@ impl Default for Config {
             rim: 1.,
             light_position: [-10., -5., 10.],
             frame_color: [0.06; 3],
+            backdrop_color: [0.; 3],
             fov: 15.,
             bloom: 0.25,
             bloom_power: 2.,
