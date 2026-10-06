@@ -28,14 +28,22 @@ pub struct Progress {
 }
 
 /// The rate frames are rendered and encoded at.
-#[derive(Clone, Debug)]
-pub(crate) struct Rate {
+#[derive(Clone, Debug, PartialEq)]
+pub struct Rate {
     /// As FFmpeg is told it: exact, such as 30000/1001.
     pub text: String,
     pub fps: f64,
 }
 
 impl Rate {
+    /// `fps` frames a second, as FFmpeg is told a decimal rate.
+    pub fn per_second(fps: f64) -> Self {
+        Self {
+            text: format!("{fps}"),
+            fps,
+        }
+    }
+
     /// The source's own rate, or 60 per second for NTSC timing.
     pub fn of(video: &Video, options: &Options) -> Self {
         if options.timing == Timing::Ntsc60 {

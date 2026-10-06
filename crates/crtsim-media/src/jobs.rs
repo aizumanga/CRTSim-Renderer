@@ -1,14 +1,15 @@
-//! Video as a browser page handles it, without FFmpeg or threads: frames are read, rendered
-//! and encoded one at a time on the page's only thread, each step awaited so the page keeps
-//! drawing, and a file is made in memory for the page to download.
+//! Video jobs: playing a video, and exporting it as a video or an animation. Each is one loop,
+//! whatever the host: frames are read from a `FrameSource`, rendered, and handed on, each step
+//! awaited, so a browser page keeps drawing on its only thread and the desktop drives the same
+//! loop from a worker thread.
 //!
-//! Animated GIF and WebP are decoded here, and the video test card's frames are drawn here.
-//! Other videos are decoded by the host, which hands their frames over through `FrameSource`.
+//! Where frames come from is the source's: FFmpeg on the desktop (`decode`), the browser's
+//! decoder on a page, and for animated GIF and WebP and the video test card, `animated`.
 use crate::{
     animated::{self, Planned},
     animation::AnimationPlan,
     check_cancel,
-    decode::Request,
+    decode::{self, Request},
     export::Encoding,
     gif_writer::{GifWriter, Histogram},
     mux,
@@ -18,7 +19,7 @@ use crate::{
 use anyhow::{bail, ensure, Result};
 use crtsim_core::{config::Config, Renderer, Sequence};
 use image::RgbaImage;
-use std::sync::atomic::AtomicBool;
+use std::sync::{atomic::AtomicBool, Arc};
 use web_time::Instant;
 
 /// A video's frames in order, as a `Span` asks for them.
@@ -29,13 +30,13 @@ pub trait FrameSource {
 }
 
 /// Which frames of a video to read.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Span {
     /// Seconds into the video to start from.
     pub start: f64,
     /// A constant rate to take frames at, holding and dropping them as FFmpeg's `fps` filter
     /// does; or `None` for the one frame showing at `start`.
-    pub fps: Option<f64>,
+    pub rate: Option<Rate>,
     /// At most this many seconds.
     pub limit: Option<f64>,
 }
@@ -105,17 +106,34 @@ impl FrameSource for Decoded {
 /// The frames of `video` that `span` asks for, when they can be made here: an animation's or
 /// the video test card's.
 pub fn decoded(video: &Video, span: &Span) -> Result<Decoded> {
-    let rate = span.fps.map(|fps| Rate {
-        text: format!("{fps}"),
-        fps,
-    });
-    let request = Request {
-        rate: rate.as_ref(),
-        start: span.start,
-        frame: None,
-        limit: span.limit,
-    };
-    planned(video, &request)
+    planned(video, &Request::of(span))
+}
+
+/// A video's frames wherever this crate decodes them: by FFmpeg or on a thread of their own on
+/// the desktop, and on a page, an animation's here. A video file a browser was handed is
+/// decoded by the browser, which the host does.
+pub enum Frames {
+    Piped(decode::Piped),
+    Decoded(Decoded),
+}
+
+impl FrameSource for Frames {
+    async fn next(&mut self) -> Result<Option<RgbaImage>> {
+        match self {
+            Self::Piped(frames) => frames.next().await,
+            Self::Decoded(frames) => frames.next().await,
+        }
+    }
+}
+
+/// The frames of `video` that `span` asks for.
+pub fn frames(video: &Video, span: &Span, cancel: &Arc<AtomicBool>) -> Result<Frames> {
+    match video.source {
+        Source::Demuxed(_) => bail!("This video is decoded by the browser"),
+        // A page has one thread, so an animation is decoded as its frames are asked for.
+        _ if cfg!(target_arch = "wasm32") => Ok(Frames::Decoded(decoded(video, span)?)),
+        _ => Ok(Frames::Piped(decode::Piped::open(video, span, cancel)?)),
+    }
 }
 
 /// Frame `number` of `video`, counting from 0, when it can be decoded here.
@@ -136,7 +154,21 @@ fn planned(video: &Video, request: &Request) -> Result<Decoded> {
     Ok(Decoded(animated::Plan::new(video, request)?.open()?))
 }
 
-/// Plays `video` from `start` seconds: each frame rendered on `renderer` at the playback rate,
+/// A frame rendered on `renderer`, as a job's `render` renders it on a host's GPU.
+pub async fn render(
+    renderer: &Renderer,
+    sequence: &mut Sequence,
+    frame: &RgbaImage,
+    config: &Config,
+    cancel: &AtomicBool,
+) -> Result<RgbaImage> {
+    renderer
+        .frame(sequence, frame, config, Some(cancel), |_| {})
+        .await?;
+    renderer.read(sequence).await
+}
+
+/// Plays `video` from `start` seconds: each frame rendered by `render` at the playback rate,
 /// with a short warm-up before `start` so the CRT's history is already running, and handed to
 /// `shown` with its time and source. `shown` sets the pace by awaiting room for the frame. Each
 /// frame renders with the settings `config` gives as it starts, so edits made while playing
@@ -150,8 +182,8 @@ pub async fn playback<S: FrameSource>(
     start: f64,
     config: impl Fn() -> std::sync::Arc<Config>,
     options: &Options,
-    renderer: &Renderer,
     mut open: impl AsyncFnMut(&Span) -> Result<S>,
+    mut render: impl AsyncFnMut(&mut Sequence, &RgbaImage, &Config) -> Result<RgbaImage>,
     cancel: &AtomicBool,
     mut shown: impl AsyncFnMut(f64, RgbaImage, RgbaImage) -> Result<()>,
 ) -> Result<()> {
@@ -159,7 +191,7 @@ pub async fn playback<S: FrameSource>(
     let preroll = (start - 0.2).max(0.);
     let span = Span {
         start: preroll,
-        fps: Some(rate.fps),
+        rate: Some(rate.clone()),
         limit: None,
     };
     let mut source = open(&span).await?;
@@ -167,10 +199,8 @@ pub async fn playback<S: FrameSource>(
     let mut index = 0u64;
     while let Some(input) = source.next().await? {
         check_cancel(cancel)?;
-        renderer
-            .frame(&mut sequence, &input, &config(), Some(cancel), |_| {})
-            .await?;
-        let crt = renderer.read(&mut sequence).await?;
+        let crt = render(&mut sequence, &input, &config()).await?;
+        check_cancel(cancel)?;
         let time = preroll + index as f64 / rate.fps;
         index += 1;
         if time + 0.00001 >= start {
@@ -270,7 +300,7 @@ pub async fn export_video<S: FrameSource, E: VideoEncoding>(
     let mut encoder = encoder(&settings).await?;
     let span = Span {
         start: 0.,
-        fps: Some(rate.fps),
+        rate: Some(rate.clone()),
         limit: None,
     };
     let expected = Ticks::new(&span, rate.fps, video.duration).rest();
@@ -381,7 +411,7 @@ pub async fn export_animation<S: FrameSource>(
     let frames = plan.frames();
     let span = Span {
         start: frames.start,
-        fps: Some(frames.rate.fps),
+        rate: Some(frames.rate.clone()),
         limit: frames.limit,
     };
     let expected = plan.frame_count();
@@ -535,7 +565,7 @@ mod tests {
         );
         let span = Span {
             start: 0.05,
-            fps: Some(20.),
+            rate: Some(Rate::per_second(20.)),
             limit: None,
         };
         let mut source = decoded(&video, &span).unwrap();
@@ -548,6 +578,52 @@ mod tests {
     }
 
     /// Frames of one gray level after another, as a decoder would hand them over.
+    #[test]
+    fn playback_warms_up_before_its_start_and_shows_the_frames_from_there() {
+        let video = clip(3);
+        let cancel = AtomicBool::new(false);
+        let mut shown = vec![];
+        let start = 0.35;
+        pollster::block_on(playback(
+            &video,
+            start,
+            || std::sync::Arc::new(Config::general()),
+            &Options::default(),
+            async |span| {
+                assert_eq!(span.start, start - 0.2, "a warm-up before the start");
+                Ok(Grays(0, 4))
+            },
+            async |_, frame, _| Ok(frame.clone()),
+            &cancel,
+            async |time, source, crt| {
+                assert_eq!(source, crt);
+                shown.push((time, source.get_pixel(0, 0).0[0]));
+                Ok(())
+            },
+        ))
+        .unwrap();
+        let fps = video.fps;
+        let expected: Vec<_> = (0..4u8)
+            .map(|i| (start - 0.2 + f64::from(i) / fps, i + 1))
+            .filter(|(time, _)| time + 1e-5 >= start)
+            .collect();
+        assert!(!expected.is_empty() && expected.len() < 4, "{expected:?}");
+        assert_eq!(shown, expected);
+        // Cancelled while a frame renders: it is not shown.
+        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        let played = pollster::block_on(playback(
+            &video,
+            0.,
+            || std::sync::Arc::new(Config::general()),
+            &Options::default(),
+            async |_| Ok(Grays(0, 4)),
+            async |_, frame, _| Ok(frame.clone()),
+            &cancel,
+            async |_, _, _| panic!("nothing is shown once cancelled"),
+        ));
+        assert!(played.is_err());
+    }
+
     struct Grays(u8, u8);
 
     impl FrameSource for Grays {
@@ -701,7 +777,7 @@ mod tests {
         };
         let from = |start| Span {
             start,
-            fps: None,
+            rate: None,
             limit: None,
         };
         assert_eq!(taken(from(0.), 10.), vec![0, 1, 1, 2]);

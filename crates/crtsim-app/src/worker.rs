@@ -16,7 +16,6 @@ use std::{
         mpsc, Arc, Mutex,
     },
     task::{Poll, Waker},
-    time::Duration,
 };
 use web_time::Instant;
 
@@ -999,24 +998,21 @@ async fn export_animation_here(
     config: &Config,
     options: &crtsim_media::AnimationOptions,
     path: &Path,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
     progress: &dyn Fn(Progress),
 ) -> Result<()> {
-    use crtsim_media::page;
+    use crtsim_media::jobs;
     let format = crtsim_media::AnimationFormat::of(path)
         .ok_or_else(|| anyhow::anyhow!("Choose a GIF or WebP filename"))?;
     let renderer = graphics.renderer(|| {}).await?;
-    let bytes = page::export_animation(
+    let bytes = jobs::export_animation(
         video,
         format,
         config,
         options,
-        async |span| crate::frames::open(video, span).await,
+        async |span| crate::frames::open(video, span, cancel).await,
         async |sequence, frame, config| {
-            renderer
-                .frame(sequence, frame, config, Some(cancel), |_| {})
-                .await?;
-            renderer.read(sequence).await
+            jobs::render(renderer, sequence, frame, config, cancel).await
         },
         async |frame, quality| lossy_webp(frame, quality).await,
         cancel,
@@ -1039,7 +1035,7 @@ async fn export_video_here(
     config: &Config,
     options: &Options,
     path: &Path,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
     progress: &dyn Fn(Progress),
 ) -> Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
@@ -1052,17 +1048,14 @@ async fn export_video_here(
         let container = crtsim_media::Container::of(path)
             .ok_or_else(|| anyhow::anyhow!("Choose an MP4 or WebM filename"))?;
         let renderer = graphics.renderer(|| {}).await?;
-        let bytes = crtsim_media::page::export_video(
+        let bytes = crtsim_media::jobs::export_video(
             video,
             container,
             config,
             options,
-            async |span| crate::frames::open(video, span).await,
+            async |span| crate::frames::open(video, span, cancel).await,
             async |sequence, frame, config| {
-                renderer
-                    .frame(sequence, frame, config, Some(cancel), |_| {})
-                    .await?;
-                renderer.read(sequence).await
+                crtsim_media::jobs::render(renderer, sequence, frame, config, cancel).await
             },
             async |settings| crate::web_encode::Encoder::open(settings).await,
             async |audio| crate::web_encode::opus(audio).await,
@@ -1140,47 +1133,28 @@ async fn play(
         .guard("Playback graphics driver failed", async |g| {
             let renderer = g.renderer(|| {}).await?;
             // Paced here, awaiting room in the feed so a browser page keeps drawing.
-            if made_here(video) {
-                use crtsim_media::page;
-                return page::playback(
-                    video,
-                    *start,
-                    config,
-                    options,
-                    renderer,
-                    async |span| crate::frames::open(video, span).await,
-                    cancel,
-                    async |time, source, crt| {
-                        let mut item = Ok(PlaybackFrame { time, source, crt });
-                        loop {
-                            match offer(frames, item, cancel, ctx)? {
-                                None => return Ok(()),
-                                Some(back) => item = back,
-                            }
-                            pause().await;
-                        }
-                    },
-                )
-                .await;
-            }
-            crtsim_media::playback(
+            crtsim_media::jobs::playback(
                 video,
                 *start,
                 config,
                 options,
-                renderer,
+                async |span| crate::frames::open(video, span, cancel).await,
+                async |sequence, frame, config| {
+                    crtsim_media::jobs::render(renderer, sequence, frame, config, cancel).await
+                },
                 cancel,
-                |time, source, crt| {
+                async |time, source, crt| {
                     let mut item = Ok(PlaybackFrame { time, source, crt });
                     loop {
                         match offer(frames, item, cancel, ctx)? {
                             None => return Ok(()),
                             Some(back) => item = back,
                         }
-                        std::thread::sleep(Duration::from_millis(5));
+                        pause().await;
                     }
                 },
             )
+            .await
         })
         .await;
     if let Err(error) = played {
@@ -1223,7 +1197,7 @@ async fn pause() {
     #[cfg(target_arch = "wasm32")]
     crate::web::sleep(5).await;
     #[cfg(not(target_arch = "wasm32"))]
-    std::thread::sleep(Duration::from_millis(5));
+    std::thread::sleep(std::time::Duration::from_millis(5));
 }
 
 #[cfg(test)]
@@ -1291,7 +1265,7 @@ mod tests {
                     return event;
                 }
                 assert!(
-                    started.elapsed() < Duration::from_secs(120),
+                    started.elapsed() < std::time::Duration::from_secs(120),
                     "worker stalled"
                 );
                 self.0
@@ -1317,7 +1291,7 @@ mod tests {
                 Box::new(|worker: &Worker| {
                     worker
                         .events
-                        .recv_timeout(Duration::from_secs(120))
+                        .recv_timeout(std::time::Duration::from_secs(120))
                         .expect("worker stalled")
                 }),
             ),

@@ -4,8 +4,8 @@
 //! unstable build flag.
 use anyhow::{anyhow, bail, ensure, Result};
 use crtsim_media::{
+    jobs::{EncoderSettings, VideoEncoding},
     mux::{EncodedAudio, EncodedVideo, Packet},
-    page::{EncoderSettings, VideoEncoding},
     Container,
 };
 use image::RgbaImage;

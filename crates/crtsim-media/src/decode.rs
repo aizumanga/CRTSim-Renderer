@@ -4,14 +4,15 @@
 //! draws the video test card's frames; all come out as the same stream of packed RGBA frames
 //! at the video's size.
 use crate::{
-    animated, check_cancel,
-    export::{render_frame, QUEUED_FRAMES},
+    animated,
+    export::QUEUED_FRAMES,
+    jobs::{self, FrameSource, Span},
     probe::Source,
     process::Process,
     Options, Rate, Tool, Video,
 };
 use anyhow::{ensure, Context, Result};
-use crtsim_core::{config::Config, Renderer, Sequence};
+use crtsim_core::{config::Config, Renderer};
 use image::RgbaImage;
 use std::{
     io::Read,
@@ -29,6 +30,18 @@ pub(crate) struct Request<'a> {
     pub frame: Option<u64>,
     /// At most this many seconds of frames.
     pub limit: Option<f64>,
+}
+
+impl<'a> Request<'a> {
+    /// The frames `span` asks for.
+    pub fn of(span: &'a Span) -> Self {
+        Self {
+            rate: span.rate.as_ref(),
+            start: span.start,
+            frame: None,
+            limit: span.limit,
+        }
+    }
 }
 
 /// A decode in progress. Its frames are read from `frames`; `wait` then reports how it ended.
@@ -185,10 +198,50 @@ fn decode_one(
     RgbaImage::from_raw(video.size.0, video.size.1, bytes).context("Invalid preview pixels")
 }
 
-/// Stream a CFR preview, retaining a short history before the requested media time.
-/// The callback provides backpressure; cancellation also interrupts decoder reads. Each frame
-/// renders with the settings `config` gives as it starts, so edits made while playing show on
-/// the frames rendered after them.
+/// A video's frames as FFmpeg decodes them, or an animation's on a thread of its own, read
+/// from the decode one at a time as they come, while it decodes the next.
+pub struct Piped {
+    decoder: Decoder,
+    frames: Box<dyn Read + Send>,
+    size: (u32, u32),
+    ended: bool,
+}
+
+impl Piped {
+    pub fn open(video: &Video, span: &Span, cancel: &Arc<AtomicBool>) -> Result<Self> {
+        let mut decoder = Decoder::open(video, &Request::of(span), cancel)?;
+        Ok(Self {
+            frames: decoder.frames(),
+            decoder,
+            size: video.size,
+            ended: false,
+        })
+    }
+}
+
+impl FrameSource for Piped {
+    async fn next(&mut self) -> Result<Option<RgbaImage>> {
+        if self.ended {
+            return Ok(None);
+        }
+        let mut frame = RgbaImage::new(self.size.0, self.size.1);
+        let bytes = frame.as_mut();
+        if self.frames.read(&mut bytes[..1])? == 0 {
+            // The end of the frames: whether the decode finished or failed.
+            self.ended = true;
+            self.decoder.wait()?;
+            return Ok(None);
+        }
+        self.frames
+            .read_exact(&mut bytes[1..])
+            .context("Truncated video frame")?;
+        Ok(Some(frame))
+    }
+}
+
+/// Plays `video` on this thread, as `jobs::playback` does, from frames FFmpeg decodes.
+/// `frame_ready` sets the pace by blocking until there is room for the frame; cancelling also
+/// stops the decode.
 pub fn playback(
     video: &Video,
     start: f64,
@@ -198,34 +251,16 @@ pub fn playback(
     cancel: &Arc<AtomicBool>,
     mut frame_ready: impl FnMut(f64, RgbaImage, RgbaImage) -> Result<()>,
 ) -> Result<()> {
-    let rate = Rate::of(video, options);
-    let preroll = (start - 0.2).max(0.);
-    let request = Request {
-        rate: Some(&rate),
-        start: preroll,
-        frame: None,
-        limit: None,
-    };
-    let mut decoder = Decoder::open(video, &request, cancel)?;
-    let mut output = decoder.frames();
-    let mut input = RgbaImage::new(video.size.0, video.size.1);
-    let mut sequence = Sequence::video(options.timing, rate.fps);
-    let mut index = 0u64;
-    loop {
-        check_cancel(cancel)?;
-        let bytes = input.as_mut();
-        if output.read(&mut bytes[..1])? == 0 {
-            break;
-        }
-        output
-            .read_exact(&mut bytes[1..])
-            .context("Truncated playback frame")?;
-        let rendered = render_frame(renderer, &mut sequence, &input, &config(), cancel)?;
-        let time = preroll + index as f64 / rate.fps;
-        index += 1;
-        if time + 0.00001 >= start {
-            frame_ready(time, input.clone(), rendered)?;
-        }
-    }
-    decoder.wait()
+    pollster::block_on(jobs::playback(
+        video,
+        start,
+        config,
+        options,
+        async |span| jobs::frames(video, span, cancel),
+        async |sequence, frame, config| {
+            jobs::render(renderer, sequence, frame, config, cancel).await
+        },
+        cancel,
+        async |time, source, crt| frame_ready(time, source, crt),
+    ))
 }

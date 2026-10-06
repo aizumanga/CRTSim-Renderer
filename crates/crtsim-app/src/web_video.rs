@@ -6,7 +6,7 @@
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use crtsim_media::{
     demux::Demuxed,
-    page::{FrameSource, Span, Ticks},
+    jobs::{FrameSource, Span, Ticks},
     Contents, Source, Video,
 };
 use image::RgbaImage;
@@ -357,7 +357,11 @@ pub struct Frames {
 
 pub async fn frames(video: &Video, span: &Span) -> Result<Frames> {
     let (demuxed, contents) = demuxed(video)?;
-    let fps = span.fps.context("Frames are read at a constant rate")?;
+    let fps = span
+        .rate
+        .as_ref()
+        .context("Frames are read at a constant rate")?
+        .fps;
     let from = keyframe_before(demuxed, span.start + 0.5 / fps);
     Ok(Frames {
         decoder: Decoder::open(demuxed, contents, from).await?,
