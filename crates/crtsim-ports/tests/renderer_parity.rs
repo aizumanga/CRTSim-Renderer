@@ -138,6 +138,16 @@ fn cases() -> Vec<Case> {
                 ..base()
             },
         ),
+        // The bezel reflecting the picture as the screen shows it, as the game draws it.
+        still(
+            "reflection-as-screen",
+            Config {
+                reflection_as_screen: true,
+                overscan: 1.25,
+                reflection: 2.,
+                ..base()
+            },
+        ),
         still(
             "linear-light",
             Config {

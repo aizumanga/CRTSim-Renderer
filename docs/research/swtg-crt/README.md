@@ -228,8 +228,8 @@ Game** preset (`crates/crtsim-app/src/gallery.rs`) unless a row says otherwise.
 | Tuning defaults | CRTSim's | — | CRTSim's | match |
 | Persistence vector | Pers × PersColor = (0.7, 0.525, 0.42) | same | same | match |
 | Pixel ratio / UV scale | `6/7·PAR` about the centre | same | same | match |
-| Overscan on the bezel | `1/Overscan`, as on the screen | raw `Overscan` on the frame | raw on the bezel | **difference** (none at 1.0) |
-| Mask density on the bezel | (128, 224), as on the screen | (128, 112) on the frame | (128, 112) on the bezel | **difference**, bezel reflection only |
+| Overscan on the bezel | `1/Overscan`, as on the screen (runtime, session 9) | raw `Overscan` on the frame | either, **Reflection as on the screen** (`reflection_as_screen`, session 9), off by default | **matches with the setting on** (preset) |
+| Mask density on the bezel | (128, 224), as on the screen (runtime, session 9) | (128, 112) on the frame | as above | **matches with the setting on** (preset) |
 | Mask texture and mips | `mask.bmp` + box mips, trilinear | `mask.bmp`, D3DX mips | `mask.bmp` + box mips (`halve`) | match |
 | Artifact texture | `artifacts.bmp` | same | same | match |
 | Screen geometry | `screen.m3d`, rasterised | same | ray-traced sphere fitted to it, analytic edge dimming | intentional extension; measured (session 6): shape within 0.016 signal px, picture 0.45 steps inside, from the mesh's shade bands and faceted UVs |
@@ -459,6 +459,35 @@ it most likely flips the pattern as the Linux build does (hypothesis).
 The Super Win the Game preset now leaves **Flip artifact pattern** off, matching the Windows
 build; turning it on matches the Linux build, and probably the Mac one.
 
+## The bezel's reflection (session 9)
+
+**Static.** The game's `monitor` pass (`monitor.fx`, the GLSL in `Valkyrie.npk`) samples the
+picture with the same `SampleCRT` as the `screen` pass, and the game gives both passes the same
+`Tuning_Overscan = 1/Overscan` and `CRTMask_Scale = (128, 224)`. Public CRTSim
+(`src/Main.cpp`) gives its frame effect the raw `Overscan` and `(SrcWidth/2, SrcHeight/2)` =
+(128, 112), and this renderer drew the bezel the public way.
+
+**Runtime.** `capture_shim.c` recording the Linux build's first scene logged both passes
+with `CRTMask_Scale = 128 224`; at Overscan 1.25 both got `Tuning_Overscan = 0.8`.
+
+**Change.** **Reflection as on the screen** (`Config::reflection_as_screen`, the surface pass's
+`bezel.w`; `CRTSIM_REFLECTION_AS_SCREEN` in RetroArch) reflects the picture in the bezel with
+the screen's overscan and mask density. Off by default, as the public source; the Super Win
+the Game preset turns it on. A golden case and a RetroArch parity case cover it.
+
+**Against the game.** The scene's NTSC frame, recorded from the Linux build, rendered with
+`render_probe` (`PALETTE=0 FLIP_ARTIFACTS=1`), against the game's own final pass before the HUD,
+mask on, 1280×960; mean of the worst channel, outside a 4-pixel band along the outlines:
+
+| | Bezel, off | Bezel, on | Glass (either) |
+| --- | ---: | ---: | ---: |
+| Overscan 1.25 | 3.45 (6.7% past 16) | **0.19** (none past 4) | 1.15 |
+| Overscan 1 (default) | 0.104 | **0.095** | 0.94 |
+
+At the default overscan the difference is faint: the reflection is weak (0.3) and at either
+density the mask there is filtered nearly flat. With the overscan changed, the reflection was
+scaled the wrong way round and is now the game's.
+
 ## Unresolved
 
 1. ~~How the LUT fills between palette entries~~: nearest source colour (session 2).
@@ -494,8 +523,9 @@ None of these are made yet. In order of how much they would close the gap:
    sampling) and matches it at every 8-bit level of each axis. With it, every art colour
    comes out as its palette entry except grey `2D`, which the game blends 59% towards grey
    `00` through its blue slice, as the app now does.
-4. **Bezel overscan and mask density** to the game's values in the SWTG preset. Only visible in
-   the bezel's reflection.
+4. **Bezel overscan and mask density.** *Done in session 9:* **Reflection as on the screen**
+   (`reflection_as_screen`), on in the Super Win the Game preset. The bezel at Overscan 1.25:
+   3.45 → 0.19 steps from the game's final pass; at the default overscan, 0.10 → 0.095.
 5. **Measure the glass and bezel approximations** against `screen.m3d`/`frame.m3d` rasterised
    with the game's camera, before deciding anything there.
 
@@ -584,6 +614,16 @@ SCRIPTS/compare_builds.py lin ren0 ren1
 ```
 
 `MASK_OPACITY=0` above goes with `ScanOpacity: 0` in both games' settings, as the table used.
+
+The bezel's reflection (session 9): set `Overscan: 1.25` in the Linux build's `Config.ini`,
+record the scene as above (`printf "frames 2\nskip 10\ntag ovs\n" > run/go`), and render its
+NTSC frame both ways; `run/ovs_000_monitor.txt` holds the uniforms, and `run/ovs_00?_compose.rgba`
+(rows bottom first) the game's final pass to compare with:
+
+```bash
+for r in 0 1; do PALETTE=0 FLIP_ARTIFACTS=1 OVERSCAN=1.25 REFLECTION_AS_SCREEN=$r \
+  render_probe scene.rgba ovs$r 42 40; done
+```
 
 Function addresses (`nm -C SuperGame_NFML`): `CRTBaseMaterial::SetParam` 08081c60,
 `NTSCMaterial::SetParam` 080c7610, `ValkyrieGame::CreateAssets` 08144ae0,

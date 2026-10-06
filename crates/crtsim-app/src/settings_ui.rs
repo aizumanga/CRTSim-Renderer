@@ -179,7 +179,16 @@ impl App {
             numbers(ui, &mut self.config, &defaults, settings::Section::Mask);
         });
         chrome::Section::new("Bloom & reflections").show(ui, |ui| {
-            numbers(ui, &mut self.config, &defaults, settings::Section::Bloom)
+            numbers(ui, &mut self.config, &defaults, settings::Section::Bloom);
+            ui.checkbox(
+                &mut self.config.reflection_as_screen,
+                "Reflection as on the screen",
+            )
+            .on_hover_text(
+                "The bezel reflects the picture with the screen's overscan and mask density, \
+                 as Super Win the Game draws it. Off is the public CRTSim source: the overscan \
+                 the other way round and half the mask's rows.",
+            );
         });
         chrome::Section::new("Frame & lighting").show(ui, |ui| {
             numbers(ui, &mut self.config, &defaults, settings::Section::Lighting)

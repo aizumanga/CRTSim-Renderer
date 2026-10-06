@@ -141,6 +141,10 @@ pub struct Config {
     pub mask_repeats: MaskRepeats,
     pub dimming: f32,
     pub reflection: f32,
+    /// The bezel reflects the picture with the screen's overscan and mask density, as Super
+    /// Win the Game draws it. Off, as the public source draws it, the reflection takes the
+    /// overscan unreciprocated and half the mask's rows.
+    pub reflection_as_screen: bool,
     pub diffuse: f32,
     pub specular: f32,
     pub specular_power: f32,
@@ -186,6 +190,7 @@ impl Default for Config {
             artifacts: 0.5,
             ntsc_blending: 0.,
             flip_artifacts: false,
+            reflection_as_screen: false,
             persistence: [0.7, 0.525, 0.42],
             overscan: 1.,
             barrel: -0.115,

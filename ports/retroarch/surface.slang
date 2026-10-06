@@ -38,6 +38,7 @@ layout(std140, set = 0, binding = 0) uniform UBO {
     float CRTSIM_BEZEL_R;
     float CRTSIM_BEZEL_G;
     float CRTSIM_BEZEL_B;
+    float CRTSIM_REFLECTION_AS_SCREEN;
 } global;
 
 #pragma stage vertex
@@ -125,14 +126,17 @@ vec3 black_border(vec2 uv) {
 // `down` are how uv changes from one pixel to the next, which say how small the mask is drawn.
 vec3 crt(vec2 uv, vec2 across, vec2 down, bool bezel) {
     vec2 scaled = (uv - vec2(0.5)) * uv_scale() + vec2(0.5);
-    vec2 density = mask_repeats() * (bezel ? vec2(1.0, 0.5) : vec2(1.0));
+    // The public source reflects half the mask's rows in the bezel, and the overscan
+    // unreciprocated; Super Win the Game reflects them as the screen shows them.
+    bool as_screen = !bezel || global.CRTSIM_REFLECTION_AS_SCREEN > 0.5;
+    vec2 density = mask_repeats() * (as_screen ? vec2(1.0) : vec2(1.0, 0.5));
     vec2 mask_uv = scaled * density;
     vec2 scale = uv_scale() * density * vec2(textureSize(CRTSIM_SHADOW_MASK, 0));
     float footprint = max(length(across * scale), length(down * scale));
     float lod = global.CRTSIM_MASK_ANTIALIAS > 0.5 ? max(log2(max(footprint, 0.000001)), 0.0) : 0.0;
     vec3 grid = textureLod(CRTSIM_SHADOW_MASK, mask_uv, lod).rgb;
     grid = mix(vec3(1.0), grid + vec3(global.CRTSIM_MASK_BRIGHTNESS), global.CRTSIM_MASK_OPACITY);
-    float over = bezel ? global.CRTSIM_OVERSCAN : 1.0 / global.CRTSIM_OVERSCAN;
+    float over = as_screen ? 1.0 / global.CRTSIM_OVERSCAN : global.CRTSIM_OVERSCAN;
     vec2 pos = (scaled - vec2(0.5)) * over;
     pos = pos + pos * global.CRTSIM_BARREL * dot(pos, pos) + vec2(0.5);
     vec3 emissive = black_border(pos) * grid;

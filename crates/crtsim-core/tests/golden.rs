@@ -222,6 +222,19 @@ fn cases(renderer: &Renderer) -> Vec<(&'static str, RgbaImage)> {
         .crt,
     ));
 
+    // The bezel reflecting the picture as the screen shows it, Super Win the Game's way, with
+    // an overscan and a strong reflection so both its overscan and its mask rows show.
+    cases.push((
+        "reflection-as-screen",
+        render(&Config {
+            reflection_as_screen: true,
+            overscan: 1.25,
+            reflection: 2.,
+            ..base()
+        })
+        .crt,
+    ));
+
     // Interlaced scanning: a 480-row signal whose last tick scanned one field, the other left
     // to decay, as a still of an interlaced set shows it.
     cases.push((

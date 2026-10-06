@@ -305,6 +305,12 @@ fn parameters() -> Vec<Parameter> {
             |c| flag(c.screen_only),
         ),
         choice(
+            "CRTSIM_REFLECTION_AS_SCREEN",
+            "Bezel reflection (as the public source, as the screen)",
+            1.,
+            |c| flag(c.reflection_as_screen),
+        ),
+        choice(
             "CRTSIM_MASK_ANTIALIAS",
             "Filter mask when shrinking (off, on)",
             1.,

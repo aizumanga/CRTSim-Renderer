@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Reflection as on the screen** (Bloom & reflections) has the bezel reflect the picture with the screen's overscan
+  and mask density, as Super Win the Game does, where the public source reverses the overscan and halves the mask's
+  rows there. The **Super Win the Game** preset turns it on; with the overscan changed, the bezel's reflection now
+  matches the game's within a fraction of a step. Off by default. RetroArch presets carry it.
 - The screen's outline and darkened edges are the original mesh's, baked across the glass's UVs as the bezel is baked:
   its 192-sided outline and its 15 greys blended across each triangle, where a formula drew a smooth outline and
   shading before. Measured against the mesh as Super Win the Game draws it, the glass's shade moves from 0.83 steps

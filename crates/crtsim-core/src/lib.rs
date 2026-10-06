@@ -90,7 +90,12 @@ impl Params {
                 c.saturation,
                 flag(c.mask_antialias),
             ],
-            bezel: [c.frame_color[0], c.frame_color[1], c.frame_color[2], 1.],
+            bezel: [
+                c.frame_color[0],
+                c.frame_color[1],
+                c.frame_color[2],
+                flag(c.reflection_as_screen),
+            ],
             light: [
                 c.light_position[0],
                 c.light_position[1],
