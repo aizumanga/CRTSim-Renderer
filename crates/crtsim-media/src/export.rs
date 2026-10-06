@@ -1,9 +1,10 @@
-//! Rendering a whole video or animation: decode, render and encode at once, then finish the
-//! file, such as by muxing the source's tracks, and only then replace the output.
+//! Exporting a whole video or animation with FFmpeg on the desktop: `jobs::export` renders
+//! the frames, which FFmpeg encodes as they come on a thread of their own, and FFmpeg then
+//! finishes the file, such as by muxing the source's tracks; only then is the output replaced.
 use crate::{
     animation::AnimationPlan,
     check_cancel,
-    decode::{Decoder, Request},
+    jobs::{self, Output, Span},
     plan::ExportPlan,
     process::Process,
     AnimationFormat, AnimationOptions, Options, Timing, Video,
@@ -12,11 +13,12 @@ use anyhow::{ensure, Context, Result};
 use crtsim_core::{config::Config, Renderer, Sequence};
 use image::RgbaImage;
 use std::{
-    io::{Read, Write},
-    path::Path,
+    cell::RefCell,
+    io::Write,
+    path::{Path, PathBuf},
     process::Command,
     sync::{atomic::AtomicBool, mpsc, Arc},
-    time::Instant,
+    thread::JoinHandle,
 };
 
 /// How far an export has got, in words for the person waiting on it.
@@ -108,6 +110,20 @@ impl Frames<'_> {
         let rest = self.video.duration - self.start;
         self.limit.map_or(rest, |limit| rest.min(limit))
     }
+
+    /// How many frames are rendered: one for each tick of the rate in `length`.
+    pub fn count(&self) -> u64 {
+        (self.length() * self.rate.fps - 1e-6).ceil().max(1.) as u64
+    }
+
+    /// The frames to read.
+    pub fn span(&self) -> Span {
+        Span {
+            start: self.start,
+            rate: Some(self.rate.clone()),
+            limit: self.limit,
+        }
+    }
 }
 
 /// Where an export's files are while it runs.
@@ -191,214 +207,182 @@ pub fn export_animation_with(
     run(&plan, output, cancel, render, progress)
 }
 
-/// Renders the plan's frames, encodes and finishes them, and only then replaces `output`.
+/// Renders the plan's frames on this thread with `jobs::export`, from frames FFmpeg decodes
+/// into frames FFmpeg encodes, and only then replaces `output`.
 fn run(
     plan: &impl Encoding,
     output: &Path,
     cancel: &Arc<AtomicBool>,
     mut render: impl FnMut(&mut Sequence, &RgbaImage, &Config) -> Result<RgbaImage>,
-    mut progress: impl FnMut(Progress),
+    progress: impl FnMut(Progress),
 ) -> Result<()> {
-    plan.check(cancel)?;
     let frames = plan.frames();
-    let video = frames.video;
-    if output.exists() {
-        ensure!(
-            output.canonicalize()? != video.path,
-            "Choose an output other than the source video"
-        );
-    }
-    let parent = output
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let folder = tempfile::tempdir_in(parent)?;
-    let final_file = tempfile::NamedTempFile::new_in(parent)?;
-    // Use a file: embedded LUTs are too large for OS command-line limits.
-    let metadata = folder.path().join("preset.ffmeta");
-    if let Some(text) = plan.metadata_file()? {
-        std::fs::write(&metadata, text)?;
-    }
-    let encoded = match plan.intermediate() {
-        Some(extension) => folder.path().join(format!("video.{extension}")),
-        None => final_file.path().to_owned(),
-    };
-    let mut encoder = Process::spawn(&mut plan.encoder(&encoded), cancel)?;
-    let input = encoder.stdin();
-    let request = Request {
-        rate: Some(frames.rate),
-        start: frames.start,
-        frame: None,
-        limit: frames.limit,
-    };
-    let mut decoder = Decoder::open(video, &request, cancel)?;
-    let decoded = decoder.frames();
-    let mut sequence = frames.sequence();
-    progress(Progress {
-        fraction: 0.,
-        stage: "Decoding and rendering video".into(),
-    });
-    let count = match pipeline(
-        decoded,
-        input,
-        video.size,
+    let encoder = Ffmpeg::start(plan, output, cancel)?;
+    let progress = RefCell::new(progress);
+    pollster::block_on(jobs::export(
+        &frames,
+        async |span| jobs::frames(frames.video, span, cancel),
+        async |sequence, frame, config| render(sequence, frame, config),
+        encoder,
         cancel,
-        |frame, count, started| {
-            let result = render(&mut sequence, frame, frames.render)?;
-            ensure!(
-                result.dimensions() == frames.size,
-                "Renderer returned the wrong video dimensions"
-            );
-            let fraction = (frames.duration(count) / frames.length()).min(1.);
-            let remaining = if fraction > 0. {
-                started.elapsed().as_secs_f64() * (1. - fraction) / fraction
-            } else {
-                0.
-            };
-            progress(Progress {
-                fraction: (fraction * 0.9) as f32,
-                stage: format!(
-                    "Frame {count} · {:.1} FPS · approximately {:.0}s remaining",
-                    count as f64 / started.elapsed().as_secs_f64().max(0.001),
-                    remaining
-                ),
-            });
-            Ok(result)
-        },
-    ) {
-        Ok(count) => count,
-        Err(Failure::Write(error)) => {
-            // The encoder's own log says more than a broken pipe does.
-            encoder.wait()?;
-            return Err(error.into());
-        }
-        Err(Failure::Other(error)) => {
-            decoder.kill();
-            encoder.kill();
-            return Err(error);
-        }
-    };
-    decoder.wait()?;
-    ensure!(count > 0, "No frames decoded");
-    progress(Progress {
-        fraction: 0.91,
-        stage: "Finishing encoding".into(),
-    });
-    encoder.wait()?;
-    check_cancel(cancel)?;
-    let work = Work {
-        encoded: &encoded,
-        metadata: &metadata,
-        folder: folder.path(),
-        destination: final_file.path(),
-    };
-    let mut steps = plan.finishing(&work, count);
-    let total = steps.len();
-    for (index, step) in steps.iter_mut().enumerate() {
-        progress(Progress {
-            fraction: 0.95 + 0.05 * index as f32 / total as f32,
-            stage: step.stage.into(),
-        });
-        step.run(cancel)?;
-        check_cancel(cancel)?;
-    }
-    final_file.as_file().sync_all()?;
-    final_file
-        .persist(output)
-        .map_err(|e| anyhow::anyhow!("Cannot publish output: {}", e.error))?;
-    progress(Progress {
-        fraction: 1.,
-        stage: format!(
-            "Saved {count} frames with {:.3}s duration",
-            frames.duration(count)
-        ),
-    });
-    Ok(())
+        &|step| (progress.borrow_mut())(step),
+    ))
 }
 
-/// How a pipelined export stopped early.
-enum Failure {
-    /// Writing to the encoder failed, usually because it exited; its log has the reason.
-    Write(std::io::Error),
-    Other(anyhow::Error),
+/// A plan's encoder and what finishes its file: FFmpeg, fed the rendered frames as raw RGBA
+/// through `Feed`, while they are rendered.
+struct Ffmpeg<'p, P: Encoding> {
+    plan: &'p P,
+    output: PathBuf,
+    cancel: Arc<AtomicBool>,
+    folder: tempfile::TempDir,
+    destination: tempfile::NamedTempFile,
+    encoded: PathBuf,
+    metadata: PathBuf,
+    encoder: Process,
+    feed: Feed,
+}
+
+impl<'p, P: Encoding> Ffmpeg<'p, P> {
+    /// Checks that FFmpeg can encode `plan` to `output`, and starts it.
+    fn start(plan: &'p P, output: &Path, cancel: &Arc<AtomicBool>) -> Result<Self> {
+        check_cancel(cancel)?;
+        plan.check(cancel)?;
+        let video = plan.frames().video;
+        if output.exists() {
+            ensure!(
+                output.canonicalize()? != video.path,
+                "Choose an output other than the source video"
+            );
+        }
+        let parent = output
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        let folder = tempfile::tempdir_in(parent)?;
+        let destination = tempfile::NamedTempFile::new_in(parent)?;
+        // Use a file: embedded LUTs are too large for OS command-line limits.
+        let metadata = folder.path().join("preset.ffmeta");
+        if let Some(text) = plan.metadata_file()? {
+            std::fs::write(&metadata, text)?;
+        }
+        let encoded = match plan.intermediate() {
+            Some(extension) => folder.path().join(format!("video.{extension}")),
+            None => destination.path().to_owned(),
+        };
+        let mut encoder = Process::spawn(&mut plan.encoder(&encoded), cancel)?;
+        let feed = Feed::start(encoder.stdin());
+        Ok(Self {
+            plan,
+            output: output.to_owned(),
+            cancel: cancel.clone(),
+            folder,
+            destination,
+            encoded,
+            metadata,
+            encoder,
+            feed,
+        })
+    }
+
+    /// Why feeding the encoder failed: its own log, which says more than a broken pipe does.
+    fn failed(&mut self, error: std::io::Error) -> anyhow::Error {
+        match self.encoder.wait() {
+            Err(logged) => logged,
+            Ok(()) => error.into(),
+        }
+    }
+}
+
+impl<P: Encoding> Output for Ffmpeg<'_, P> {
+    type Made = ();
+
+    async fn frame(&mut self, _pass: u32, frame: RgbaImage) -> Result<()> {
+        match self.feed.push(frame) {
+            Ok(()) => Ok(()),
+            Err(error) => Err(self.failed(error)),
+        }
+    }
+
+    async fn finish(mut self, count: u64, progress: &dyn Fn(Progress)) -> Result<()> {
+        if let Err(error) = self.feed.close() {
+            return Err(self.failed(error));
+        }
+        progress(Progress {
+            fraction: 0.91,
+            stage: "Finishing encoding".into(),
+        });
+        self.encoder.wait()?;
+        check_cancel(&self.cancel)?;
+        let work = Work {
+            encoded: &self.encoded,
+            metadata: &self.metadata,
+            folder: self.folder.path(),
+            destination: self.destination.path(),
+        };
+        let mut steps = self.plan.finishing(&work, count);
+        let total = steps.len();
+        for (index, step) in steps.iter_mut().enumerate() {
+            progress(Progress {
+                fraction: 0.95 + 0.05 * index as f32 / total as f32,
+                stage: step.stage.into(),
+            });
+            step.run(&self.cancel)?;
+            check_cancel(&self.cancel)?;
+        }
+        self.destination.as_file().sync_all()?;
+        self.destination
+            .persist(&self.output)
+            .map_err(|e| anyhow::anyhow!("Cannot publish output: {}", e.error))?;
+        Ok(())
+    }
 }
 
 /// Frames in flight between two stages. Enough to absorb one stage's jitter; more would only
 /// hold another full frame of memory each, which at 4K is 33 MB.
 pub(crate) const QUEUED_FRAMES: usize = 2;
 
-/// Decodes, renders and encodes at the same time instead of in turn: the decoder is read on
-/// one thread and the encoder written on another, so the render loop only waits on them when
-/// a queue between them runs empty or full. Order is kept -- each queue is first in, first
-/// out -- so frames reach the encoder exactly as they left the decoder.
-///
-/// `render` gets each frame with its 1-based number and the time the pipeline started.
-/// Returns the number of frames encoded. On `Failure::Other` the caller must kill both
-/// processes, so a stage blocked on its pipe returns and the scope can end.
-fn pipeline(
-    mut decoded: impl Read + Send,
-    mut encoded: impl Write + Send,
-    (width, height): (u32, u32),
-    cancel: &Arc<AtomicBool>,
-    mut render: impl FnMut(&RgbaImage, u64, Instant) -> Result<RgbaImage>,
-) -> std::result::Result<u64, Failure> {
-    std::thread::scope(|scope| {
-        let (frames_in, frames) = mpsc::sync_channel::<Result<RgbaImage>>(QUEUED_FRAMES);
-        // Buffers go back to the decoder once rendered, so steady state allocates nothing.
-        let (recycle, spare) = mpsc::channel::<RgbaImage>();
-        scope.spawn(move || loop {
-            let mut frame = spare
-                .try_recv()
-                .unwrap_or_else(|_| RgbaImage::new(width, height));
-            let bytes = frame.as_mut();
-            let read = match decoded.read(&mut bytes[..1]) {
-                Ok(0) => break,
-                Ok(_) => decoded
-                    .read_exact(&mut bytes[1..])
-                    .context("Truncated decoded video frame")
-                    .map(|()| frame),
-                Err(error) => Err(error.into()),
-            };
-            let failed = read.is_err();
-            if frames_in.send(read).is_err() || failed {
-                break;
+/// Rendered frames written to an encoder's input on a thread of their own, so rendering only
+/// waits on the encoder when `QUEUED_FRAMES` are already waiting for it. They are written in
+/// the order they are pushed.
+struct Feed {
+    frames: Option<mpsc::SyncSender<RgbaImage>>,
+    writer: Option<JoinHandle<std::io::Result<()>>>,
+}
+
+impl Feed {
+    fn start(mut input: impl Write + Send + 'static) -> Self {
+        let (frames, queued) = mpsc::sync_channel::<RgbaImage>(QUEUED_FRAMES);
+        let writer = std::thread::spawn(move || {
+            for frame in queued {
+                input.write_all(frame.as_raw())?;
             }
-        });
-        let (results_in, results) = mpsc::sync_channel::<RgbaImage>(QUEUED_FRAMES);
-        let writer = scope.spawn(move || -> std::io::Result<()> {
-            for frame in results {
-                encoded.write_all(frame.as_raw())?;
-            }
-            // Dropping the pipe here is what tells the encoder the video has ended.
+            // Dropping the input here is what tells the encoder the frames have ended.
             Ok(())
         });
-        let started = Instant::now();
-        let mut count = 0u64;
-        let rendered = (|| -> Result<bool> {
-            for frame in frames.iter() {
-                check_cancel(cancel)?;
-                let frame = frame?;
-                count += 1;
-                let result = render(&frame, count, started)?;
-                let _ = recycle.send(frame);
-                check_cancel(cancel)?;
-                if results_in.send(result).is_err() {
-                    return Ok(false);
-                }
-            }
-            Ok(true)
-        })();
-        // Let the writer finish what is queued and close the pipe, then collect it.
-        drop(results_in);
-        drop(frames);
-        let written = writer.join().expect("encoder writer panicked");
-        match (rendered, written) {
-            (Err(error), _) => Err(Failure::Other(error)),
-            (Ok(_), Err(error)) => Err(Failure::Write(error)),
-            (Ok(true), Ok(())) => Ok(count),
-            (Ok(false), Ok(())) => unreachable!("the writer only stops early on an error"),
+        Self {
+            frames: Some(frames),
+            writer: Some(writer),
         }
-    })
+    }
+
+    /// Queues `frame` to be written; the error the writer stopped with, if it has.
+    fn push(&mut self, frame: RgbaImage) -> std::io::Result<()> {
+        let sent = self.frames.as_ref().map(|frames| frames.send(frame));
+        match sent {
+            Some(Ok(())) => Ok(()),
+            _ => self.close().and(Err(std::io::ErrorKind::BrokenPipe.into())),
+        }
+    }
+
+    /// Writes what is queued and closes the encoder's input.
+    fn close(&mut self) -> std::io::Result<()> {
+        self.frames = None;
+        match self.writer.take() {
+            Some(writer) => writer.join().expect("encoder writer panicked"),
+            None => Ok(()),
+        }
+    }
 }
 
 pub fn export(
@@ -422,19 +406,14 @@ pub fn export(
 }
 
 /// `sequence`'s next frame of `input`, read back.
-pub(crate) fn render_frame(
+fn render_frame(
     renderer: &Renderer,
     sequence: &mut Sequence,
     input: &RgbaImage,
     config: &Config,
     cancel: &AtomicBool,
 ) -> Result<RgbaImage> {
-    pollster::block_on(async {
-        renderer
-            .frame(sequence, input, config, Some(cancel), |_| {})
-            .await?;
-        renderer.read(sequence).await
-    })
+    pollster::block_on(jobs::render(renderer, sequence, input, config, cancel))
 }
 
 /// An animated GIF or WebP, as `output`'s extension asks, rendered on `renderer`.
@@ -461,66 +440,41 @@ pub fn export_animation(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::Ordering;
+    use std::sync::Mutex;
 
-    /// `count` 2x2 frames, each filled with its own index.
-    fn numbered_frames(count: u8) -> Vec<u8> {
-        (0..count).flat_map(|i| [i; 16]).collect()
+    /// What an encoder was written, kept for the test to read.
+    #[derive(Clone, Default)]
+    struct Written(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for Written {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
 
     #[test]
-    fn pipeline_keeps_frame_order_and_counts_what_it_encodes() {
-        let cancel = Arc::new(AtomicBool::new(false));
-        let mut encoded = Vec::new();
-        let mut seen = vec![];
-        let frames = pipeline(
-            std::io::Cursor::new(numbered_frames(40)),
-            &mut encoded,
-            (2, 2),
-            &cancel,
-            |frame, count, _| {
-                seen.push(count);
-                // The stages overlap, so a slow render must not let frames overtake it.
-                if count % 7 == 0 {
-                    std::thread::sleep(std::time::Duration::from_millis(5));
-                }
-                Ok(frame.clone())
-            },
-        );
-        assert!(matches!(frames, Ok(40)));
-        assert_eq!(seen, (1..=40).collect::<Vec<_>>());
-        assert_eq!(encoded, numbered_frames(40));
+    fn the_feed_writes_frames_in_the_order_they_are_pushed() {
+        let written = Written::default();
+        let mut feed = Feed::start(written.clone());
+        for i in 0..40u8 {
+            // The writer runs alongside, so a slow push must not let frames overtake it.
+            if i % 7 == 0 {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            feed.push(RgbaImage::from_pixel(2, 2, image::Rgba([i; 4])))
+                .unwrap();
+        }
+        feed.close().unwrap();
+        let expected: Vec<u8> = (0..40u8).flat_map(|i| [i; 16]).collect();
+        assert_eq!(*written.0.lock().unwrap(), expected);
     }
 
     #[test]
-    fn pipeline_reports_each_way_it_can_stop() {
-        let cancel = Arc::new(AtomicBool::new(false));
-        let identity = |frame: &RgbaImage, _, _| Ok(frame.clone());
-        let mut truncated = numbered_frames(3);
-        truncated.pop();
-        match pipeline(
-            std::io::Cursor::new(truncated),
-            std::io::sink(),
-            (2, 2),
-            &cancel,
-            identity,
-        ) {
-            Err(Failure::Other(error)) => assert!(error.to_string().contains("Truncated")),
-            _ => panic!("a truncated frame must fail"),
-        }
-        match pipeline(
-            std::io::Cursor::new(numbered_frames(5)),
-            std::io::sink(),
-            (2, 2),
-            &cancel,
-            |_, count, _| {
-                ensure!(count < 3, "render failed");
-                Ok(RgbaImage::new(2, 2))
-            },
-        ) {
-            Err(Failure::Other(error)) => assert_eq!(error.to_string(), "render failed"),
-            _ => panic!("a render error must stop the pipeline"),
-        }
+    fn the_feed_reports_an_encoder_that_stops_reading() {
         struct Closed;
         impl Write for Closed {
             fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
@@ -530,28 +484,9 @@ mod tests {
                 Ok(())
             }
         }
-        match pipeline(
-            std::io::Cursor::new(numbered_frames(50)),
-            Closed,
-            (2, 2),
-            &cancel,
-            identity,
-        ) {
-            Err(Failure::Write(error)) => {
-                assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe)
-            }
-            _ => panic!("an encoder that stops reading must fail the export"),
-        }
-        cancel.store(true, Ordering::Relaxed);
-        match pipeline(
-            std::io::Cursor::new(numbered_frames(5)),
-            std::io::sink(),
-            (2, 2),
-            &cancel,
-            identity,
-        ) {
-            Err(Failure::Other(error)) => assert!(error.to_string().contains("cancel")),
-            _ => panic!("cancellation must stop the pipeline"),
-        }
+        let mut feed = Feed::start(Closed);
+        let pushed = (0..50).try_for_each(|_| feed.push(RgbaImage::new(2, 2)));
+        let error = pushed.and_then(|()| feed.close()).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
     }
 }

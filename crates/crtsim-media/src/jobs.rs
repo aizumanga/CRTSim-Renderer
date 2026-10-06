@@ -10,11 +10,9 @@ use crate::{
     animation::AnimationPlan,
     check_cancel,
     decode::{self, Request},
-    export::Encoding,
-    gif_writer::{GifWriter, Histogram},
-    mux,
-    webp_writer::{self, WebpWriter},
-    AnimationFormat, AnimationOptions, Audio, Container, Options, Progress, Rate, Source, Video,
+    export::{self, Encoding},
+    made_here, mux, AnimationFormat, AnimationOptions, Audio, Container, Options, Progress, Rate,
+    Source, Video,
 };
 use anyhow::{bail, ensure, Result};
 use crtsim_core::{config::Config, Renderer, Sequence};
@@ -386,7 +384,91 @@ pub async fn export_video<S: FrameSource, E: VideoEncoding>(
     mux::write(container, &encoded, audio.as_ref())
 }
 
-/// Exports `video` as an animated GIF or WebP, returning the file.
+/// Where an export's rendered frames go: an encoder, and what makes the file from them.
+#[allow(async_fn_in_trait, reason = "a page's futures stay on its one thread")]
+pub trait Output {
+    /// What the export makes: a file saved, or a file's bytes for a page to download.
+    type Made;
+
+    /// How many times the frames are rendered and handed over. A GIF written here chooses its
+    /// colors from every frame before it writes any, without holding them all.
+    fn passes(&self) -> u32 {
+        1
+    }
+
+    /// What pass `pass` does, for the progress shown: empty when there is one.
+    fn pass_name(&self, _pass: u32) -> &'static str {
+        ""
+    }
+
+    /// Takes the next rendered frame of pass `pass`, counting from 0.
+    async fn frame(&mut self, pass: u32, frame: RgbaImage) -> Result<()>;
+
+    /// Makes the file from the `count` frames handed over, reporting its own steps.
+    async fn finish(self, count: u64, progress: &dyn Fn(Progress)) -> Result<Self::Made>;
+}
+
+/// Exports `frames` of a video: each read with `open`, rendered with `render` as the next
+/// frame of the CRT's sequence, and handed to `output`, which then makes the file.
+pub(crate) async fn export<S: FrameSource, O: Output>(
+    frames: &export::Frames<'_>,
+    mut open: impl AsyncFnMut(&Span) -> Result<S>,
+    mut render: impl AsyncFnMut(&mut Sequence, &RgbaImage, &Config) -> Result<RgbaImage>,
+    mut output: O,
+    cancel: &AtomicBool,
+    progress: &dyn Fn(Progress),
+) -> Result<O::Made> {
+    check_cancel(cancel)?;
+    let span = frames.span();
+    let expected = frames.count();
+    let passes = output.passes();
+    progress(Progress {
+        fraction: 0.,
+        stage: "Decoding and rendering video".into(),
+    });
+    let started = Instant::now();
+    let mut count = 0;
+    for pass in 0..passes {
+        let mut source = open(&span).await?;
+        let mut sequence = frames.sequence();
+        count = 0;
+        while let Some(frame) = source.next().await? {
+            check_cancel(cancel)?;
+            let rendered = render(&mut sequence, &frame, frames.render).await?;
+            check_cancel(cancel)?;
+            ensure!(
+                rendered.dimensions() == frames.size,
+                "Renderer returned the wrong dimensions"
+            );
+            output.frame(pass, rendered).await?;
+            count += 1;
+            let done =
+                ((f64::from(pass) + count as f64 / expected as f64) / f64::from(passes)).min(1.);
+            let elapsed = started.elapsed().as_secs_f64();
+            progress(Progress {
+                fraction: (done * 0.9) as f32,
+                stage: format!(
+                    "Frame {count} of {expected}{} · {:.1} FPS · approximately {:.0}s remaining",
+                    output.pass_name(pass),
+                    count as f64 / elapsed.max(0.001),
+                    elapsed * (1. - done) / done
+                ),
+            });
+        }
+        ensure!(count > 0, "No frames decoded");
+    }
+    let made = output.finish(count, progress).await?;
+    progress(Progress {
+        fraction: 1.,
+        stage: format!(
+            "Saved {count} frames with {:.3}s duration",
+            frames.duration(count)
+        ),
+    });
+    Ok(made)
+}
+
+/// Exports `video` as an animated GIF or WebP without FFmpeg, returning the file.
 ///
 /// `open` reads the frames a span asks for; `render` turns each into the next frame of the
 /// CRT's sequence; `lossy` encodes a frame as a lossy still WebP at a quality from 0 to 100,
@@ -401,102 +483,22 @@ pub async fn export_animation<S: FrameSource>(
     format: AnimationFormat,
     config: &Config,
     options: &AnimationOptions,
-    mut open: impl AsyncFnMut(&Span) -> Result<S>,
-    mut render: impl AsyncFnMut(&mut Sequence, &RgbaImage, &Config) -> Result<RgbaImage>,
-    mut lossy: impl AsyncFnMut(&RgbaImage, u8) -> Result<Vec<u8>>,
+    open: impl AsyncFnMut(&Span) -> Result<S>,
+    render: impl AsyncFnMut(&mut Sequence, &RgbaImage, &Config) -> Result<RgbaImage>,
+    lossy: impl AsyncFnMut(&RgbaImage, u8) -> Result<Vec<u8>>,
     cancel: &AtomicBool,
     progress: &dyn Fn(Progress),
 ) -> Result<Vec<u8>> {
     let plan = AnimationPlan::new(video, format, config, options)?;
     let frames = plan.frames();
-    let span = Span {
-        start: frames.start,
-        rate: Some(frames.rate.clone()),
-        limit: frames.limit,
-    };
-    let expected = plan.frame_count();
-    let (size, fps) = (frames.size, options.fps);
-    // A GIF's first pass only counts colors; its second, and a WebP's only pass, write.
-    let passes = match format {
-        AnimationFormat::Gif => 2,
-        AnimationFormat::Webp => 1,
-    };
-    let mut histogram = Histogram::default();
-    let mut gif = None;
-    let mut webp = None;
-    let started = Instant::now();
-    for pass in 0..passes {
-        match format {
-            AnimationFormat::Gif if pass == 1 => {
-                gif = Some(GifWriter::new(
-                    size,
-                    fps,
-                    histogram.palette(),
-                    options.dither,
-                )?);
-            }
-            AnimationFormat::Webp => webp = Some(WebpWriter::new(size, fps)?),
-            AnimationFormat::Gif => {}
-        }
-        let mut source = open(&span).await?;
-        let mut sequence = frames.sequence();
-        let mut count = 0u64;
-        while let Some(frame) = source.next().await? {
-            check_cancel(cancel)?;
-            let output = render(&mut sequence, &frame, frames.render).await?;
-            ensure!(
-                output.dimensions() == size,
-                "Renderer returned the wrong animation dimensions"
-            );
-            match (&mut gif, &mut webp) {
-                (Some(writer), _) => writer.frame(&output)?,
-                (_, Some(writer)) => {
-                    let change = writer.changed(&output)?;
-                    let picture = match change {
-                        None => None,
-                        Some(rect) if options.lossless => {
-                            Some(webp_writer::lossless(&rect.crop(&output))?)
-                        }
-                        Some(rect) => {
-                            let picture = lossy(&rect.crop(&output), options.quality).await?;
-                            ensure!(
-                                picture.starts_with(b"RIFF"),
-                                "This browser cannot write lossy WebP. Choose Lossless, or GIF."
-                            );
-                            Some(picture)
-                        }
-                    };
-                    writer.add(&output, change.zip(picture.as_deref()))?;
-                }
-                (None, None) => histogram.add(&output),
-            }
-            count += 1;
-            let done = (pass as f64 + count as f64 / expected as f64) / passes as f64;
-            let remaining = started.elapsed().as_secs_f64() * (1. - done).max(0.) / done;
-            let doing = match (format, pass) {
-                (AnimationFormat::Gif, 0) => " · choosing colors",
-                (AnimationFormat::Gif, _) => " · writing",
-                _ => "",
-            };
-            progress(Progress {
-                fraction: (done.min(1.) * 0.97) as f32,
-                stage: format!(
-                    "Frame {count} of {expected}{doing} · approximately {remaining:.0}s remaining"
-                ),
-            });
-        }
-        ensure!(count > 0, "No frames decoded");
-    }
-    match (gif, webp) {
-        (Some(writer), _) => writer.finish(),
-        (_, Some(writer)) => writer.finish(),
-        (None, None) => unreachable!("every format has a writer"),
-    }
+    let output = made_here::Animation::new(format, frames.size, options, lossy)?;
+    export(&frames, open, render, output, cancel, progress).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::webp_writer;
     use crate::{Contents, Dither};
     use image::{codecs::gif::GifEncoder, AnimationDecoder, Delay, Frame, Rgba};
     use std::sync::Arc;
@@ -622,6 +624,72 @@ mod tests {
             async |_, _, _| panic!("nothing is shown once cancelled"),
         ));
         assert!(played.is_err());
+    }
+
+    /// An output that keeps what it is handed: each frame's gray level, by pass.
+    struct Kept(u32, Vec<(u32, u8)>);
+
+    impl Output for Kept {
+        type Made = Vec<(u32, u8)>;
+        fn passes(&self) -> u32 {
+            self.0
+        }
+        async fn frame(&mut self, pass: u32, frame: RgbaImage) -> Result<()> {
+            self.1.push((pass, frame.get_pixel(0, 0).0[0]));
+            Ok(())
+        }
+        async fn finish(self, count: u64, _: &dyn Fn(Progress)) -> Result<Self::Made> {
+            assert_eq!(count, 3);
+            Ok(self.1)
+        }
+    }
+
+    #[test]
+    fn an_export_renders_each_pass_in_order_and_stops_on_a_failure_or_cancel() {
+        let video = clip(3);
+        let config = Config::general();
+        let rate = Rate::per_second(10.);
+        let frames = export::Frames {
+            video: &video,
+            render: &config,
+            timing: crate::Timing::Stable,
+            size: (8, 6),
+            rate: &rate,
+            start: 0.,
+            limit: None,
+        };
+        let cancel = AtomicBool::new(false);
+        let last = std::cell::Cell::new(0.);
+        let made = pollster::block_on(super::export(
+            &frames,
+            async |_| Ok(Grays(0, 3)),
+            async |_, frame, _| Ok(frame.clone()),
+            Kept(2, vec![]),
+            &cancel,
+            &|progress| last.set(progress.fraction),
+        ))
+        .unwrap();
+        assert_eq!(made, [(0, 1), (0, 2), (0, 3), (1, 1), (1, 2), (1, 3)]);
+        assert_eq!(last.get(), 1.);
+        let failed = pollster::block_on(super::export(
+            &frames,
+            async |_| Ok(Grays(0, 3)),
+            async |_, _, _| anyhow::bail!("render failed"),
+            Kept(1, vec![]),
+            &cancel,
+            &|_| {},
+        ));
+        assert_eq!(failed.unwrap_err().to_string(), "render failed");
+        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        let cancelled = pollster::block_on(super::export(
+            &frames,
+            async |_| Ok(Grays(0, 3)),
+            async |_, frame, _| Ok(frame.clone()),
+            Kept(1, vec![]),
+            &cancel,
+            &|_| {},
+        ));
+        assert!(cancelled.unwrap_err().to_string().contains("cancel"));
     }
 
     struct Grays(u8, u8);

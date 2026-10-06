@@ -17,7 +17,7 @@ use image::RgbaImage;
 use std::{
     io::Read,
     process::Command,
-    sync::{atomic::AtomicBool, Arc},
+    sync::{atomic::AtomicBool, mpsc, Arc},
 };
 
 /// Which frames to decode.
@@ -198,12 +198,11 @@ fn decode_one(
     RgbaImage::from_raw(video.size.0, video.size.1, bytes).context("Invalid preview pixels")
 }
 
-/// A video's frames as FFmpeg decodes them, or an animation's on a thread of its own, read
-/// from the decode one at a time as they come, while it decodes the next.
+/// A video's frames as FFmpeg decodes them, or an animation's on a thread of its own, read on
+/// a thread of their own `QUEUED_FRAMES` ahead, so decoding goes on while a frame renders.
 pub struct Piped {
     decoder: Decoder,
-    frames: Box<dyn Read + Send>,
-    size: (u32, u32),
+    frames: Prefetched,
     ended: bool,
 }
 
@@ -211,9 +210,8 @@ impl Piped {
     pub fn open(video: &Video, span: &Span, cancel: &Arc<AtomicBool>) -> Result<Self> {
         let mut decoder = Decoder::open(video, &Request::of(span), cancel)?;
         Ok(Self {
-            frames: decoder.frames(),
+            frames: Prefetched::start(decoder.frames(), video.size),
             decoder,
-            size: video.size,
             ended: false,
         })
     }
@@ -224,18 +222,53 @@ impl FrameSource for Piped {
         if self.ended {
             return Ok(None);
         }
-        let mut frame = RgbaImage::new(self.size.0, self.size.1);
-        let bytes = frame.as_mut();
-        if self.frames.read(&mut bytes[..1])? == 0 {
-            // The end of the frames: whether the decode finished or failed.
+        let frame = self.frames.next();
+        if !matches!(frame, Ok(Some(_))) {
             self.ended = true;
-            self.decoder.wait()?;
-            return Ok(None);
         }
-        self.frames
-            .read_exact(&mut bytes[1..])
-            .context("Truncated video frame")?;
-        Ok(Some(frame))
+        if let Ok(None) = frame {
+            // The end of the frames: whether the decode finished or failed.
+            self.decoder.wait()?;
+        }
+        frame
+    }
+}
+
+impl Drop for Piped {
+    fn drop(&mut self) {
+        // A reader blocked on the decode gets the end of its frames, and its thread ends.
+        self.decoder.kill();
+    }
+}
+
+/// Frames of packed RGBA read from a stream on a thread of their own, in order, a few ahead.
+pub(crate) struct Prefetched(mpsc::Receiver<Result<RgbaImage>>);
+
+impl Prefetched {
+    pub fn start(mut stream: impl Read + Send + 'static, (width, height): (u32, u32)) -> Self {
+        let (read, frames) = mpsc::sync_channel(QUEUED_FRAMES);
+        std::thread::spawn(move || loop {
+            let mut frame = RgbaImage::new(width, height);
+            let bytes = frame.as_mut();
+            let next = match stream.read(&mut bytes[..1]) {
+                Ok(0) => break,
+                Ok(_) => stream
+                    .read_exact(&mut bytes[1..])
+                    .context("Truncated video frame")
+                    .map(|()| frame),
+                Err(error) => Err(error.into()),
+            };
+            let failed = next.is_err();
+            if read.send(next).is_err() || failed {
+                break;
+            }
+        });
+        Self(frames)
+    }
+
+    /// The next frame, or `None` after the last.
+    pub fn next(&self) -> Result<Option<RgbaImage>> {
+        self.0.recv().ok().transpose()
     }
 }
 
@@ -263,4 +296,24 @@ pub fn playback(
         cancel,
         async |time, source, crt| frame_ready(time, source, crt),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prefetched_frames_come_in_order_and_a_truncated_one_fails() {
+        let bytes: Vec<u8> = (0..30u8).flat_map(|i| [i; 16]).collect();
+        let frames = Prefetched::start(std::io::Cursor::new(bytes), (2, 2));
+        for i in 0..30u8 {
+            let frame = frames.next().unwrap().unwrap();
+            assert_eq!(frame.as_raw(), &[i; 16]);
+        }
+        assert!(frames.next().unwrap().is_none());
+        let truncated = Prefetched::start(std::io::Cursor::new(vec![0; 20]), (2, 2));
+        assert!(truncated.next().unwrap().is_some());
+        let error = truncated.next().unwrap_err();
+        assert!(error.to_string().contains("Truncated"), "{error}");
+    }
 }

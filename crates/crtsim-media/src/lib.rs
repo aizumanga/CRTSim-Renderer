@@ -6,6 +6,7 @@ pub mod demux;
 mod export;
 mod gif_writer;
 pub mod jobs;
+mod made_here;
 pub mod mux;
 mod plan;
 mod probe;
