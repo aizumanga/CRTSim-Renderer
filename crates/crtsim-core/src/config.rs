@@ -128,6 +128,10 @@ pub struct Config {
     /// every tick. Up to 2, past the average, holds what version 1 settings could. Stable phase
     /// always shows the average.
     pub ntsc_blending: f32,
+    /// The composite artifact pattern upside down against the picture, each tick blending the
+    /// row above rather than the one below, as Super Win the Game's Linux build draws it. Off
+    /// is the public source's (Direct3D) orientation.
+    pub flip_artifacts: bool,
     pub persistence: [f32; 3],
     pub overscan: f32,
     pub barrel: f32,
@@ -181,6 +185,7 @@ impl Default for Config {
             bleed: 0.5,
             artifacts: 0.5,
             ntsc_blending: 0.,
+            flip_artifacts: false,
             persistence: [0.7, 0.525, 0.42],
             overscan: 1.,
             barrel: -0.115,

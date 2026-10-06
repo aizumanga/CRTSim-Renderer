@@ -16,6 +16,7 @@ layout(std140, set = 0, binding = 0) uniform UBO {
     float CRTSIM_BLEED;
     float CRTSIM_ARTIFACTS;
     float CRTSIM_NTSC_BLENDING;
+    float CRTSIM_FLIP_ARTIFACTS;
     float CRTSIM_PHASE;
     float CRTSIM_PERSISTENCE_R;
     float CRTSIM_PERSISTENCE_G;
@@ -79,7 +80,10 @@ vec3 persistence() {
 
 void main() {
     ivec2 xy = ivec2(vTexCoord * global.SourceSize.xy);
-    vec2 auv = (vec2(xy) + vec2(0.5)) / vec2(256.0, 224.0);
+    // Flipped, the pattern runs from the bottom up, so the second sample is the row above.
+    ivec2 at = global.CRTSIM_FLIP_ARTIFACTS > 0.5
+        ? ivec2(xy.x, int(global.SourceSize.y) - 1 - xy.y) : xy;
+    vec2 auv = (vec2(at) + vec2(0.5)) / vec2(256.0, 224.0);
     vec2 tile = vec2(textureSize(CRTSIM_ARTIFACT_PATTERN, 0));
     vec3 a = mix(texelFetch(CRTSIM_ARTIFACT_PATTERN, ivec2(floor(fract(auv) * tile)), 0).rgb,
         texelFetch(CRTSIM_ARTIFACT_PATTERN, ivec2(floor(fract(auv + vec2(0.0, 1.0 / 224.0)) * tile)), 0).rgb,

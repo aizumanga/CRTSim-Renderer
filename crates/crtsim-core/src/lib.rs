@@ -74,7 +74,12 @@ impl Params {
                 output.1 as f32,
             ],
             signal: [c.sharpness, c.bleed, c.artifacts, 0.5],
-            persistence: [c.persistence[0], c.persistence[1], c.persistence[2], 0.],
+            persistence: [
+                c.persistence[0],
+                c.persistence[1],
+                c.persistence[2],
+                flag(c.flip_artifacts),
+            ],
             geometry: [uv[0], uv[1], c.overscan, c.barrel],
             mask: [mask[0], mask[1], c.mask_brightness, c.mask_opacity],
             lighting: [c.diffuse, c.specular, c.specular_power, c.rim],

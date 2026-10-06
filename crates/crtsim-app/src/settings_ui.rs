@@ -219,6 +219,12 @@ impl App {
                     (Phase::Alternating, "Alternating"),
                 ],
             );
+            ui.checkbox(&mut self.config.flip_artifacts, "Flip artifact pattern")
+                .on_hover_text(
+                    "The composite artifact pattern upside down, each tick blending in the row \
+                     above rather than below, as Super Win the Game's Linux build draws it. Off \
+                     is the public CRTSim source's orientation.",
+                );
             ui.checkbox(&mut self.config.interlace, "Interlaced fields")
                 .on_hover_text(
                     "Each tick scans every other row, alternating fields; the rows it skips \

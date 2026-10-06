@@ -225,7 +225,7 @@ Game** preset (`crates/crtsim-app/src/gallery.rs`) unless a row says otherwise.
 | Screen geometry | `screen.m3d`, rasterised | same | ray-traced sphere fitted to it, analytic edge dimming | intentional extension; error vs mesh **unmeasured** |
 | Bezel geometry | `frame.m3d` | same | baked from `frame.m3d`, ray-marched | intentional extension; **unmeasured** |
 | FOV | 30° | 15° | preset 30° (default 15°) | match (preset) |
-| Artifact pattern orientation | flipped against the picture; second sample one row up (Linux build, session 4) | row *y* and the row below | as public CRTSim | **difference** (Linux build); Windows unknown |
+| Artifact pattern orientation | flipped against the picture; second sample one row up (Linux build, session 4) | row *y* and the row below | either, **Flip artifact pattern** (`flip_artifacts`, session 5), off by default | **matches with the setting on**; Windows build unknown |
 | Lighting, light position | CRTSim's, (−10, −5, 10) | same | same | match |
 | Bloom | 1/16 target, 7 taps, spread 0.025, `ColorPow` | same | same | match |
 | NTSC phase blend | lerp alternates `p + (0.5 − p)·0.35` = 0.175 / 0.825 | 0 / 1 | the game's formula since session 2 (was `blending` / `1 − blending` = 0.35 / 0.65 at `d833e36`) | **fixed**: was the same setting at twice the strength |
@@ -330,11 +330,12 @@ None of these are made yet. In order of how much they would close the gap:
 5. **Measure the glass and bezel approximations** against `screen.m3d`/`frame.m3d` rasterised
    with the game's camera, before deciding anything there.
 
-6. **Artifact pattern orientation**, if the Linux build is the one to match: sample the
-   pattern at `(223 − y)` and the row before it (or flip the texture and step up), in the
-   composite pass and the RetroArch port, perhaps as a setting since public CRTSim and maybe
-   the Windows build go the other way. *Validate:* `composite_model.py` and a recapture,
-   composite within 1 step at default settings.
+6. **Artifact pattern orientation.** *Done in session 5:* **Flip artifact pattern**
+   (`Config::flip_artifacts`), in the composite pass and the RetroArch port
+   (`CRTSIM_FLIP_ARTIFACTS`), off by default. Against the session-4 capture at default
+   settings with it on: composite worst 2, mean 0.26 (from worst 152, mean 1.6), the same
+   residual as with artifacts off; final mean 0.72 (from 1.4). A RetroArch parity case covers
+   it.
 
 Frame-by-frame comparison is set up (session 4); more probes, motion and other settings can go
 through it.

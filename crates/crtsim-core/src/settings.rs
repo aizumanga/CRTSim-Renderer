@@ -373,6 +373,7 @@ pub static SETTINGS: &[Setting] = &[
     Setting::other("warmup", "Warm-up ticks"),
     Setting::other("phase", "Phase"),
     Setting::other("interlace", "Interlaced fields"),
+    Setting::other("flip_artifacts", "Flip artifact pattern"),
 ];
 
 /// Checks every numeric setting against what a preset may hold, naming the first that is not.

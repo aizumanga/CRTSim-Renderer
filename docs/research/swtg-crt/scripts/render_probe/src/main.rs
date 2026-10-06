@@ -1,6 +1,6 @@
 //! Renders a 256x224 RGBA probe through CRTSim-Renderer's Super Win the Game look as a 60 fps
 //! alternating sequence, saving each kept frame's prepared signal, composite signal and final
-//! picture. ARTIFACTS and BLOOM override those settings.
+//! picture. ARTIFACTS and BLOOM override those settings; FLIP_ARTIFACTS=1 flips the pattern.
 //! usage: render_probe PROBE.rgba OUTDIR FRAMES KEEP_FROM [WIDTHxHEIGHT]
 use anyhow::Result;
 use crtsim_core::{config::{Config, Phase}, Renderer, Sequence, Timing};
@@ -22,6 +22,7 @@ fn main() -> Result<()> {
         output: size,
         artifacts: std::env::var("ARTIFACTS").map_or(0.5, |v| v.parse().unwrap()),
         bloom: std::env::var("BLOOM").map_or(0.25, |v| v.parse().unwrap()),
+        flip_artifacts: std::env::var("FLIP_ARTIFACTS").is_ok_and(|v| v == "1"),
         ..Config::default()
     };
     let renderer = pollster::block_on(Renderer::new(wgpu::Backends::VULKAN))?;

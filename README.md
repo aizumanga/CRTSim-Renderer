@@ -280,6 +280,7 @@ Export directories must be new. Sixteen warm-up ticks means 17 total ticks; it i
 `alternating` advances phase once per tick; the final phase depends on warm-up parity. Stable mode is recommended for still images.
 
 **Interlaced fields** (`"interlace": true`) makes each tick scan every other signal row, alternating fields, while the rows it skips only fade by persistence, as on an interlaced set. Use it with a 480- or 576-row signal. On a still, the last tick's field is the bright one, so warm-up parity picks which; in a video each frame is one field.
+**Flip artifact pattern** (`"flip_artifacts": true`) turns the composite artifact pattern upside down against the picture, each tick blending in the row above rather than the one below, as Super Win the Game's Linux build draws it; compared with that build's own frames, the composite signal then matches within 2 steps. Off, the default, is the public CRTSim source's orientation, which the game's Windows build may also use. RetroArch presets carry it.
 
 ### GPU troubleshooting
 

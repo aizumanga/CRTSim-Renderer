@@ -267,6 +267,12 @@ fn parameters() -> Vec<Parameter> {
         // A look made on a still says nothing about a core that switches to 480 rows, so a
         // look that does not interlace leaves it to the picture's size.
         choice(
+            "CRTSIM_FLIP_ARTIFACTS",
+            "Artifact pattern (as the public source, flipped)",
+            1.,
+            |c| flag(c.flip_artifacts),
+        ),
+        choice(
             "CRTSIM_INTERLACE",
             "Interlaced fields (off, on, auto)",
             2.,

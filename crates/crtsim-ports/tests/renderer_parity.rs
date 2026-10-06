@@ -128,6 +128,16 @@ fn cases() -> Vec<Case> {
                 ..base()
             },
         ),
+        // The artifact pattern upside down, as the game's Linux build draws it.
+        still(
+            "alternating-flipped",
+            Config {
+                phase: Phase::Alternating,
+                ntsc_blending: 0.35,
+                flip_artifacts: true,
+                ..base()
+            },
+        ),
         still(
             "linear-light",
             Config {
