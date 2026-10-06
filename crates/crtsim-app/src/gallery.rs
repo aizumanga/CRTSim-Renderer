@@ -33,13 +33,12 @@ pub fn builtins() -> Vec<Entry> {
             "Super Win the Game",
             "The game's own CRT options: the public reference with a 30° field of view, NTSC \
              blending at 0.35 and its NTSC palette (Tint 5.18, I 1.75, Q 1.00), made as the \
-             game makes it, with the artifact pattern flipped as its Linux build draws it. The \
+             game makes it, with the artifact pattern as its Windows build draws it. The \
              palette recolours art in the NES palette the game's is drawn in.",
             Config {
                 fov: 30.,
                 phase: Phase::Alternating,
                 ntsc_blending: 0.35,
-                flip_artifacts: true,
                 palette: Some(Default::default()),
                 ..Config::default()
             },
@@ -255,8 +254,8 @@ mod tests {
         assert_eq!(game.fov, 30.);
         assert_eq!(game.ntsc_blending, 0.35);
         assert_eq!(game.lut_strength, 1.);
-        // As the Linux build, whose frames it was compared with, draws the artifact pattern.
-        assert!(game.flip_artifacts);
+        // As the Windows build draws the artifact pattern; the Linux build flips it.
+        assert!(!game.flip_artifacts);
         let palette = game.palette.unwrap();
         assert_eq!(
             (palette.tint, palette.tint_i, palette.tint_q, palette.model),

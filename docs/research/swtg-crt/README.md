@@ -30,6 +30,16 @@ itch.io Linux build, `ValkyrieVersion.npk` → `Version.ini`: *September 25, 202
 | `ValkyrieVersion.npk` | 362 | `4d33f511e0cf6d2684dd380903e6e2afac4396d2c3ee28a2e11228afec7f824c` |
 | `SWG_Campaign.vpk` (not needed) | 12886444 | `97cc015b3ccd704c3aa380b23c6117f75c3731aaedf52fb4b245a47f14c9606c` |
 
+The itch.io Windows and macOS releases (session 8) ship the same four data files, byte for byte;
+only their executables differ:
+
+| File | Size | SHA-256 |
+| --- | ---: | --- |
+| `SuperGame_Install.exe` (Windows, NSIS 2.46) | 4186422 | `6e8f2c27d6bb5169364a18d9325fe8443b3d6924763e887689059b0550324ac0` |
+| … `SuperGame.exe` inside it | 2514944 | `d7c865a3118859c9e36e3b453bfd261173271bd2ce819fcbb51cecdc60b90a9d` |
+| `SuperGame.dmg` (macOS) | 4302829 | `de6188f005a3ebd68ad6ef349a4511f311ca14cc999f5499161acbb2f75f4635` |
+| … `SuperGame.app/Contents/MacOS/Valkyrie` | 3994980 | `0920957cc4701fc83de7f0e1127d0c22572383f74bdcf7bc0194d7c9a7186113` |
+
 The Steam build may differ; nothing here has been checked against it.
 
 `SuperGame_NFML` is a 32-bit i386 ELF, OpenGL via GLEW, SDL2 statically linked. It is **not
@@ -288,9 +298,7 @@ and FOV 30.
   where a ray meets the sphere), and lines along the glass's outline and the bezel's edge.
 - **Final:** the surface's differences, spread a little by the bloom.
 
-Whether the Windows build, on Direct3D 9, flips the pattern too is not known: its textures and
-render targets would both be top first, as in public CRTSim. Matching "the game" here may
-depend on which build is meant.
+The Windows build, on Direct3D 9, does not flip it (session 8).
 
 ## Glass and bezel against the meshes (session 6)
 
@@ -405,6 +413,52 @@ triangle to triangle and the sphere's does not. Baking the mesh's UVs would remo
 would bring the faceting into the renderer's picture, which is a choice about fidelity to the
 game, not a gap in the measurement.
 
+## The Windows and macOS builds (session 8)
+
+**Static.** The three builds share their data files (see Inputs): the same GLSL, the same
+compiled Direct3D effects (`*.fxo`), the same textures, meshes and render states. What differs
+is how each executable draws them:
+
+- **Windows** `SuperGame.exe`, a 32-bit PE: imports `d3d9.dll` and `d3dx9_42.dll`
+  (`D3DXCreateEffect`, `D3DXCreateTexture`) and no OpenGL, and names the `.fxo` effects and
+  `ntschack.bmp`. It draws with Direct3D 9.
+- **macOS** `Valkyrie`, a 64-bit x86-64 Mach-O: links `OpenGL.framework` and imports
+  `glTexImage2D`, with no Direct3D. It draws through OpenGL with the GLSL, as Linux does.
+
+**Runtime (Windows).** The Windows build, run under Wine 9 (`scripts/play_windows.sh`; Wine
+draws Direct3D 9 through OpenGL on Mesa llvmpipe, keeping Direct3D's conventions), and the
+Linux build were played into the same first scene with identical settings: the defaults, at
+1280×960. `capture_shim.c`, with no `input`, recorded the scene's own NTSC frame from the Linux
+build; `render_probe` (`PALETTE=0`) rendered that frame with the pattern unflipped and flipped,
+and `scripts/compare_builds.py` compared each build's screen with both. Mean of the worst
+channel inside the glass, 8-bit steps, mask off (Scanline Opacity 0) so the artifacts show
+plainly:
+
+| Build | Unflipped | Flipped | Control: artifacts off (NTSC 0) |
+| --- | ---: | ---: | ---: |
+| Linux | 3.95 | **1.19** | 1.28 |
+| Windows | **1.67** | 4.24 | 1.64 |
+
+Each build comes as close as its control with one orientation and nowhere near with the other.
+**The Windows build draws the pattern unflipped**, as public CRTSim and this renderer's default
+do; the Linux build flips it, as session 4 found.
+
+Two other differences, neither in the CRT itself:
+
+- The Windows build's whole picture lies half a pixel right of and below the Linux build's:
+  with artifacts off, that shift alone takes the difference from 2.64 to 0.59 steps (mean
+  over channels, the screen's middle). It is Direct3D 9's pixel centre convention in the final
+  pass, not worth reproducing.
+- With the mask on, the two builds' masks, each divided by its frame with the mask off, agree
+  with this renderer's as closely (0.013 and 0.014) once the Windows one is moved back by that
+  half pixel.
+
+**macOS** was not run. Drawing through OpenGL from the same GLSL and the same render targets,
+it most likely flips the pattern as the Linux build does (hypothesis).
+
+The Super Win the Game preset now leaves **Flip artifact pattern** off, matching the Windows
+build; turning it on matches the Linux build, and probably the Mac one.
+
 ## Unresolved
 
 1. ~~How the LUT fills between palette entries~~: nearest source colour (session 2).
@@ -416,7 +470,8 @@ game, not a gap in the measurement.
 5. ~~`MonitorColor` and the Brightness default~~: (0.06, 0.06, 0.06, 0) and 0 (session 4).
    The vertex colours `Tuning_Dimming` reads from `screen.m3d`: 15 greys, which the renderer
    reads baked since session 7.
-8. Whether the Windows build flips the artifact pattern as the Linux build does.
+8. ~~Whether the Windows build flips the artifact pattern~~: it does not (session 8). The
+   macOS build, on OpenGL, is not checked at runtime; it most likely flips, as Linux does.
 6. ~~How large the glass and bezel approximations are~~: measured (session 6), 0.46 steps
    on average over the probe; 0.30 since the glass's shade and outline are baked (session 7),
    most of what is left the mesh's faceted UVs and the bezel's rim.
@@ -449,7 +504,8 @@ None of these are made yet. In order of how much they would close the gap:
    (`CRTSIM_FLIP_ARTIFACTS`), off by default. Against the session-4 capture at default
    settings with it on: composite worst 2, mean 0.26 (from worst 152, mean 1.6), the same
    residual as with artifacts off; final mean 0.72 (from 1.4). A RetroArch parity case covers
-   it. The Super Win the Game preset turns it on, matching the Linux build.
+   it. The Super Win the Game preset turned it on, matching the Linux build, until session 8
+   found the Windows build unflipped; it leaves it off since.
 
 7. **Glass shade and outline from the mesh.** *Done in session 7:* `glass.rs` bakes
    `screen.m3d`'s vertex colours and outline across the glass's UVs; the surface pass and the
@@ -506,6 +562,28 @@ session 7:
 (cd SCRIPTS/bezel_maps && cargo build --release)    # then: bezel_maps maps
 SCRIPTS/measure_surfaces.py maps composite.png measure   # report.txt and error maps
 ```
+
+The Windows build against the Linux build (session 8). Both read the same settings: copy the
+Linux `Config.ini` over the one the Windows build writes under the Wine prefix
+(`drive_c/users/$USER/Documents/My Games/Super Win the Game/Config`) after its first run, and
+for the Linux build set `Fullscreen: false` with 1280×960 windowed, since fullscreen can leave
+its window 1×1 under Xvfb. The game ignores SIGTERM; stop it with `kill -9`.
+
+```bash
+apt-get install p7zip-full wine32:i386 wine ffmpeg
+7z x -oWIN SuperGame_Install.exe                     # SuperGame.exe and the data files
+SCRIPTS/play_windows.sh WIN win                      # win/frames: the first scene
+SCRIPTS/play_to_gameplay.sh GAME shim.so run         # the Linux build, into the same scene
+ffmpeg -f x11grab -framerate 30 -video_size 1280x960 -i :99 -frames:v 40 lin/f%03d.png
+printf "frames 2\nskip 10\ntag scene\n" > run/go; sleep 10   # records the scene's passes
+python3 -c "import numpy as n; a=n.fromfile('run/scene_000_ntsc.rgba',n.uint8)\
+.reshape(224,256,4)[::-1].copy(); a[...,3]=255; a.tofile('scene.rgba')"   # rows top first
+for f in 0 1; do PALETTE=0 MASK_OPACITY=0 FLIP_ARTIFACTS=$f render_probe scene.rgba ren$f 42 40; done
+SCRIPTS/compare_builds.py win/frames ren0 ren1 --half-pixel
+SCRIPTS/compare_builds.py lin ren0 ren1
+```
+
+`MASK_OPACITY=0` above goes with `ScanOpacity: 0` in both games' settings, as the table used.
 
 Function addresses (`nm -C SuperGame_NFML`): `CRTBaseMaterial::SetParam` 08081c60,
 `NTSCMaterial::SetParam` 080c7610, `ValkyrieGame::CreateAssets` 08144ae0,
