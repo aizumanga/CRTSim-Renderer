@@ -107,7 +107,7 @@ if STILLS:
 subprocess.run([sys.executable, f"{sys.path[0]}/musicgen.py", "reel", str(TOTAL / c.FPS), f"{S}/reel.wav"], check=True)
 cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24",
        "-s", f"{c.W}x{c.H}", "-r", str(c.FPS), "-i", "-", "-i", f"{S}/reel.wav",
-       "-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-preset", "slow", "-crf", "17",
+       "-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-preset", "slow", "-crf", "20",
        "-pix_fmt", "yuv420p", "-profile:v", "high", "-level", "4.2",
        "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709",
        "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", OUT]
