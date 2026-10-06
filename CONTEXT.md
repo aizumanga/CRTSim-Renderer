@@ -22,6 +22,11 @@ one frame persists into the next. A video is a sequence with a timing and a fram
 editing sequence is the one interactive previews run on; it starts again by itself when its
 sizes or colour mode change.
 
+**Sequence shape**: what a sequence is made for: its signal size, output size and colour mode
+(`crtsim_core::Shape`, from `Config::sequence_shape`). Settings of one shape can follow each
+other in one sequence; another shape needs a new one, which an editing sequence starts by
+itself. Playback asks it whether an edit can reach the video playing.
+
 **Still**: a sequence of one frame, rendered after warm-up.
 
 **Warm-up**: the ticks a new sequence runs before the frame it keeps, so a still or a video's

@@ -1,7 +1,7 @@
 //! Frames rendered one after another, sharing the CRT's history: a still, or a video's frames at
 //! its own rate.
 use crate::{
-    config::{Config, Phase},
+    config::{ColorMode, Config, Phase},
     Workspace,
 };
 use serde::{Deserialize, Serialize};
@@ -20,12 +20,21 @@ pub enum Timing {
     Disabled,
 }
 
+/// What a sequence is made for: the size of its signal and of its output, and its color mode.
+/// Frames of one shape share a CRT's history; another shape needs a new sequence, which an
+/// editing sequence starts by itself.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Shape {
+    pub signal: (u32, u32),
+    pub output: (u32, u32),
+    pub color_mode: ColorMode,
+}
+
 /// Frames that share one CRT's history, so the glow of one persists into the next. A new
 /// sequence starts from cleared history and warms up before its first frame.
 ///
-/// A sequence belongs to the renderer that first draws it, and to one signal size, output size
-/// and color mode. Start a new one after seeking or changing those; an editing sequence starts
-/// again by itself.
+/// A sequence belongs to the renderer that first draws it, and to one `Shape`. Start a new one
+/// after seeking or changing its shape; an editing sequence starts again by itself.
 pub struct Sequence {
     pub(crate) workspace: Option<Workspace>,
     /// Ticks simulated so far.

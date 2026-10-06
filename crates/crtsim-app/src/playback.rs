@@ -3,6 +3,7 @@
 //! waits again whenever the renderer falls behind. Settings edited while it plays reach the
 //! frames rendered next, as a game's picture follows its options menu.
 use crate::*;
+use crtsim_core::Shape;
 use std::collections::VecDeque;
 use worker::{Feed, PlaybackFrame, PlayingSettings};
 
@@ -26,6 +27,9 @@ pub struct Playback {
     shown: f64,
     /// What the worker renders with, which edits replace.
     settings: PlayingSettings,
+    /// The shape of the sequence the worker plays, for the video's frames; none for settings
+    /// that cannot be played.
+    shape: Option<Shape>,
     /// The size of the video's frames.
     source: (u32, u32),
 }
@@ -75,6 +79,7 @@ impl Playback {
         let capacity = ((64 * 1024 * 1024) / pair_bytes.max(1)).clamp(1, 4) as usize;
         let (frames, receive) = mpsc::sync_channel(capacity);
         let cancel = Arc::new(AtomicBool::new(false));
+        let shape = config.sequence_shape(video.size).ok();
         let settings = PlayingSettings::new(config);
         let playback = Self {
             cancel: cancel.clone(),
@@ -86,6 +91,7 @@ impl Playback {
             frame_duration,
             shown: start,
             settings: settings.clone(),
+            shape,
             source: video.size,
         };
         (
@@ -104,16 +110,8 @@ impl Playback {
     /// can start. Whether it was taken. The frames already buffered play as they are, so the
     /// edit shows within a few frames without the playback stopping to wait for it.
     pub fn retune(&self, config: Config) -> bool {
-        // What the CRT playing is made for.
-        let made_for = |c: &Config| {
-            (
-                c.signal_size(self.source).ok(),
-                c.output_size(self.source).ok(),
-                c.color_mode,
-            )
-        };
-        let next = made_for(&config);
-        let taken = next.0.is_some() && next.1.is_some() && next == made_for(&self.settings.get());
+        let next = config.sequence_shape(self.source).ok();
+        let taken = next.is_some() && next == self.shape;
         if taken {
             self.settings.set(config);
         }
