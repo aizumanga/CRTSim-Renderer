@@ -12,6 +12,10 @@
   comment, so either app imports it. The web app's **Import preset from Image/Video…** now reads
   a preset from an MP4 or WebM as well as a PNG.
 - On the desktop, an animation opened from a browser's bytes exports as a video too.
+- A project or recovered session whose source cannot be opened, or whose opening is cancelled,
+  still restores its settings and export queue, as one whose source is missing already did; they
+  were dropped before. The source panel names a missing or unopened source and says to relink it
+  with Open File, and the session keeps it, so the next start tries it again.
 
 ## v1.0.1
 

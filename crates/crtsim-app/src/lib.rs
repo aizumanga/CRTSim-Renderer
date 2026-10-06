@@ -25,6 +25,7 @@ mod project;
 mod session;
 mod settings_ui;
 mod smoke;
+mod source;
 mod theme;
 mod thumbnails;
 mod timeline;
@@ -38,7 +39,7 @@ mod web_video;
 mod widgets;
 mod worker;
 
-use crtsim_core::config::{self, ColorMode, Config, Filter, Fit, MaskRepeats, Phase};
+use crtsim_core::config::{ColorMode, Config, Filter, Fit, MaskRepeats, Phase};
 use crtsim_core::settings;
 use dialogs::Dialog;
 use eframe::egui::{self, TextureHandle};
@@ -99,8 +100,6 @@ struct App {
     /// The session saved to recover, and the project files opened in it.
     session: session::Session,
     ui_context: egui::Context,
-    /// Where the editor is in the video open, if one is.
-    timeline: Option<timeline::Timeline>,
     /// The video playing in the preview, if it is.
     playback: Option<playback::Playback>,
     video_options: crtsim_media::Options,
@@ -123,11 +122,8 @@ struct App {
     tool_windows_saved: app_data::Layout,
     config: Config,
     history: model::History,
-    input: Arc<RgbaImage>,
-    source_name: String,
-    /// Where the source is on disk; none for the test cards.
-    source_path: Option<PathBuf>,
-    original: TextureHandle,
+    /// What is open, and the picture it gives.
+    source: source::Source,
     /// The CRT picture on screen, and when to render the next one.
     preview: preview::Preview,
     view: View,
@@ -205,8 +201,6 @@ impl App {
         input_path: Option<PathBuf>,
         smoke: Option<Smoke>,
     ) -> Self {
-        let input = Arc::new(config::test_card());
-        let original = texture(ctx, "original", &input, 2048);
         let config = gallery::default_preset().config;
         let render_state = gpu.render_state().cloned();
         let worker::Worker {
@@ -247,7 +241,6 @@ impl App {
         let mut app = Self {
             session: Default::default(),
             ui_context: ctx.clone(),
-            timeline: None,
             playback: None,
             video_options: crtsim_media::Options::default(),
             animation_options: Default::default(),
@@ -267,10 +260,7 @@ impl App {
             tool_windows,
             history: model::History::new(config.clone()),
             config,
-            input,
-            source_name: "Built-in test card".into(),
-            source_path: None,
-            original,
+            source: source::Source::new(ctx),
             preview: preview::Preview::new(jobs.preview_lane(), render_state, Instant::now()),
             view: View::Crt,
             comparison: 0.5,
@@ -331,34 +321,18 @@ impl App {
     fn app_data(&self) -> Option<&app_data::Store> {
         self.store.as_ref().filter(|_| self.smoke.is_none())
     }
-    /// Makes `input` the image being edited: the file at `path`, a frame of a video at
-    /// `timeline`, or with neither the built-in test card. The original view shows `thumbnail`.
-    fn set_source(
-        &mut self,
-        path: Option<PathBuf>,
-        name: String,
-        timeline: Option<timeline::Timeline>,
-        input: RgbaImage,
-        thumbnail: &RgbaImage,
-    ) {
-        self.source_path = path;
-        self.source_name = name;
-        self.timeline = timeline;
-        self.original = texture(&self.ui_context, "original", thumbnail, 2048);
-        self.input = Arc::new(input);
+    /// The picture changed: what was on screen is of another source.
+    fn source_changed(&mut self) {
         self.preview.clear();
         self.changed();
     }
     fn show_test_card(&mut self) {
-        let card = config::test_card();
-        self.set_source(None, "Built-in test card".into(), None, card.clone(), &card);
+        self.source.test_card();
+        self.source_changed();
     }
-    /// Opens the video test card at `frame`. It is drawn rather than read, so it opens as an
-    /// animation does, without a file or FFmpeg.
     fn show_video_test_card(&mut self, frame: u64) {
-        let video = crtsim_media::test_clip();
-        let frames = video.frames.unwrap_or(1);
-        self.request_video(video.path.clone(), frame, Some((video, frames)));
+        let opening = self.source.open_video_test_card(frame);
+        self.start_opening(opening, "Loading video frame…".into());
     }
     fn load(&mut self, path: PathBuf) {
         self.stop_playback();
@@ -369,48 +343,26 @@ impl App {
             self.open_project(path);
             return;
         }
-        match crtsim_media::MediaKind::of(&path) {
-            crtsim_media::MediaKind::Video if self.ffmpeg.missing() => {
-                self.status = format!("Opening {} needs FFmpeg", file_name(&path));
-                self.show_ffmpeg_setup();
-                return;
-            }
-            kind if kind.is_moving() => {
-                self.load_video(path, 0, false);
-                return;
-            }
-            _ => {}
+        if crtsim_media::MediaKind::of(&path) == crtsim_media::MediaKind::Video
+            && self.ffmpeg.missing()
+        {
+            self.status = format!("Opening {} needs FFmpeg", file_name(&path));
+            self.show_ffmpeg_setup();
+            return;
         }
-        self.work = Work::Loading(None);
-        self.status = format!("Loading {}…", path.display());
-        self.send(Job::Load(path));
+        let status = format!("Loading {}…", path.display());
+        let opening = self.source.open(path);
+        self.start_opening(opening, status);
     }
-    fn load_video(&mut self, path: PathBuf, frame: u64, reuse: bool) {
-        let cached = self
-            .timeline
-            .as_ref()
-            .filter(|_| reuse)
-            .map(|t| (t.video.clone(), t.frames));
-        self.request_video(path, frame, cached);
-    }
-    /// Loads `frame` of the video at `path`, or of `cached`, a video already probed, with its
-    /// frame count.
-    fn request_video(
-        &mut self,
-        path: PathBuf,
-        frame: u64,
-        cached: Option<(crtsim_media::Video, u64)>,
-    ) {
+    /// Has the work lane load what `opening` asks for: a video frame can be cancelled.
+    fn start_opening(&mut self, opening: source::Opening, status: String) {
         self.stop_playback();
-        let cancel = Arc::new(AtomicBool::new(false));
-        self.work = Work::Loading(Some(cancel.clone()));
-        self.status = "Loading video frame…".into();
-        self.send(Job::LoadVideo {
-            path,
-            frame,
-            cached,
-            cancel,
-        });
+        self.status = match opening.cancel {
+            Some(_) => "Loading video frame…".into(),
+            None => status,
+        };
+        self.work = Work::Loading(opening.cancel);
+        self.send(opening.job);
     }
     fn send(&mut self, job: Job) {
         if self.jobs.send(job).is_err() {
@@ -431,7 +383,7 @@ impl App {
     /// The image, or frame, on screen, exported as a PNG at full resolution.
     fn export(&mut self, path: PathBuf) {
         self.stop_playback();
-        if let Err(e) = self.config.validate_for(self.input.dimensions()) {
+        if let Err(e) = self.config.validate_for(self.source.input().dimensions()) {
             self.error = Some(format!("{e:#}"));
             return;
         }
@@ -440,7 +392,7 @@ impl App {
             path.display()
         );
         let export = worker::Export::Image {
-            input: self.input.clone(),
+            input: self.source.input().clone(),
             config: self.config.clone(),
         };
         self.start_export(export, path, status, Some("Queued for export"));
@@ -487,7 +439,7 @@ impl App {
     /// Refresh: renders the settings on screen exactly now.
     fn refresh_preview(&mut self) {
         if self.may_preview() {
-            let refreshed = self.preview.refresh(&self.config, &self.input);
+            let refreshed = self.preview.refresh(&self.config, self.source.input());
             self.ticked(refreshed);
         }
     }
@@ -672,9 +624,13 @@ impl eframe::App for App {
         let now = Instant::now();
         let pointer_down = ctx.input(|i| i.pointer.any_down());
         let may_preview = self.may_preview();
-        let tick = self
-            .preview
-            .tick(now, pointer_down, &self.config, &self.input, may_preview);
+        let tick = self.preview.tick(
+            now,
+            pointer_down,
+            &self.config,
+            self.source.input(),
+            may_preview,
+        );
         self.ticked(tick);
         if self.preview.needs_frames(now) || !self.work.is_idle() {
             ctx.request_repaint_after(Duration::from_millis(50));
@@ -772,11 +728,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         app.config.output = "4k".into();
         app.preview.quality = Some(800);
-        let source = app.input.clone();
+        let source = app.source.input().clone();
         let expected = app.config.clone();
         app.export(dir.path().join("rendered.png"));
         app.config.bloom = 0.;
-        app.input = Arc::new(RgbaImage::new(1, 1));
+        app.source.set_image(RgbaImage::new(1, 1));
         match receive.recv().unwrap() {
             Job::Export {
                 export: worker::Export::Image { input, config },

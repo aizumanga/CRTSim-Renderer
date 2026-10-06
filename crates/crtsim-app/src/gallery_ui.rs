@@ -209,7 +209,12 @@ impl App {
                 }
             }
         }
-        match store.save_preset(&name, &self.config, self.input.dimensions(), replace) {
+        match store.save_preset(
+            &name,
+            &self.config,
+            self.source.input().dimensions(),
+            replace,
+        ) {
             Ok(saved) => {
                 self.status = if replace {
                     format!("Replaced '{saved}' in My presets")

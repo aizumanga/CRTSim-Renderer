@@ -37,15 +37,14 @@ impl App {
                 }
                 Event::Loaded(result) => {
                     self.work = Work::Idle;
-                    // Opening a project loads its source first, then restores the rest.
-                    let project = self.session.source_loaded();
-                    match result {
-                        Ok(loaded) => {
-                            self.show_loaded(loaded);
+                    let arrived = self.source.loaded(result);
+                    if arrived.changed {
+                        self.source_changed();
+                    }
+                    match arrived.opened {
+                        Ok(status) => {
+                            self.status = status.into();
                             self.error = None;
-                            if let Some(project) = project {
-                                self.apply_project(project);
-                            }
                         }
                         // Only a video frame can be cancelled.
                         Err(Failure::Cancelled) => {
@@ -53,6 +52,10 @@ impl App {
                             self.error = None;
                         }
                         Err(Failure::Failed(e)) => self.error = Some(format!("{e:#}")),
+                    }
+                    // A project waiting for its source applies whether that opened or not.
+                    if let Some(project) = arrived.project {
+                        self.apply_project(project);
                     }
                 }
                 Event::Preview { revision, result } => {
@@ -84,25 +87,5 @@ impl App {
                 }
             }
         }
-    }
-
-    /// Makes a loaded image, or frame of a video, the source being edited.
-    fn show_loaded(&mut self, loaded: worker::Loaded) {
-        let status = match &loaded.timeline {
-            Some(_) => "Video frame loaded",
-            None => "Image loaded",
-        };
-        let drawn = loaded
-            .timeline
-            .as_ref()
-            .is_some_and(timeline::Timeline::is_video_test_card);
-        self.set_source(
-            (!drawn).then_some(loaded.path),
-            loaded.name,
-            loaded.timeline,
-            loaded.image,
-            &loaded.thumbnail,
-        );
-        self.status = status.into();
     }
 }

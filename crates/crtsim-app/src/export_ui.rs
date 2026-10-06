@@ -216,7 +216,7 @@ impl App {
                     }
                     match draft.format {
                         ExportFormat::Video(container) => {
-                            let notes = match &self.timeline {
+                            let notes = match &self.source.timeline {
                                 Some(timeline) if !draft.batch => {
                                     crtsim_media::preservation_notes(&timeline.video, container)
                                 }
@@ -225,7 +225,7 @@ impl App {
                             video_settings(ui, &mut draft.options, container, &notes);
                         }
                         ExportFormat::Animation(format) => {
-                            let frame = self.timeline.as_ref().map_or(0, |t| t.shown);
+                            let frame = self.source.timeline.as_ref().map_or(0, |t| t.shown);
                             animation_settings(
                                 ui,
                                 &mut draft.animation,
@@ -233,7 +233,7 @@ impl App {
                                 &mut draft.from_current_frame,
                                 frame,
                             );
-                            if let Some(timeline) = &self.timeline {
+                            if let Some(timeline) = &self.source.timeline {
                                 let video = &timeline.video;
                                 draft.animation.start = if draft.from_current_frame {
                                     video.frame_time(frame)
@@ -667,7 +667,7 @@ mod tests {
         drop(encoder);
         let cancel = Arc::new(AtomicBool::new(false));
         let video = crtsim_media::probe(&source, &cancel).unwrap();
-        app.timeline = Some(crate::timeline::Timeline::new(video, 0, 2));
+        app.source.timeline = Some(crate::timeline::Timeline::new(video, 0, 2));
         app.export_format = ExportFormat::Animation(AnimationFormat::Gif);
         app.animation_options.fps = 12;
 

@@ -5,7 +5,7 @@ use crtsim_core::palette::Model;
 
 impl App {
     pub(crate) fn settings(&mut self, ui: &mut egui::Ui) {
-        if let Some(video) = self.timeline.as_ref().map(|t| &t.video) {
+        if let Some(video) = self.source.timeline.as_ref().map(|t| &t.video) {
             ui.heading("Video");
             ui.label(format!(
                 "{:.2}s · {:.3} FPS · {}",
@@ -32,12 +32,19 @@ impl App {
             .inner_margin(9.)
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
-                ui.label(egui::RichText::new(&self.source_name).strong());
+                let name = egui::RichText::new(self.source.name()).strong();
+                // A project's source that is not open says so.
+                match self.source.kind() {
+                    source::Kind::Missing { .. } => {
+                        ui.colored_label(ui.visuals().warn_fg_color, name)
+                    }
+                    _ => ui.label(name),
+                };
             });
         ui.small(format!(
             "Source: {} × {}",
-            self.input.width(),
-            self.input.height()
+            self.source.input().width(),
+            self.source.input().height()
         ));
         // What Reset, and each setting's own reset, return to.
         let default = gallery::default_preset();
@@ -101,8 +108,8 @@ impl App {
             );
             numbers(ui, &mut self.config, defaults, settings::Section::Image);
             if let (Ok(signal), Ok(output)) = (
-                self.config.signal_size(self.input.dimensions()),
-                self.config.output_size(self.input.dimensions()),
+                self.config.signal_size(self.source.input().dimensions()),
+                self.config.output_size(self.source.input().dimensions()),
             ) {
                 ui.small(format!(
                     "Signal: {} × {} → Output: {} × {}",
@@ -264,7 +271,7 @@ impl App {
             self.config.mask_repeats = if follows {
                 MaskRepeats::Signal
             } else {
-                let signal = self.config.signal_size(self.input.dimensions());
+                let signal = self.config.signal_size(self.source.input().dimensions());
                 MaskRepeats::Fixed(
                     self.config
                         .mask_repeats

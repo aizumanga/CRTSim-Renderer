@@ -90,6 +90,12 @@ personal preset; the LUT gallery decodes each included LUT once and shares it.
 added, one at a time and in order (`crates/crtsim-app/src/batch.rs`). Each output is named
 after its source and never replaces a file; cancelling a job pauses the queue.
 
+**Source**: what is open to edit, and the picture it gives (`crates/crtsim-app/src/source.rs`):
+the test card, the video test card, a file on disk, a file a browser handed over, or a
+project's source that is missing or could not be opened, with the test card in its place. A
+video's comes with its timeline. A project opens its source first and is held until that has
+loaded; then its settings and queue apply, whether the source opened or not.
+
 **Project**: a source, its settings and the batch queue, saved as a `.crtsim` file to pick up
 later (`crates/crtsim-app/src/project.rs`).
 

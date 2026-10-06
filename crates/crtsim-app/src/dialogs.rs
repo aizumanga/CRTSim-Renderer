@@ -223,11 +223,12 @@ impl App {
                 self.status = "Reading preset metadata…".into();
                 self.send(Job::ImportPreset {
                     path,
-                    input: self.input.dimensions(),
+                    input: self.source.input().dimensions(),
                     cancel,
                 });
             }
-            Dialog::LoadPreset => match files::load_preset(&path, self.input.dimensions()) {
+            Dialog::LoadPreset => match files::load_preset(&path, self.source.input().dimensions())
+            {
                 Ok(c) => {
                     self.presets.name = file_stem(&path);
                     self.replace_config(c);
@@ -239,7 +240,7 @@ impl App {
             Dialog::SavePreset => {
                 match self
                     .config
-                    .validate_for(self.input.dimensions())
+                    .validate_for(self.source.input().dimensions())
                     .and_then(|()| files::save_preset(&path, &self.config))
                 {
                     Ok(()) => {
@@ -273,7 +274,7 @@ impl App {
             ));
             return;
         }
-        let Some(video) = self.timeline.as_ref().map(|t| t.video.clone()) else {
+        let Some(video) = self.source.timeline.as_ref().map(|t| t.video.clone()) else {
             return;
         };
         let config = self.config.clone();
@@ -370,14 +371,13 @@ impl App {
 
     /// Applies a file the browser handed over.
     fn picked(&mut self, kind: Dialog, name: String, bytes: Vec<u8>) {
-        let input = self.input.dimensions();
+        let input = self.source.input().dimensions();
         match kind {
             Dialog::File => {
                 // Videos and animations open with their frames; the worker tells them apart.
-                self.stop_playback();
-                self.work = Work::Loading(None);
-                self.status = format!("Loading {name}…");
-                self.send(Job::LoadBytes { name, bytes });
+                let status = format!("Loading {name}…");
+                let opening = self.source.open_bytes(name, bytes);
+                self.start_opening(opening, status);
             }
             Dialog::Lut => {
                 let lut = String::from_utf8(bytes)

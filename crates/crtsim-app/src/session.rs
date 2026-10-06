@@ -1,10 +1,10 @@
 //! The session: the project the app saves every two seconds and offers to recover on the next
 //! start, and the project files opened and saved during it.
-use crate::{app_data, project, timeline::Timeline, App, Dialog};
+use crate::{app_data, project, source, App, Dialog};
 use anyhow::Result;
 use app_data::Store;
 use eframe::egui;
-use project::{BuiltIn, Project};
+use project::Project;
 use std::{path::PathBuf, time::Duration};
 use web_time::Instant;
 
@@ -18,8 +18,6 @@ pub struct Session {
     recent: Vec<PathBuf>,
     /// The last run's session, on offer until it is recovered or declined.
     recovery: Option<Project>,
-    /// A project opened, waiting for its source to load before the rest of it is applied.
-    restoring: Option<Project>,
     /// The session as last saved, so an unchanged one is not written again.
     last_saved: Option<Project>,
     last_save: Instant,
@@ -31,7 +29,6 @@ impl Default for Session {
             project_path: None,
             recent: vec![],
             recovery: None,
-            restoring: None,
             last_saved: None,
             last_save: Instant::now(),
         }
@@ -65,16 +62,6 @@ impl Session {
         self.recovery.take()
     }
 
-    /// Keeps `project` until its source has loaded.
-    pub fn restoring(&mut self, project: Project) {
-        self.restoring = Some(project);
-    }
-
-    /// The project whose source has just loaded, or failed to, if one was waiting for it.
-    pub fn source_loaded(&mut self) -> Option<Project> {
-        self.restoring.take()
-    }
-
     /// Whether it is time at `now` to save the session again.
     pub fn autosave_due(&mut self, now: Instant) -> bool {
         if now.duration_since(self.last_save) <= AUTOSAVE {
@@ -85,17 +72,13 @@ impl Session {
     }
 
     /// Saves `session` to `store`, unless it is unchanged or saving would be early: while the
-    /// last run's session is on offer, which saving would replace, or while `loading` or
-    /// restoring a project leaves the settings half applied.
+    /// last run's session is on offer, which saving would replace, or while `loading`, or a
+    /// project's source loading, leaves the settings half applied.
     pub fn save(&mut self, store: Option<&Store>, loading: bool, session: Project) -> Result<()> {
         let Some(store) = store else {
             return Ok(());
         };
-        if self.recovery.is_some()
-            || loading
-            || self.restoring.is_some()
-            || self.last_saved.as_ref() == Some(&session)
-        {
+        if self.recovery.is_some() || loading || self.last_saved.as_ref() == Some(&session) {
             return Ok(());
         }
         store.set_session(&session)?;
@@ -132,25 +115,12 @@ impl App {
     }
 
     fn snapshot(&self) -> Project {
+        let (source, built_in, frame) = self.source.saved();
         Project {
             version: 1,
-            // A browser cannot open a file again by name, so its session keeps the settings
-            // and leaves the picture to be picked again.
-            source: self
-                .source_path
-                .clone()
-                .filter(|_| !cfg!(target_arch = "wasm32")),
-            // A built-in source opens again anywhere, a browser included.
-            built_in: if self
-                .timeline
-                .as_ref()
-                .is_some_and(Timeline::is_video_test_card)
-            {
-                BuiltIn::VideoTestCard
-            } else {
-                BuiltIn::TestCard
-            },
-            frame: self.timeline.as_ref().map_or(0, |t| t.shown),
+            source,
+            built_in,
+            frame,
             config: self.config.clone(),
             options: self.video_options.clone(),
             queue: self.queue.items().to_vec(),
@@ -160,7 +130,8 @@ impl App {
     pub fn save_session(&mut self) {
         let snapshot = self.snapshot();
         let store = self.app_data().cloned();
-        let loading = self.work.is_loading();
+        // Nor while a project waits for its source, its settings not yet applied.
+        let loading = self.work.is_loading() || self.source.restoring();
         if let Err(e) = self.session.save(store.as_ref(), loading, snapshot) {
             self.error = Some(format!("Session recovery could not be saved: {e:#}"));
         }
@@ -203,31 +174,15 @@ impl App {
 
     fn restore_project(&mut self, p: Project) {
         self.stop_playback();
-        if let Some(source) = &p.source {
-            if !source.exists() {
-                let message = format!(
-                    "Project source is missing: {}. Edits and queue were \
-                    recovered. Use Open File to relink the source.",
-                    source.display()
-                );
-                self.source_path = Some(source.clone());
-                self.apply_project(p);
-                self.error = Some(message);
-                return;
+        match self.source.restore(p) {
+            source::Restoring::Open(opening) => {
+                self.start_opening(opening, "Opening the project's source…".into());
             }
-            self.session.restoring(p.clone());
-            if crtsim_media::MediaKind::of(source).is_moving() {
-                self.load_video(source.clone(), p.frame, false);
-            } else {
-                self.load(source.clone());
+            source::Restoring::Apply { project, error } => {
+                self.source_changed();
+                self.apply_project(project);
+                self.error = error;
             }
-        } else if p.built_in == BuiltIn::VideoTestCard {
-            let frame = p.frame.min(crtsim_core::test_clip::FRAMES - 1);
-            self.session.restoring(p);
-            self.show_video_test_card(frame);
-        } else {
-            self.show_test_card();
-            self.apply_project(p);
         }
     }
 
@@ -308,7 +263,7 @@ mod tests {
         Project {
             version: 1,
             source: None,
-            built_in: BuiltIn::TestCard,
+            built_in: project::BuiltIn::TestCard,
             frame,
             config: crtsim_core::config::Config::general(),
             options: Default::default(),
@@ -328,10 +283,6 @@ mod tests {
         );
         session.save(Some(&store), true, project(1)).unwrap();
         assert!(store.session().unwrap().is_none(), "not while loading");
-        session.restoring(project(2));
-        session.save(Some(&store), false, project(1)).unwrap();
-        assert!(store.session().unwrap().is_none(), "not while restoring");
-        assert_eq!(session.source_loaded(), Some(project(2)));
         session.save(Some(&store), false, project(1)).unwrap();
         assert_eq!(store.session().unwrap(), Some(project(1)));
         // The next start offers it, and saves nothing over it until it is taken.
@@ -404,9 +355,9 @@ mod tests {
         while !app.work.is_idle() {
             waited(&mut app);
         }
-        assert_eq!(app.source_name, "Video test card");
-        assert_eq!(app.source_path, None);
-        assert_eq!(*app.input, crtsim_core::test_clip::frame(540));
+        assert_eq!(app.source.name(), "Video test card");
+        assert_eq!(*app.source.kind(), crate::source::Kind::VideoTestCard);
+        assert_eq!(**app.source.input(), crtsim_core::test_clip::frame(540));
         app.config.output = "320x240".into();
         app.config.warmup = 3;
         let project = dir.path().join("clip.crtsim");
@@ -418,15 +369,15 @@ mod tests {
             waited(&mut app);
         }
         assert_eq!(app.status, "Playback finished");
-        assert!(app.timeline.as_ref().unwrap().shown > 580);
+        assert!(app.source.timeline.as_ref().unwrap().shown > 580);
 
         let mut reopened = open();
         reopened.open_project(project);
-        while reopened.timeline.is_none() || !reopened.work.is_idle() {
+        while reopened.source.timeline.is_none() || !reopened.work.is_idle() {
             waited(&mut reopened);
         }
-        assert_eq!(reopened.source_name, "Video test card");
-        assert_eq!(reopened.timeline.as_ref().unwrap().shown, 540);
+        assert_eq!(reopened.source.name(), "Video test card");
+        assert_eq!(reopened.source.timeline.as_ref().unwrap().shown, 540);
         assert_eq!(reopened.config.output, "320x240");
     }
 

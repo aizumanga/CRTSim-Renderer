@@ -48,9 +48,9 @@ impl App {
         );
         if let Ok(c) = self
             .config
-            .with_max_output_side(self.input.dimensions(), self.preview.quality)
+            .with_max_output_side(self.source.input().dimensions(), self.preview.quality)
         {
-            let input = self.input.dimensions();
+            let input = self.source.input().dimensions();
             if let (Ok((w, h)), Ok(signal)) = (c.output_size(input), c.signal_size(input)) {
                 let [columns, rows] = c.mask_repeats.resolve(signal);
                 if w as f32 / columns < 6. || h as f32 / rows < 3. {
@@ -85,7 +85,11 @@ impl App {
         if self.preview.stale() {
             ui.colored_label(ui.visuals().warn_fg_color, "Preview is out of date.");
         }
-        let controls_height = if self.timeline.is_some() { 136. } else { 0. };
+        let controls_height = if self.source.timeline.is_some() {
+            136.
+        } else {
+            0.
+        };
         let available = egui::vec2(
             ui.available_width(),
             (ui.available_height() - controls_height).max(1.),
@@ -98,7 +102,7 @@ impl App {
                     if let Some(im) = self.preview.picture() {
                         compare(
                             ui,
-                            egui::load::SizedTexture::from_handle(&self.original),
+                            egui::load::SizedTexture::from_handle(self.source.original()),
                             im,
                             available,
                             self.fit_preview,
@@ -109,7 +113,7 @@ impl App {
                 } else if self.view == View::Original {
                     show_image(
                         ui,
-                        egui::load::SizedTexture::from_handle(&self.original),
+                        egui::load::SizedTexture::from_handle(self.source.original()),
                         available,
                         self.fit_preview,
                         self.zoom,
@@ -132,7 +136,7 @@ impl App {
         let galleries_overlap = ui.ctx().embed_viewports() && (self.presets.open || self.luts.open);
         let enabled = self.can_start_work() && !galleries_overlap;
         let playing = self.playback.is_some();
-        let Some(timeline) = &mut self.timeline else {
+        let Some(timeline) = &mut self.source.timeline else {
             return;
         };
         let last = timeline.last();
@@ -206,13 +210,12 @@ impl App {
             selected (Esc lets go of it) · Export frame saves this settled CRT still as PNG.",
             timeline.shown + 1
         ));
-        let pick = (seek && enabled && timeline.seeking())
-            .then(|| (timeline.video.path.clone(), timeline.picked));
+        let pick = (seek && enabled && timeline.seeking()).then_some(timeline.picked);
         if toggle {
             self.toggle_playback();
         }
-        if let Some((path, frame)) = pick {
-            self.load_video(path, frame, true);
+        if let Some(opening) = pick.and_then(|frame| self.source.open_frame(frame)) {
+            self.start_opening(opening, String::new());
         }
     }
 }

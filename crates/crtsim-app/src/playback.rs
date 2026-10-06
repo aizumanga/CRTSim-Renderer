@@ -189,14 +189,14 @@ impl App {
     }
 
     pub fn start_playback(&mut self) {
-        let Some(timeline) = &self.timeline else {
+        let Some(timeline) = &self.source.timeline else {
             return;
         };
         let (video, time) = (timeline.video.clone(), timeline.time);
         self.stop_playback();
         let config = match self
             .config
-            .with_max_output_side(self.input.dimensions(), self.preview.quality)
+            .with_max_output_side(self.source.input().dimensions(), self.preview.quality)
         {
             Ok(c) => c,
             Err(e) => {
@@ -225,7 +225,7 @@ impl App {
         };
         let config = self
             .config
-            .with_max_output_side(self.input.dimensions(), self.preview.quality);
+            .with_max_output_side(self.source.input().dimensions(), self.preview.quality);
         if config.is_ok_and(|config| playback.retune(config)) {
             return;
         }
@@ -265,14 +265,10 @@ impl App {
     /// Shows a frame that has come due: its source as the original, and its CRT picture as the
     /// preview.
     fn show_playing(&mut self, ctx: &egui::Context, frame: PlaybackFrame) {
-        if let Some(timeline) = &mut self.timeline {
-            timeline.played(frame.time);
-        }
-        self.original = texture(ctx, "playing-source", &frame.source, 2048);
         let limit = ctx.input(|i| i.max_texture_side) as u32;
         let crt = texture(ctx, "playing-crt", &frame.crt, limit);
         self.preview.show_played(crt);
-        self.input = Arc::new(frame.source);
+        self.source.played(frame.time, frame.source);
     }
 }
 
@@ -471,7 +467,7 @@ mod tests {
             None,
             Some(Smoke::new("unused-smoke.png".into())),
         );
-        let input = app.input.dimensions();
+        let input = app.source.input().dimensions();
         let config = app
             .config
             .with_max_output_side(input, app.preview.quality)
@@ -542,14 +538,14 @@ mod tests {
             assert!(started.elapsed() < Duration::from_secs(120), "stalled");
             std::thread::sleep(5 * MS);
         };
-        while app.timeline.is_none() {
+        while app.source.timeline.is_none() {
             waited(&mut app);
         }
         app.start_playback();
         let mut times = vec![];
         while app.playback.is_some() {
             app.tick_playback(&ctx);
-            let time = app.timeline.as_ref().unwrap().time;
+            let time = app.source.timeline.as_ref().unwrap().time;
             if times.last() != Some(&time) {
                 times.push(time);
             }
@@ -591,11 +587,11 @@ mod tests {
             assert!(started.elapsed() < Duration::from_secs(120), "stalled");
             std::thread::sleep(5 * MS);
         };
-        while app.timeline.is_none() {
+        while app.source.timeline.is_none() {
             waited(&mut app);
         }
         app.start_playback();
-        let time = |app: &App| app.timeline.as_ref().unwrap().time;
+        let time = |app: &App| app.source.timeline.as_ref().unwrap().time;
         while app.status != "Playing" {
             waited(&mut app);
         }
