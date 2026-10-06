@@ -136,12 +136,12 @@ impl App {
             config
         };
         if open && hovered_none {
-            self.offer_audition("no LUT", with_lut(&self.config, None));
+            self.preview.offer("no LUT", with_lut(&self.config, None));
         } else if let Some(index) = hovered.filter(|_| open) {
             // A LUT that cannot be decoded is reported when it is clicked, not while pointed at.
             if let Ok(lut) = self.luts.lut(index) {
                 let label = format!("LUT “{}”", lut.name);
-                self.offer_audition(label, with_lut(&self.config, Some(lut)));
+                self.preview.offer(label, with_lut(&self.config, Some(lut)));
             }
         }
         if remove {

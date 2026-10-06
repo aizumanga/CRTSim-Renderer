@@ -253,7 +253,7 @@ impl App {
     /// Starts the queue's next job once nothing else needs the work thread or the preview.
     pub(crate) fn dispatch_queue(&mut self) {
         if !self.can_start_work()
-            || self.schedule.rendering()
+            || self.preview.rendering()
             || self.session.recovery_offered()
             || self.playback.is_some()
         {
@@ -527,8 +527,7 @@ mod tests {
             Some(Smoke::new("unused-smoke.png".into())),
         );
         app.show_welcome = false;
-        let (jobs, receive, _previews) = worker::Jobs::capture();
-        app.jobs = jobs;
+        let (receive, _previews) = app.capture_jobs();
         let sources = vec!["first.png".into(), "second.png".into()];
         let captured = app.config.clone();
         app.queue

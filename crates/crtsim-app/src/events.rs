@@ -56,24 +56,10 @@ impl App {
                     }
                 }
                 Event::Preview { revision, result } => {
-                    if !self.schedule.returned(revision) {
-                        continue;
-                    }
-                    match result {
-                        Ok(previewed) => {
-                            let (width, height) = previewed.image.dimensions();
-                            let shown = self.displayed(ctx, previewed.image);
-                            self.show_preview(shown);
-                            self.schedule.show(revision);
-                            if !self.work.is_exporting() {
-                                self.status = format!(
-                                    "Preview {width} × {height} · {:.2}s",
-                                    previewed.seconds
-                                );
-                            }
-                            self.preview_error = None;
-                        }
-                        Err(e) => self.preview_error = Some(format!("{e:#}")),
+                    let shown = self.preview.returned(ctx, revision, result);
+                    // An export's progress keeps the status line while it runs.
+                    if let Some(shown) = shown.filter(|_| !self.work.is_exporting()) {
+                        self.status = shown;
                     }
                 }
                 Event::Thumbnail {

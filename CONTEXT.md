@@ -4,7 +4,10 @@ Terms the desktop's code and its reviews use, so a module is named after the con
 
 **Preview**: the CRT picture on screen while editing, rendered at the preview quality's size
 unless that is Export resolution. It never stands in for an export, which renders again at full
-resolution from the settings captured when it was asked for.
+resolution from the settings captured when it was asked for. The preview module
+(`crates/crtsim-app/src/preview/`) takes an edit to the picture on screen: its schedule, the
+audition, the picture and its quality. The settings, their undo history and the source stay
+the app's; the preview only says when a change has settled.
 
 **Interactive preview**: a preview of an edit under way, such as a slider being dragged, asked
 for at once rather than once the edit settles. It runs the CRT already on screen on for a couple
@@ -41,7 +44,8 @@ on every frame of its picture, rather than this renderer running inside the host
 _Avoid_: frame, which already means a picture in a sequence.
 
 **Preview schedule**: decides whether the preview on screen is out of date and when to render
-the next one (`crates/crtsim-app/src/schedule.rs`). One preview renders at a time.
+the next one (`crates/crtsim-app/src/preview/schedule.rs`), inside the preview module. One
+preview renders at a time.
 
 **Revision**: counts the changes to what the preview should show. A preview is of the revision
 it was asked for, and a settled one that comes back after a newer change is not shown.

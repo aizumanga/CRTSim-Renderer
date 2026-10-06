@@ -304,8 +304,7 @@ mod tests {
             None,
             Some(Smoke::new("unused-smoke.png".into())),
         );
-        let (jobs, work, _previews) = worker::Jobs::capture();
-        app.jobs = jobs;
+        let (work, _previews) = app.capture_jobs();
         app.show_welcome = false;
         app.ffmpeg.checking = None;
         app.ffmpeg.check = Some(missing());

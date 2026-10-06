@@ -4,7 +4,6 @@
 // never reaches.
 #![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 mod app_data;
-mod audition;
 mod batch;
 mod chrome;
 mod dialogs;
@@ -20,9 +19,9 @@ mod model;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native;
 mod playback;
+mod preview;
 mod preview_ui;
 mod project;
-mod schedule;
 mod session;
 mod settings_ui;
 mod smoke;
@@ -44,7 +43,6 @@ use crtsim_core::settings;
 use dialogs::Dialog;
 use eframe::egui::{self, TextureHandle};
 use image::RgbaImage;
-use schedule::{Change, Schedule};
 pub use smoke::Smoke;
 use std::{
     path::{Path, PathBuf},
@@ -120,10 +118,6 @@ struct App {
     luts: lut_gallery::LutGallery,
     /// Whether FFmpeg is there for video work, and how to install it.
     ffmpeg: ffmpeg_setup::FfmpegSetup,
-    /// A look previewed from a gallery without being applied; see `audition`.
-    audition: Option<audition::Audition>,
-    /// What a gallery pointed at this frame, for `settle_audition`.
-    offered: Option<audition::Audition>,
     thumbnails: thumbnails::Thumbnails,
     tool_windows: app_data::Layout,
     tool_windows_saved: app_data::Layout,
@@ -134,12 +128,8 @@ struct App {
     /// Where the source is on disk; none for the test cards.
     source_path: Option<PathBuf>,
     original: TextureHandle,
-    rendered: Option<Displayed>,
-    /// The interface's device, needed to register and release preview frames.
-    render_state: Option<eframe::egui_wgpu::RenderState>,
-    /// Whether the preview is out of date, and when to render the next one.
-    schedule: Schedule,
-    preview_limit: Option<u32>,
+    /// The CRT picture on screen, and when to render the next one.
+    preview: preview::Preview,
     view: View,
     /// Where the Compare view divides the original from the CRT, from 0 to 1 across.
     comparison: f32,
@@ -156,28 +146,7 @@ struct App {
     dialog_receive: mpsc::Receiver<dialogs::Answer>,
     status: String,
     error: Option<String>,
-    preview_error: Option<String>,
     smoke: Option<Smoke>,
-}
-
-/// The preview currently on screen. A frame rendered on the interface's own device is handed
-/// to egui as it is; anything else is uploaded as an ordinary texture.
-enum Displayed {
-    Uploaded(TextureHandle),
-    Frame {
-        /// Held because egui samples it until the registration is freed.
-        _texture: wgpu::Texture,
-        id: egui::TextureId,
-        size: egui::Vec2,
-    },
-}
-impl Displayed {
-    fn sized(&self) -> egui::load::SizedTexture {
-        match self {
-            Self::Uploaded(handle) => egui::load::SizedTexture::from_handle(handle),
-            Self::Frame { id, size, .. } => egui::load::SizedTexture::new(*id, *size),
-        }
-    }
 }
 
 /// With Ctrl, or Command on macOS: open a file, save the project, export a PNG.
@@ -293,8 +262,6 @@ impl App {
             presets,
             luts,
             ffmpeg: Default::default(),
-            audition: None,
-            offered: None,
             thumbnails: Default::default(),
             tool_windows_saved: tool_windows.clone(),
             tool_windows,
@@ -304,10 +271,7 @@ impl App {
             source_name: "Built-in test card".into(),
             source_path: None,
             original,
-            rendered: None,
-            render_state,
-            schedule: Schedule::new(Instant::now()),
-            preview_limit: Some(1280),
+            preview: preview::Preview::new(jobs.preview_lane(), render_state, Instant::now()),
             view: View::Crt,
             comparison: 0.5,
             export_dialog: None,
@@ -321,7 +285,6 @@ impl App {
             dialog_receive,
             status: "Preparing preview…".into(),
             error: storage_error,
-            preview_error: None,
             smoke,
         };
         app.ffmpeg.start_check(ctx);
@@ -332,47 +295,9 @@ impl App {
         app
     }
 
-    /// Puts a preview on screen, releasing the registration of the one it replaces. egui keeps
-    /// no ownership of a frame handed to it, so nothing else frees these.
-    fn show_preview(&mut self, next: Option<Displayed>) {
-        if let Some(Displayed::Frame { id, .. }) = self.rendered.take() {
-            if let Some(state) = &self.render_state {
-                state.renderer.write().free_texture(&id);
-            }
-        }
-        self.rendered = next;
-    }
-
-    /// Prepares a finished preview for drawing. A frame is registered with egui; pixels are
-    /// uploaded as before, which is what happens when the renderer is on its own device.
-    fn displayed(&self, ctx: &egui::Context, preview: worker::Preview) -> Option<Displayed> {
-        match (preview, self.render_state.as_ref()) {
-            (worker::Preview::Pixels(image), _) => {
-                let limit = ctx.input(|i| i.max_texture_side).min(u32::MAX as usize) as u32;
-                Some(Displayed::Uploaded(texture(ctx, "crt", &image, limit)))
-            }
-            (worker::Preview::Frame(frame), Some(state)) => {
-                let view = frame.texture.create_view(&Default::default());
-                let id = state.renderer.write().register_native_texture(
-                    &state.device,
-                    &view,
-                    wgpu::FilterMode::Linear,
-                );
-                Some(Displayed::Frame {
-                    size: egui::vec2(frame.width as f32, frame.height as f32),
-                    _texture: frame.texture,
-                    id,
-                })
-            }
-            // The worker only renders a frame when the interface has a device to draw it on,
-            // so there is nowhere for this to come from.
-            (worker::Preview::Frame(_), None) => None,
-        }
-    }
-
     fn changed(&mut self) {
         self.retune_playback();
-        self.schedule.changed(Change::Edit, Instant::now());
+        self.preview.changed(Instant::now());
     }
     fn replace_config(&mut self, config: Config) {
         self.history.commit(&self.config);
@@ -421,7 +346,7 @@ impl App {
         self.timeline = timeline;
         self.original = texture(&self.ui_context, "original", thumbnail, 2048);
         self.input = Arc::new(input);
-        self.show_preview(None);
+        self.preview.clear();
         self.changed();
     }
     fn show_test_card(&mut self) {
@@ -501,7 +426,7 @@ impl App {
         self.error =
             Some("Render worker stopped. Save your preset and restart the application.".into());
         self.work = Work::Idle;
-        self.schedule.stop();
+        self.preview.stop();
     }
     /// The image, or frame, on screen, exported as a PNG at full resolution.
     fn export(&mut self, path: PathBuf) {
@@ -544,34 +469,34 @@ impl App {
             cancel,
         });
     }
-    /// Also while exporting: previews have their own worker, and the export works from the
-    /// settings it captured, so the ones on screen are free to change.
-    fn request_preview(&mut self, kind: schedule::Kind) {
-        if self.work.is_loading() || self.playback.is_some() {
-            return;
+    /// Channels in place of the worker's lanes, the Preview's included, for a test to inspect
+    /// what the interface sends.
+    #[cfg(test)]
+    fn capture_jobs(&mut self) -> (mpsc::Receiver<Job>, mpsc::Receiver<PreviewJob>) {
+        let (jobs, work, previews) = worker::Jobs::capture();
+        self.preview = preview::Preview::new(jobs.preview_lane(), None, Instant::now());
+        self.jobs = jobs;
+        (work, previews)
+    }
+    /// Whether a preview can be rendered now: not behind the welcome, nor while a file loads
+    /// or a video plays. Also while exporting: previews have their own lane, and the export
+    /// works from the settings it captured, so the ones on screen are free to change.
+    fn may_preview(&self) -> bool {
+        !self.show_welcome && !self.work.is_loading() && self.playback.is_none()
+    }
+    /// Refresh: renders the settings on screen exactly now.
+    fn refresh_preview(&mut self) {
+        if self.may_preview() {
+            let refreshed = self.preview.refresh(&self.config, &self.input);
+            self.ticked(refreshed);
         }
-        let Some(revision) = self.schedule.take(kind) else {
-            return;
-        };
-        // An edit under way becomes an undo step once it settles, not at every frame of a drag.
-        if kind == schedule::Kind::Settled {
-            self.history.commit(&self.config);
-        }
-        match self
-            .shown_config()
-            .with_max_output_side(self.input.dimensions(), self.preview_limit)
-        {
-            Ok(config) => self.send_preview(PreviewJob::Preview {
-                revision,
-                kind,
-                input: self.input.clone(),
-                config: Box::new(config),
-            }),
-            Err(e) => {
-                // Nothing was sent, so nothing will come back.
-                self.schedule.returned(revision);
-                self.preview_error = Some(format!("Cannot preview: {e:#}"));
-            }
+    }
+    /// Acts on what the preview found: a change that settled becomes an undo step.
+    fn ticked(&mut self, tick: Result<preview::Tick, worker::Stopped>) {
+        match tick {
+            Ok(preview::Tick::Settled) => self.history.commit(&self.config),
+            Ok(preview::Tick::Nothing) => {}
+            Err(worker::Stopped) => self.worker_stopped(),
         }
     }
     /// The keyboard shortcuts, with Ctrl or, on macOS, Command: Z undoes and Shift+Z redoes;
@@ -680,8 +605,8 @@ impl eframe::App for App {
             ui.horizontal(|ui| {
                 chrome::status_light(
                     ui,
-                    self.schedule.rendering_settled() || !self.work.is_idle(),
-                    self.error.is_some() || self.preview_error.is_some(),
+                    self.preview.rendering_settled() || !self.work.is_idle(),
+                    self.error.is_some() || self.preview.error.is_some(),
                 );
                 ui.label(&self.status);
                 chrome::version(ui);
@@ -702,7 +627,7 @@ impl eframe::App for App {
                     self.status = "Cancelling…".into();
                 }
             }
-            for error in [self.error.clone(), self.preview_error.clone()]
+            for error in [self.error.clone(), self.preview.error.clone()]
                 .into_iter()
                 .flatten()
             {
@@ -710,7 +635,7 @@ impl eframe::App for App {
                     ui.colored_label(ui.visuals().error_fg_color, error);
                     if ui.button("Dismiss").clicked() {
                         self.error = None;
-                        self.preview_error = None;
+                        self.preview.error = None;
                     }
                 });
             }
@@ -740,23 +665,16 @@ impl eframe::App for App {
             });
         self.gallery_window(ctx);
         self.lut_gallery_window(ctx);
-        self.settle_audition();
         self.credits_window(ctx);
         self.ffmpeg_window(ctx);
         let now = Instant::now();
-        match self.schedule.due(now, ctx.input(|i| i.pointer.any_down())) {
-            schedule::Due::Nothing => {}
-            schedule::Due::Commit => self.history.commit(&self.config),
-            schedule::Due::Preview(kind) => {
-                if kind == schedule::Kind::Settled {
-                    self.history.commit(&self.config);
-                }
-                if !self.show_welcome {
-                    self.request_preview(kind);
-                }
-            }
-        }
-        if self.schedule.needs_frames(now) || !self.work.is_idle() {
+        let pointer_down = ctx.input(|i| i.pointer.any_down());
+        let may_preview = self.may_preview();
+        let tick = self
+            .preview
+            .tick(now, pointer_down, &self.config, &self.input, may_preview);
+        self.ticked(tick);
+        if self.preview.needs_frames(now) || !self.work.is_idle() {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
         self.advance_smoke(ctx);
@@ -766,7 +684,6 @@ impl eframe::App for App {
 impl Drop for App {
     fn drop(&mut self) {
         self.stop_playback();
-        self.show_preview(None);
         self.save_session();
         self.save_tool_windows();
         if let Some(cancel) = self.work.cancel() {
@@ -784,123 +701,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn obsolete_preview_cannot_replace_current_settings() {
-        let ctx = egui::Context::default();
-        let mut app = App::new(
-            &ctx,
-            worker::Gpu::Own(wgpu::Backends::PRIMARY),
-            Ok(app_data::Store::temporary()),
-            None,
-            None,
-        );
-        let (send, receive) = mpsc::channel();
-        app.events = receive;
-        let asked = app.schedule.take(schedule::Kind::Settled).unwrap();
-        app.config.bloom = 0.;
-        app.changed();
-        send.send(Event::Preview {
-            revision: asked,
-            result: Ok(worker::Previewed {
-                image: worker::Preview::Pixels(config::test_card()),
-                seconds: 0.1,
-            }),
-        })
-        .unwrap();
-        app.receive(&ctx);
-        assert!(app.rendered.is_none());
-        assert!(!app.schedule.rendering());
-        let settled = Instant::now() + Duration::from_secs(1);
-        assert_eq!(
-            app.schedule.due(settled, false),
-            schedule::Due::Preview(schedule::Kind::Settled),
-            "the change is still to be previewed"
-        );
-        send.send(Event::Loaded(Err(Failure::Failed(anyhow::anyhow!(
-            "Cannot decode selected file"
-        )))))
-        .unwrap();
-        send.send(Event::Preview {
-            revision: app.schedule.take(schedule::Kind::Settled).unwrap(),
-            result: Ok(worker::Previewed {
-                image: worker::Preview::Pixels(config::test_card()),
-                seconds: 0.1,
-            }),
-        })
-        .unwrap();
-        app.receive(&ctx);
-        assert!(app.schedule.is_current());
-        assert_eq!(app.error.as_deref(), Some("Cannot decode selected file"));
-    }
-
-    #[test]
-    fn a_drag_is_previewed_as_it_goes_and_becomes_one_undo_step() {
-        let ctx = egui::Context::default();
-        let mut app = App::new(
-            &ctx,
-            worker::Gpu::Own(wgpu::Backends::PRIMARY),
-            Ok(app_data::Store::temporary()),
-            None,
-            None,
-        );
-        app.show_welcome = false;
-        let (jobs, _work, previews) = worker::Jobs::capture();
-        app.jobs = jobs;
-        let (send, receive) = mpsc::channel();
-        app.events = receive;
-        let original = app.config.clone();
-        // Each frame of the drag: the slider moves, and the frame's due preview is asked for.
-        let drag = |app: &mut App, bloom| {
-            app.config.bloom = bloom;
-            app.changed();
-            let due = app.schedule.due(Instant::now(), true);
-            assert_eq!(due, schedule::Due::Preview(schedule::Kind::Interactive));
-            app.request_preview(schedule::Kind::Interactive);
-            match previews.try_recv() {
-                Ok(PreviewJob::Preview {
-                    revision,
-                    kind: schedule::Kind::Interactive,
-                    config,
-                    ..
-                }) => {
-                    assert_eq!(config.bloom, bloom);
-                    revision
-                }
-                _ => panic!("expected an interactive preview mid-drag"),
-            }
-        };
-        let first = drag(&mut app, 0.5);
-        // The slider moves on before the preview comes back; it is still shown.
-        app.config.bloom = 0.25;
-        app.changed();
-        send.send(Event::Preview {
-            revision: first,
-            result: Ok(worker::Previewed {
-                image: worker::Preview::Pixels(config::test_card()),
-                seconds: 0.01,
-            }),
-        })
-        .unwrap();
-        app.receive(&ctx);
-        assert!(app.rendered.is_some() && !app.schedule.is_current());
-        assert!(
-            !app.schedule.stale(),
-            "the drag's next preview is on its way"
-        );
-        drag(&mut app, 0.);
-        let settled = Instant::now() + Duration::from_secs(1);
-        assert_eq!(
-            app.schedule.due(settled, false),
-            schedule::Due::Preview(schedule::Kind::Settled)
-        );
-        app.history.commit(&app.config);
-        assert_eq!(
-            app.history.undo(&app.config),
-            Some(original),
-            "the whole drag is one step"
-        );
-    }
-
-    #[test]
     fn settings_changed_during_an_export_are_previewed() {
         let ctx = egui::Context::default();
         let mut app = App::new(
@@ -910,19 +710,19 @@ mod tests {
             None,
             None,
         );
-        let (jobs, work, previews) = worker::Jobs::capture();
-        app.jobs = jobs;
+        app.show_welcome = false;
+        let (work, previews) = app.capture_jobs();
         let dir = tempfile::tempdir().unwrap();
         app.export(dir.path().join("rendered.png"));
         assert!(matches!(work.try_recv(), Ok(Job::Export { .. })));
         app.config.bloom = 0.;
         app.changed();
-        app.request_preview(schedule::Kind::Settled);
+        app.refresh_preview();
         match previews.try_recv() {
             Ok(PreviewJob::Preview { config, .. }) => assert_eq!(config.bloom, 0.),
             _ => panic!("expected a preview while exporting"),
         }
-        assert!(app.work.is_exporting() && app.schedule.rendering());
+        assert!(app.work.is_exporting() && app.preview.rendering());
     }
 
     #[test]
@@ -966,11 +766,10 @@ mod tests {
             None,
             None,
         );
-        let (jobs, receive, _previews) = worker::Jobs::capture();
-        app.jobs = jobs;
+        let (receive, _previews) = app.capture_jobs();
         let dir = tempfile::tempdir().unwrap();
         app.config.output = "4k".into();
-        app.preview_limit = Some(800);
+        app.preview.quality = Some(800);
         let source = app.input.clone();
         let expected = app.config.clone();
         app.export(dir.path().join("rendered.png"));

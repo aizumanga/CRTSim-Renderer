@@ -36,7 +36,7 @@ impl App {
     /// then takes the screenshot, saves it and closes the window. A run that never gets there
     /// fails after two minutes rather than hanging CI.
     pub(crate) fn advance_smoke(&mut self, ctx: &egui::Context) {
-        let ready = self.schedule.is_settled();
+        let ready = self.preview.is_settled();
         if ready && self.smoke.as_ref().is_some_and(|smoke| smoke.export) {
             if let Some(smoke) = &mut self.smoke {
                 smoke.export = false;
@@ -46,14 +46,14 @@ impl App {
             return;
         }
         let thumbnails_pending = self.thumbnails_pending();
-        let (error, preview_error) = (&self.error, &self.preview_error);
+        let (error, preview_error) = (&self.error, &self.preview.error);
         let Some(smoke) = &mut self.smoke else {
             return;
         };
         if smoke.started.elapsed() > Duration::from_secs(120) {
             eprintln!(
                 "Desktop smoke test timed out: {error:?}; {preview_error:?}; preview rendering {}",
-                self.schedule.rendering()
+                self.preview.rendering()
             );
             std::process::exit(1);
         }

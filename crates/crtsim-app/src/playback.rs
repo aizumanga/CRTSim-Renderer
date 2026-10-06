@@ -196,7 +196,7 @@ impl App {
         self.stop_playback();
         let config = match self
             .config
-            .with_max_output_side(self.input.dimensions(), self.preview_limit)
+            .with_max_output_side(self.input.dimensions(), self.preview.quality)
         {
             Ok(c) => c,
             Err(e) => {
@@ -207,7 +207,7 @@ impl App {
         let output = config.output_size(video.size).unwrap_or(video.size);
         let (playback, feed) = Playback::new(&video, time, output, config);
         self.playback = Some(playback);
-        self.schedule.drop_pending();
+        self.preview.drop_pending();
         self.status = "Buffering · warming CRT history…".into();
         self.send(Job::Playback {
             video,
@@ -225,7 +225,7 @@ impl App {
         };
         let config = self
             .config
-            .with_max_output_side(self.input.dimensions(), self.preview_limit);
+            .with_max_output_side(self.input.dimensions(), self.preview.quality);
         if config.is_ok_and(|config| playback.retune(config)) {
             return;
         }
@@ -271,8 +271,7 @@ impl App {
         self.original = texture(ctx, "playing-source", &frame.source, 2048);
         let limit = ctx.input(|i| i.max_texture_side) as u32;
         let crt = texture(ctx, "playing-crt", &frame.crt, limit);
-        self.show_preview(Some(Displayed::Uploaded(crt)));
-        self.schedule.show_current();
+        self.preview.show_played(crt);
         self.input = Arc::new(frame.source);
     }
 }
@@ -475,7 +474,7 @@ mod tests {
         let input = app.input.dimensions();
         let config = app
             .config
-            .with_max_output_side(input, app.preview_limit)
+            .with_max_output_side(input, app.preview.quality)
             .unwrap();
         let output = config.output_size(input).unwrap();
         let (playback, feed) = Playback::new(&video(10., input), 0., output, config);
@@ -486,7 +485,7 @@ mod tests {
         assert_eq!(feed.settings.get().bloom, 0.);
         // A smaller preview needs a new sequence. Without a video open there is nothing to
         // start again, which leaves it stopped.
-        app.preview_limit = Some(800);
+        app.preview.quality = Some(800);
         app.changed();
         assert!(app.playback.is_none() && feed.cancel.load(Ordering::Relaxed));
     }
@@ -503,11 +502,13 @@ mod tests {
         );
         let (playback, feed) = Playback::new(&video(10., (4, 4)), 0., (4, 4), Config::default());
         app.playback = Some(playback);
+        // As starting playback does: it renders its own frames.
+        app.preview.drop_pending();
         for time in [0., 0.04, 0.08] {
             feed.frames.send(frame(time)).unwrap();
         }
         app.tick_playback(&ctx);
-        assert!(app.rendered.is_some() && app.schedule.is_current());
+        assert!(app.preview.picture().is_some() && app.preview.is_settled());
         assert_eq!(app.status, "Playing");
         app.stop_playback();
         assert!(feed.cancel.load(Ordering::Relaxed));
@@ -604,7 +605,7 @@ mod tests {
         while time(&app) < 0.6 {
             waited(&mut app);
         }
-        app.preview_limit = Some(320);
+        app.preview.quality = Some(320);
         app.changed();
         let restarted_at = time(&app);
         assert!(app.playback.is_some(), "a new size starts it again");

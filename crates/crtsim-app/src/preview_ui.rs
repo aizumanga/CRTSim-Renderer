@@ -9,22 +9,22 @@ impl App {
             ui.selectable_value(&mut self.view, View::Crt, "CRT");
             ui.selectable_value(&mut self.view, View::Compare, "Compare");
             ui.separator();
-            ui.checkbox(&mut self.schedule.live, "Live preview");
+            ui.checkbox(self.preview.live_mut(), "Live preview");
             if ui
                 .add_enabled(
-                    !self.schedule.rendering() && !self.work.is_loading(),
+                    !self.preview.rendering() && !self.work.is_loading(),
                     egui::Button::new("Refresh"),
                 )
                 .clicked()
             {
-                self.request_preview(schedule::Kind::Settled);
+                self.refresh_preview();
             }
         });
         ui.horizontal_wrapped(|ui| {
             let chosen = choice(
                 ui,
                 "Preview quality",
-                &mut self.preview_limit,
+                &mut self.preview.quality,
                 &[
                     (Some(800), "Fast (800 px)"),
                     (Some(1280), "Balanced (1280 px)"),
@@ -48,7 +48,7 @@ impl App {
         );
         if let Ok(c) = self
             .config
-            .with_max_output_side(self.input.dimensions(), self.preview_limit)
+            .with_max_output_side(self.input.dimensions(), self.preview.quality)
         {
             let input = self.input.dimensions();
             if let (Ok((w, h)), Ok(signal)) = (c.output_size(input), c.signal_size(input)) {
@@ -63,7 +63,7 @@ impl App {
                 }
             }
         }
-        if self.schedule.rendering_settled() || !self.work.is_idle() {
+        if self.preview.rendering_settled() || !self.work.is_idle() {
             ui.horizontal(|ui| {
                 ui.spinner();
                 ui.label(match self.work {
@@ -73,16 +73,16 @@ impl App {
                 });
             });
         }
-        if let Some(audition) = &self.audition {
+        if let Some(audition) = self.preview.audition() {
             ui.colored_label(
                 ui.visuals().selection.bg_fill,
                 format!(
-                    "Previewing {} — click it to apply, or move away to return to your settings",
-                    audition.label
+                    "Previewing {audition} — click it to apply, or move away to return to your \
+                     settings"
                 ),
             );
         }
-        if self.rendered.is_some() && self.schedule.stale() {
+        if self.preview.stale() {
             ui.colored_label(ui.visuals().warn_fg_color, "Preview is out of date.");
         }
         let controls_height = if self.timeline.is_some() { 136. } else { 0. };
@@ -95,11 +95,11 @@ impl App {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 if self.view == View::Compare {
-                    if let Some(ref im) = self.rendered {
+                    if let Some(im) = self.preview.picture() {
                         compare(
                             ui,
                             egui::load::SizedTexture::from_handle(&self.original),
-                            im.sized(),
+                            im,
                             available,
                             self.fit_preview,
                             self.zoom,
@@ -114,8 +114,8 @@ impl App {
                         self.fit_preview,
                         self.zoom,
                     );
-                } else if let Some(ref im) = self.rendered {
-                    show_image(ui, im.sized(), available, self.fit_preview, self.zoom);
+                } else if let Some(im) = self.preview.picture() {
+                    show_image(ui, im, available, self.fit_preview, self.zoom);
                 } else {
                     ui.label(
                         "Open an image, video or test card. Your rendered preview \

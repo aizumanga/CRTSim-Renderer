@@ -1,4 +1,4 @@
-use crate::{file_name, files, schedule::Kind, timeline::Timeline};
+use crate::{file_name, files, preview::Kind, timeline::Timeline};
 use anyhow::{ensure, Result};
 use crtsim_core::{config::Config, nes_luts, RenderProgress, Renderer, Sequence, Stage};
 use crtsim_media::{Options, Progress, Video};
@@ -117,12 +117,27 @@ const STILL_FAILED: &str = "Graphics driver failed. Try a smaller resolution or 
 #[derive(Clone)]
 pub struct Jobs {
     work: mpsc::Sender<Job>,
-    preview: mpsc::Sender<PreviewJob>,
+    preview: PreviewLane,
     /// Last, so it rings once the senders above are gone.
     bells: Bells,
 }
+
+/// The preview lane's sending end: the Preview holds one, and thumbnails go through `Jobs`.
+#[derive(Clone)]
+pub struct PreviewLane {
+    jobs: mpsc::Sender<PreviewJob>,
+    bell: Arc<Bell>,
+}
+
+impl PreviewLane {
+    pub fn send(&self, job: PreviewJob) -> Result<(), Stopped> {
+        self.jobs.send(job).map_err(|_| Stopped)?;
+        self.bell.ring();
+        Ok(())
+    }
+}
 /// A job could not be sent because its worker has stopped.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Stopped;
 impl Jobs {
     pub fn send(&self, job: Job) -> Result<(), Stopped> {
@@ -131,9 +146,11 @@ impl Jobs {
         Ok(())
     }
     pub fn preview(&self, job: PreviewJob) -> Result<(), Stopped> {
-        self.preview.send(job).map_err(|_| Stopped)?;
-        self.bells.0[1].ring();
-        Ok(())
+        self.preview.send(job)
+    }
+    /// The preview lane, for the Preview to send its own jobs on.
+    pub fn preview_lane(&self) -> PreviewLane {
+        self.preview.clone()
     }
     /// Asks both lanes to stop once their current job is done.
     pub fn shutdown(&self) {
@@ -145,11 +162,15 @@ impl Jobs {
     pub fn capture() -> (Self, mpsc::Receiver<Job>, mpsc::Receiver<PreviewJob>) {
         let (work, jobs) = mpsc::channel();
         let (preview, previews) = mpsc::channel();
+        let bells = Bells::default();
         (
             Self {
                 work,
-                preview,
-                bells: Bells::default(),
+                preview: PreviewLane {
+                    jobs: preview,
+                    bell: bells.0[1].clone(),
+                },
+                bells,
             },
             jobs,
             previews,
@@ -569,7 +590,10 @@ pub fn start(ctx: egui::Context, gpu: Gpu, runtime: Runtime) -> Worker {
     Worker {
         jobs: Jobs {
             work,
-            preview,
+            preview: PreviewLane {
+                jobs: preview,
+                bell: bells.0[1].clone(),
+            },
             bells,
         },
         events: receive,

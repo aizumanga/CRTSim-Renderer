@@ -655,8 +655,7 @@ mod tests {
             None,
             None,
         );
-        let (jobs, receive, _previews) = worker::Jobs::capture();
-        app.jobs = jobs;
+        let (receive, _previews) = app.capture_jobs();
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("clip.gif");
         let mut encoder =

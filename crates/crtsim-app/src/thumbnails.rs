@@ -228,8 +228,7 @@ mod tests {
             None,
             None,
         );
-        let (captured, _work, jobs) = worker::Jobs::capture();
-        app.jobs = captured;
+        let (_work, jobs) = app.capture_jobs();
         let preset = Config::general();
         assert!(app.lut_thumbnail(4).is_none());
         assert!(app
@@ -287,8 +286,7 @@ mod tests {
             None,
             None,
         );
-        let (captured, _work, _previews) = worker::Jobs::capture();
-        app.jobs = captured;
+        let (_work, _previews) = app.capture_jobs();
         app.luts.open = true;
         app.lut_thumbnail(0);
         assert!(app.thumbnails_pending());
