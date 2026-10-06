@@ -131,7 +131,7 @@ impl App {
         let snapshot = self.snapshot();
         let store = self.app_data().cloned();
         // Nor while a project waits for its source, its settings not yet applied.
-        let loading = self.work.is_loading() || self.source.restoring();
+        let loading = self.lane.is_loading() || self.source.restoring();
         if let Err(e) = self.session.save(store.as_ref(), loading, snapshot) {
             self.error = Some(format!("Session recovery could not be saved: {e:#}"));
         }
@@ -356,7 +356,7 @@ mod tests {
         };
         let mut app = open();
         app.show_video_test_card(540);
-        while !app.work.is_idle() {
+        while !app.lane.is_idle() {
             waited(&mut app);
         }
         assert_eq!(app.source.name(), "Video test card");
@@ -377,7 +377,7 @@ mod tests {
 
         let mut reopened = open();
         reopened.open_project(project);
-        while reopened.source.timeline.is_none() || !reopened.work.is_idle() {
+        while reopened.source.timeline.is_none() || !reopened.lane.is_idle() {
             waited(&mut reopened);
         }
         assert_eq!(reopened.source.name(), "Video test card");

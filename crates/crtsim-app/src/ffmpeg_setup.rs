@@ -310,7 +310,7 @@ mod tests {
         app.ffmpeg.check = Some(missing());
         app.load("holiday.mp4".into());
         assert!(work.try_recv().is_err(), "nothing is sent to fail");
-        assert!(app.ffmpeg.open && app.work.is_idle());
+        assert!(app.ffmpeg.open && app.lane.is_idle());
         assert_eq!(app.status, "Opening holiday.mp4 needs FFmpeg");
         // The window draws the missing programs and how to install them.
         app.ffmpeg.checking = None;

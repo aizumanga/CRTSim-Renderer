@@ -115,10 +115,25 @@ const STILL_FAILED: &str = "Graphics driver failed. Try a smaller resolution or 
 /// finished.
 #[derive(Clone)]
 pub struct Jobs {
-    work: mpsc::Sender<Job>,
+    work: WorkLane,
     preview: PreviewLane,
-    /// Last, so it rings once the senders above are gone.
-    bells: Bells,
+    /// Held only to ring once the senders above are gone, so it comes last.
+    _bells: Bells,
+}
+
+/// The work lane's sending end, which the app's `lane::Lane` holds.
+#[derive(Clone)]
+pub struct WorkLane {
+    jobs: mpsc::Sender<Job>,
+    bell: Arc<Bell>,
+}
+
+impl WorkLane {
+    pub fn send(&self, job: Job) -> Result<(), Stopped> {
+        self.jobs.send(job).map_err(|_| Stopped)?;
+        self.bell.ring();
+        Ok(())
+    }
 }
 
 /// The preview lane's sending end: the Preview holds one, and thumbnails go through `Jobs`.
@@ -140,9 +155,11 @@ impl PreviewLane {
 pub struct Stopped;
 impl Jobs {
     pub fn send(&self, job: Job) -> Result<(), Stopped> {
-        self.work.send(job).map_err(|_| Stopped)?;
-        self.bells.0[0].ring();
-        Ok(())
+        self.work.send(job)
+    }
+    /// The work lane, for the app's `Lane` to send its jobs on.
+    pub fn work_lane(&self) -> WorkLane {
+        self.work.clone()
     }
     pub fn preview(&self, job: PreviewJob) -> Result<(), Stopped> {
         self.preview.send(job)
@@ -164,12 +181,15 @@ impl Jobs {
         let bells = Bells::default();
         (
             Self {
-                work,
+                work: WorkLane {
+                    jobs: work,
+                    bell: bells.0[0].clone(),
+                },
                 preview: PreviewLane {
                     jobs: preview,
                     bell: bells.0[1].clone(),
                 },
-                bells,
+                _bells: bells,
             },
             jobs,
             previews,
@@ -328,6 +348,19 @@ pub enum Job {
         feed: Feed,
     },
     Shutdown,
+}
+
+impl Job {
+    /// The flag that stops this job, if it can be stopped.
+    pub fn cancel(&self) -> Option<&Arc<AtomicBool>> {
+        match self {
+            Self::LoadVideo { cancel, .. }
+            | Self::ImportPreset { cancel, .. }
+            | Self::Export { cancel, .. } => Some(cancel),
+            Self::Playback { feed, .. } => Some(&feed.cancel),
+            Self::Load(_) | Self::LoadBytes { .. } | Self::Shutdown => None,
+        }
+    }
 }
 
 /// What an export renders, each with the settings captured when it was asked for.
@@ -575,12 +608,15 @@ pub fn start(ctx: egui::Context, gpu: Gpu, runtime: Runtime) -> Worker {
     };
     Worker {
         jobs: Jobs {
-            work,
+            work: WorkLane {
+                jobs: work,
+                bell: bells.0[0].clone(),
+            },
             preview: PreviewLane {
                 jobs: preview,
                 bell: bells.0[1].clone(),
             },
-            bells,
+            _bells: bells,
         },
         events: receive,
         threads,

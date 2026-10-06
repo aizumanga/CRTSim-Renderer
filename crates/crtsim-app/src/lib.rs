@@ -14,6 +14,7 @@ mod files;
 mod frames;
 mod gallery;
 mod gallery_ui;
+mod lane;
 mod lut_gallery;
 mod model;
 #[cfg(not(target_arch = "wasm32"))]
@@ -63,39 +64,6 @@ enum View {
     Compare,
 }
 
-/// What the work thread is doing for the interface: one load or export at a time.
-enum Work {
-    Idle,
-    /// Opening an image, a frame of a video or a preset's metadata. Only an image cannot be
-    /// cancelled.
-    Loading(Option<Arc<AtomicBool>>),
-    /// An export or a batch job, with the latest progress the worker has reported.
-    Exporting {
-        cancel: Arc<AtomicBool>,
-        progress: Option<crtsim_media::Progress>,
-    },
-}
-
-impl Work {
-    fn is_idle(&self) -> bool {
-        matches!(self, Self::Idle)
-    }
-    fn is_loading(&self) -> bool {
-        matches!(self, Self::Loading(_))
-    }
-    fn is_exporting(&self) -> bool {
-        matches!(self, Self::Exporting { .. })
-    }
-    /// The flag that stops the job, where it can be stopped.
-    fn cancel(&self) -> Option<&Arc<AtomicBool>> {
-        match self {
-            Self::Idle => None,
-            Self::Loading(cancel) => cancel.as_ref(),
-            Self::Exporting { cancel, .. } => Some(cancel),
-        }
-    }
-}
-
 struct App {
     /// The session saved to recover, and the project files opened in it.
     session: session::Session,
@@ -104,7 +72,8 @@ struct App {
     playback: Option<playback::Playback>,
     video_options: crtsim_media::Options,
     animation_options: crtsim_media::AnimationOptions,
-    work: Work,
+    /// The job the worker's work lane is doing, if any.
+    lane: lane::Lane,
     worker_thread: Option<std::thread::JoinHandle<()>>,
     store: Option<app_data::Store>,
     theme: theme::Theme,
@@ -244,7 +213,7 @@ impl App {
             playback: None,
             video_options: crtsim_media::Options::default(),
             animation_options: Default::default(),
-            work: Work::Idle,
+            lane: lane::Lane::new(jobs.work_lane()),
             worker_thread,
             store,
             theme,
@@ -315,7 +284,7 @@ impl App {
     /// Whether a file can be opened or an export started: nothing modal is open and the work
     /// thread is free.
     fn can_start_work(&self) -> bool {
-        !self.modal_open() && self.work.is_idle()
+        !self.modal_open() && self.lane.may_start()
     }
     /// Where settings, sessions and window placement are kept; none during a smoke run.
     fn app_data(&self) -> Option<&app_data::Store> {
@@ -354,18 +323,23 @@ impl App {
         let opening = self.source.open(path);
         self.start_opening(opening, status);
     }
-    /// Has the work lane load what `opening` asks for: a video frame can be cancelled.
-    fn start_opening(&mut self, opening: source::Opening, status: String) {
-        self.stop_playback();
-        self.status = match opening.cancel {
-            Some(_) => "Loading video frame…".into(),
-            None => status,
+    /// Has the work lane load what `opening` asks for, saying so: a video's frame, or else
+    /// what `status` says.
+    fn start_opening(&mut self, opening: Job, status: String) {
+        let status = match opening {
+            Job::LoadVideo { .. } => "Loading video frame…".into(),
+            _ => status,
         };
-        self.work = Work::Loading(opening.cancel);
-        self.send(opening.job);
+        self.start(opening, status);
     }
-    fn send(&mut self, job: Job) {
-        if self.jobs.send(job).is_err() {
+    /// Starts `job` on the work lane, saying `status`. Any other job stops the video playing
+    /// first, which holds the lane until then.
+    fn start(&mut self, job: Job, status: String) {
+        if !matches!(job, Job::Playback { .. }) {
+            self.stop_playback();
+        }
+        self.status = status;
+        if self.lane.start(job).is_err() {
             self.worker_stopped();
         }
     }
@@ -377,7 +351,7 @@ impl App {
     fn worker_stopped(&mut self) {
         self.error =
             Some("Render worker stopped. Save your preset and restart the application.".into());
-        self.work = Work::Idle;
+        self.lane.stop();
         self.preview.stop();
     }
     /// The image, or frame, on screen, exported as a PNG at full resolution.
@@ -407,19 +381,17 @@ impl App {
         queued: Option<&str>,
     ) {
         let cancel = Arc::new(AtomicBool::new(false));
-        self.work = Work::Exporting {
-            cancel: cancel.clone(),
-            progress: queued.map(|stage| crtsim_media::Progress {
-                fraction: 0.,
-                stage: stage.into(),
-            }),
-        };
-        self.status = status;
-        self.send(Job::Export {
-            export,
-            path,
-            cancel,
-        });
+        self.start(
+            Job::Export {
+                export,
+                path,
+                cancel,
+            },
+            status,
+        );
+        if let Some(stage) = queued {
+            self.lane.queued(stage);
+        }
     }
     /// Channels in place of the worker's lanes, the Preview's included, for a test to inspect
     /// what the interface sends.
@@ -427,6 +399,7 @@ impl App {
     fn capture_jobs(&mut self) -> (mpsc::Receiver<Job>, mpsc::Receiver<PreviewJob>) {
         let (jobs, work, previews) = worker::Jobs::capture();
         self.preview = preview::Preview::new(jobs.preview_lane(), None, Instant::now());
+        self.lane = lane::Lane::new(jobs.work_lane());
         self.jobs = jobs;
         (work, previews)
     }
@@ -434,7 +407,7 @@ impl App {
     /// or a video plays. Also while exporting: previews have their own lane, and the export
     /// works from the settings it captured, so the ones on screen are free to change.
     fn may_preview(&self) -> bool {
-        !self.show_welcome && !self.work.is_loading() && self.playback.is_none()
+        !self.show_welcome && !self.lane.is_loading() && !self.lane.is_playing()
     }
     /// Refresh: renders the settings on screen exactly now.
     fn refresh_preview(&mut self) {
@@ -559,23 +532,20 @@ impl eframe::App for App {
             ui.horizontal(|ui| {
                 chrome::status_light(
                     ui,
-                    self.preview.rendering_settled() || !self.work.is_idle(),
+                    self.preview.rendering_settled() || self.lane.is_working(),
                     self.error.is_some() || self.preview.error.is_some(),
                 );
                 ui.label(&self.status);
                 chrome::version(ui);
             });
-            if let Work::Exporting {
-                progress: Some(p), ..
-            } = &self.work
-            {
+            if let Some(p) = self.lane.shown_progress() {
                 ui.add(
                     egui::ProgressBar::new(p.fraction)
                         .text(format!("Export: {} — {:.0}%", p.stage, p.fraction * 100.))
                         .animate(true),
                 );
             }
-            if let Some(cancel) = self.work.cancel().cloned() {
+            if let Some(cancel) = self.lane.cancel().cloned() {
                 if ui.button("Cancel").clicked() {
                     cancel.store(true, Ordering::Relaxed);
                     self.status = "Cancelling…".into();
@@ -632,7 +602,7 @@ impl eframe::App for App {
             may_preview,
         );
         self.ticked(tick);
-        if self.preview.needs_frames(now) || !self.work.is_idle() {
+        if self.preview.needs_frames(now) || self.lane.is_working() {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
         self.advance_smoke(ctx);
@@ -644,7 +614,7 @@ impl Drop for App {
         self.stop_playback();
         self.save_session();
         self.save_tool_windows();
-        if let Some(cancel) = self.work.cancel() {
+        if let Some(cancel) = self.lane.cancel() {
             cancel.store(true, Ordering::Relaxed);
         }
         self.jobs.shutdown();
@@ -680,7 +650,7 @@ mod tests {
             Ok(PreviewJob::Preview { config, .. }) => assert_eq!(config.bloom, 0.),
             _ => panic!("expected a preview while exporting"),
         }
-        assert!(app.work.is_exporting() && app.preview.rendering());
+        assert!(app.lane.is_exporting() && app.preview.rendering());
     }
 
     #[test]
@@ -740,7 +710,7 @@ mod tests {
                 ..
             } => {
                 assert!(Arc::ptr_eq(&input, &source));
-                assert!(Arc::ptr_eq(&cancel, app.work.cancel().unwrap()));
+                assert!(Arc::ptr_eq(&cancel, app.lane.cancel().unwrap()));
                 assert_eq!(config, expected);
                 assert_eq!(
                     config.output_size(input.dimensions()).unwrap(),

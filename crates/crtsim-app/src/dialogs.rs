@@ -218,14 +218,12 @@ impl App {
             Dialog::File => self.load(path),
             Dialog::ExportVideo => self.export_video(path),
             Dialog::ImportPreset => {
-                let cancel = Arc::new(AtomicBool::new(false));
-                self.work = Work::Loading(Some(cancel.clone()));
-                self.status = "Reading preset metadata…".into();
-                self.send(Job::ImportPreset {
+                let job = Job::ImportPreset {
                     path,
                     input: self.source.input().dimensions(),
-                    cancel,
-                });
+                    cancel: Arc::new(AtomicBool::new(false)),
+                };
+                self.start(job, "Reading preset metadata…".into());
             }
             Dialog::LoadPreset => match files::load_preset(&path, self.source.input().dimensions())
             {

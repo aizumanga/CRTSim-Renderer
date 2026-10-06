@@ -252,10 +252,11 @@ impl App {
 
     /// Starts the queue's next job once nothing else needs the work thread or the preview.
     pub(crate) fn dispatch_queue(&mut self) {
-        if !self.can_start_work()
+        // Nor while a video plays: the queue waits for the lane to be free, not making it so.
+        if self.modal_open()
+            || !self.lane.is_idle()
             || self.preview.rendering()
             || self.session.recovery_offered()
-            || self.playback.is_some()
         {
             return;
         }
@@ -272,12 +273,9 @@ impl App {
         self.save_session();
     }
 
-    pub(crate) fn queue_finished(&mut self, result: &worker::Outcome<PathBuf>) {
-        let asked_to_stop = self
-            .work
-            .cancel()
-            .is_some_and(|cancel| cancel.load(Ordering::Relaxed));
-        if self.queue.finished(result, asked_to_stop) {
+    /// The queue's job has finished with `result`, `cancelled` if the person stopped it.
+    pub(crate) fn queue_finished(&mut self, result: &worker::Outcome<PathBuf>, cancelled: bool) {
+        if self.queue.finished(result, cancelled) {
             self.save_session();
         }
     }
@@ -323,7 +321,7 @@ impl App {
                         .add_enabled(self.queue.exporting(), egui::Button::new("Cancel current"))
                         .clicked()
                     {
-                        if let Some(cancel) = self.work.cancel() {
+                        if let Some(cancel) = self.lane.cancel() {
                             cancel.store(true, Ordering::Relaxed);
                         }
                         self.queue.set_running(false);
@@ -547,8 +545,8 @@ mod tests {
         assert_eq!(config, captured);
         // Asked while the file was being saved, after the last point the job checks.
         cancel.store(true, Ordering::Relaxed);
-        app.queue_finished(&Ok(path));
-        app.work = Work::Idle;
+        let finished = app.lane.finished();
+        app.queue_finished(&Ok(path), finished.cancelled);
         assert!(!app.queue.running());
         app.dispatch_queue();
         assert!(

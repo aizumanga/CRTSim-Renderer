@@ -173,10 +173,12 @@ impl Drop for Playback {
 }
 
 impl App {
+    /// Stops the video playing, if one is, which frees the work lane.
     pub fn stop_playback(&mut self) {
         if self.playback.take().is_some() {
             self.status = "Playback paused".into();
         }
+        self.lane.stopped_playing();
     }
 
     /// Plays the video from the frame on screen, or pauses it where it is.
@@ -208,12 +210,12 @@ impl App {
         let (playback, feed) = Playback::new(&video, time, output, config);
         self.playback = Some(playback);
         self.preview.drop_pending();
-        self.status = "Buffering · warming CRT history…".into();
-        self.send(Job::Playback {
+        let job = Job::Playback {
             video,
             options: self.video_options.clone(),
             feed,
-        });
+        };
+        self.start(job, "Buffering · warming CRT history…".into());
     }
 
     /// Hands the settings in use to the video playing, if one is, for its next frames. Ones

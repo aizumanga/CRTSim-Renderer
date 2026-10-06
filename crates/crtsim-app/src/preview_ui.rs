@@ -12,7 +12,7 @@ impl App {
             ui.checkbox(self.preview.live_mut(), "Live preview");
             if ui
                 .add_enabled(
-                    !self.preview.rendering() && !self.work.is_loading(),
+                    !self.preview.rendering() && !self.lane.is_loading(),
                     egui::Button::new("Refresh"),
                 )
                 .clicked()
@@ -63,13 +63,14 @@ impl App {
                 }
             }
         }
-        if self.preview.rendering_settled() || !self.work.is_idle() {
+        if self.preview.rendering_settled() || self.lane.is_working() {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label(match self.work {
-                    Work::Exporting { .. } => "Exporting…",
-                    Work::Loading(_) => "Loading file/frame…",
-                    Work::Idle => "Rendering preview…",
+                ui.label(match self.lane.task() {
+                    Some(lane::Task::Exporting) => "Exporting…",
+                    Some(lane::Task::Loading) => "Loading file/frame…",
+                    Some(lane::Task::ImportingPreset) => "Reading preset…",
+                    Some(lane::Task::Playing) | None => "Rendering preview…",
                 });
             });
         }

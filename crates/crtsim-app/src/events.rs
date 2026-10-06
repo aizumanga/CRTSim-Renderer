@@ -6,16 +6,9 @@ impl App {
         self.receive_dialogs();
         while let Ok(event) = self.events.try_recv() {
             match event {
-                Event::Progress(progress) => {
-                    if let Work::Exporting {
-                        progress: shown, ..
-                    } = &mut self.work
-                    {
-                        *shown = Some(progress);
-                    }
-                }
+                Event::Progress(progress) => self.lane.progress(progress),
                 Event::PresetImported(result) => {
-                    self.work = Work::Idle;
+                    self.lane.finished();
                     match result {
                         Ok(imported) => {
                             self.presets.name = file_stem(&imported.path);
@@ -36,7 +29,7 @@ impl App {
                     }
                 }
                 Event::Loaded(result) => {
-                    self.work = Work::Idle;
+                    self.lane.finished();
                     let arrived = self.source.loaded(result);
                     if arrived.changed {
                         self.source_changed();
@@ -61,7 +54,7 @@ impl App {
                 Event::Preview { revision, result } => {
                     let shown = self.preview.returned(ctx, revision, result);
                     // An export's progress keeps the status line while it runs.
-                    if let Some(shown) = shown.filter(|_| !self.work.is_exporting()) {
+                    if let Some(shown) = shown.filter(|_| !self.lane.is_exporting()) {
                         self.status = shown;
                     }
                 }
@@ -71,8 +64,8 @@ impl App {
                     result,
                 } => self.thumbnail_ready(ctx, generation, key, result),
                 Event::Exported(result) => {
-                    self.queue_finished(&result);
-                    self.work = Work::Idle;
+                    let finished = self.lane.finished();
+                    self.queue_finished(&result, finished.cancelled);
                     match result {
                         Ok(path) => {
                             self.status = format!("Saved {}", path.display());

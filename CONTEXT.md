@@ -86,6 +86,11 @@ has one at most; choosing either replaces the other (`Config::set_lut`, `Config:
 (`gallery.rs` and `lut_gallery.rs`). The preset gallery also saves the settings in use as a
 personal preset; the LUT gallery decodes each included LUT once and shares it.
 
+**Work lane**: the worker's thread for loading, importing presets, exporting and playing, one
+job at a time (`crates/crtsim-app/src/lane.rs`). Every job starts and finishes there, with its
+cancel flag and an export's progress. Playing holds it but gives way: any other job stops the
+video first. The batch queue waits for it to be free, playback included.
+
 **Batch queue**: exports that each render one file with the settings in use when they were
 added, one at a time and in order (`crates/crtsim-app/src/batch.rs`). Each output is named
 after its source and never replaces a file; cancelling a job pauses the queue.

@@ -2,7 +2,7 @@
 //! the video test card, a file on disk, a file a browser handed over, or a project's source
 //! that is missing, with the test card in its place. A video's comes with its timeline.
 //!
-//! Opening one asks the worker to load it (`Opening`), and what comes back becomes the source
+//! Opening one gives the job that asks the worker to load it, and what comes back becomes the source
 //! (`loaded`). A project opens its source first and is held here until that has loaded; then
 //! its settings and queue apply, whether the source opened or not. The source is saved into a
 //! project or session as the file to open again, the built-in source, and the frame.
@@ -38,16 +38,10 @@ pub enum Kind {
     },
 }
 
-/// A load for the work lane to run: the job, and the flag that cancels it, when it can be.
-pub struct Opening {
-    pub job: Job,
-    pub cancel: Option<Arc<AtomicBool>>,
-}
-
 /// What restoring a project needs next.
 pub enum Restoring {
     /// Its source loading. The project is held until it has, then applies.
-    Open(Opening),
+    Open(Job),
     /// It applies now, its source already in place, with why its source is not open, if not.
     Apply {
         project: Project,
@@ -123,12 +117,12 @@ impl Source {
     }
 
     /// Opens the file at `path`: a video or animation at its first frame, else an image.
-    pub fn open(&mut self, path: PathBuf) -> Opening {
+    pub fn open(&mut self, path: PathBuf) -> Job {
         self.open_at(path, 0)
     }
 
     /// Opens the file at `path`: a video or animation at `frame`, else an image.
-    fn open_at(&mut self, path: PathBuf, frame: u64) -> Opening {
+    fn open_at(&mut self, path: PathBuf, frame: u64) -> Job {
         self.pending = Some(Pending {
             picked: false,
             project: None,
@@ -136,10 +130,7 @@ impl Source {
         if crtsim_media::MediaKind::of(&path).is_moving() {
             return video(path, frame, None);
         }
-        Opening {
-            job: Job::Load(path),
-            cancel: None,
-        }
+        Job::Load(path)
     }
 
     /// Opens a file a browser handed over, by its `name` and contents.
@@ -147,19 +138,16 @@ impl Source {
         all(not(test), not(target_arch = "wasm32")),
         expect(dead_code, reason = "the desktop opens files by path")
     )]
-    pub fn open_bytes(&mut self, name: String, bytes: Vec<u8>) -> Opening {
+    pub fn open_bytes(&mut self, name: String, bytes: Vec<u8>) -> Job {
         self.pending = Some(Pending {
             picked: true,
             project: None,
         });
-        Opening {
-            job: Job::LoadBytes { name, bytes },
-            cancel: None,
-        }
+        Job::LoadBytes { name, bytes }
     }
 
     /// Opens frame `frame` of the video open, if there is one.
-    pub fn open_frame(&mut self, frame: u64) -> Option<Opening> {
+    pub fn open_frame(&mut self, frame: u64) -> Option<Job> {
         let timeline = self.timeline.as_ref()?;
         let cached = (timeline.video.clone(), timeline.frames);
         self.pending = Some(Pending {
@@ -171,7 +159,7 @@ impl Source {
 
     /// Opens the video test card at `frame`. It is drawn rather than read, so it opens as an
     /// animation does, without a file or FFmpeg.
-    pub fn open_video_test_card(&mut self, frame: u64) -> Opening {
+    pub fn open_video_test_card(&mut self, frame: u64) -> Job {
         let clip = crtsim_media::test_clip();
         let frames = clip.frames.unwrap_or(1);
         self.pending = Some(Pending {
@@ -337,16 +325,12 @@ const TEST_CARD: &str = "Built-in test card";
 
 /// Frame `frame` of the video at `path`, or of `cached`, a video already probed, with its
 /// frame count.
-fn video(path: PathBuf, frame: u64, cached: Option<(crtsim_media::Video, u64)>) -> Opening {
-    let cancel = Arc::new(AtomicBool::new(false));
-    Opening {
-        job: Job::LoadVideo {
-            path,
-            frame,
-            cached,
-            cancel: cancel.clone(),
-        },
-        cancel: Some(cancel),
+fn video(path: PathBuf, frame: u64, cached: Option<(crtsim_media::Video, u64)>) -> Job {
+    Job::LoadVideo {
+        path,
+        frame,
+        cached,
+        cancel: Arc::new(AtomicBool::new(false)),
     }
 }
 
@@ -386,14 +370,14 @@ mod tests {
     fn opening_asks_for_an_image_or_a_video_frame_which_can_be_cancelled() {
         let mut source = source();
         let image = source.open("photo.png".into());
-        assert!(matches!(image.job, Job::Load(_)) && image.cancel.is_none());
+        assert!(matches!(image, Job::Load(_)) && image.cancel().is_none());
         let video = source.open("clip.mp4".into());
-        assert!(matches!(video.job, Job::LoadVideo { frame: 0, .. }));
-        assert!(video.cancel.is_some());
+        assert!(matches!(video, Job::LoadVideo { frame: 0, .. }));
+        assert!(video.cancel().is_some());
         assert!(source.open_frame(3).is_none(), "no video is open");
         let card = source.open_video_test_card(5);
         assert!(matches!(
-            card.job,
+            card,
             Job::LoadVideo {
                 frame: 5,
                 cached: Some(_),
