@@ -173,6 +173,17 @@ pub struct PresetGallery {
     pub name: String,
     /// The personal preset whose description is being edited, and its text so far.
     pub editing: Option<(String, String)>,
+    /// A change to a personal preset waiting for the person to confirm it.
+    pub confirming: Option<Confirm>,
+}
+
+/// A change to a personal preset that cannot be undone, asked about before it is made.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Confirm {
+    /// Saving the settings in use over the preset of this name.
+    Replace(String),
+    /// Deleting the preset of this name.
+    Delete(String),
 }
 
 impl PresetGallery {

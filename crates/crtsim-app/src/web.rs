@@ -275,6 +275,19 @@ impl Files {
         }
     }
 
+    /// Forgets `name`, and takes it out of storage.
+    pub fn remove(&self, name: &str) {
+        self.entries.borrow_mut().remove(name);
+        let removed = self
+            .database
+            .transaction_with_str_and_mode(FILES, web_sys::IdbTransactionMode::Readwrite)
+            .and_then(|transaction| transaction.object_store(FILES))
+            .and_then(|files| files.delete(&JsValue::from_str(name)));
+        if let Err(error) = removed {
+            web_sys::console::warn_1(&error);
+        }
+    }
+
     /// The names under `prefix`, without it, sorted.
     pub fn names(&self, prefix: &str) -> Vec<String> {
         self.entries

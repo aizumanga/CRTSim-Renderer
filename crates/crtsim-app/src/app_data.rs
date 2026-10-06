@@ -138,6 +138,21 @@ impl Store {
         }
     }
 
+    /// Removes `file`, if there is one.
+    fn remove(&self, file: &str) -> Result<()> {
+        match &self.place {
+            Place::Folder(root) => match std::fs::remove_file(root.join(file)) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+                _ => Ok(()),
+            },
+            #[cfg(target_arch = "wasm32")]
+            Place::Browser(files) => {
+                files.remove(file);
+                Ok(())
+            }
+        }
+    }
+
     /// The names of the files in `folder`, sorted.
     fn names(&self, folder: &str) -> Result<Vec<String>> {
         match &self.place {
@@ -295,23 +310,55 @@ impl Store {
         self.write(&format!("{PRESETS}/{name}.txt"), description.as_bytes())
     }
 
-    /// Saves `config` as a new personal preset. A name already taken, in any letter case, is
-    /// refused rather than replaced.
-    pub fn save_preset(&self, name: &str, config: &Config, input: (u32, u32)) -> Result<()> {
+    /// The personal preset `name` names, in any letter case, as it is saved, if there is one.
+    /// Names that differ only in case are one name on every OS, so galleries stay portable.
+    pub fn saved_preset(&self, name: &str) -> Result<Option<String>> {
+        let file = format!("{name}.json").to_lowercase();
+        Ok(self
+            .names(PRESETS)?
+            .into_iter()
+            .find(|taken| taken.to_lowercase() == file)
+            .and_then(|taken| taken.strip_suffix(".json").map(str::to_owned)))
+    }
+
+    /// Saves `config` as personal preset `name`, and returns the name it is saved under. A
+    /// preset with that name already, in any letter case, is refused unless `replace` is set;
+    /// then it keeps its name and description and takes the new settings.
+    pub fn save_preset(
+        &self,
+        name: &str,
+        config: &Config,
+        input: (u32, u32),
+        replace: bool,
+    ) -> Result<String> {
         validate_name(name)?;
         config.validate_for(input)?;
-        // Case-insensitive collisions are refused on every OS for portable galleries.
-        let file = format!("{name}.json");
-        for taken in self.names(PRESETS)? {
-            ensure!(
-                taken.to_lowercase() != file.to_lowercase(),
-                "A preset with this name already exists. Choose another name."
-            );
-        }
+        let name = match self.saved_preset(name)? {
+            Some(taken) => {
+                ensure!(
+                    replace,
+                    "A preset with this name already exists. Choose another name."
+                );
+                taken
+            }
+            None => name.to_owned(),
+        };
         self.write(
-            &format!("{PRESETS}/{file}"),
+            &format!("{PRESETS}/{name}.json"),
             &crate::files::preset_json(config)?,
-        )
+        )?;
+        Ok(name)
+    }
+
+    /// Deletes personal preset `name` and its description.
+    pub fn delete_preset(&self, name: &str) -> Result<()> {
+        validate_name(name)?;
+        ensure!(
+            self.names(PRESETS)?.contains(&format!("{name}.json")),
+            "Preset no longer exists"
+        );
+        self.remove(&format!("{PRESETS}/{name}.json"))?;
+        self.remove(&format!("{PRESETS}/{name}.txt"))
     }
 }
 
@@ -378,10 +425,11 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let s = store(temp.path());
         let c = Config::general();
-        s.save_preset("My CRT", &c, (1216, 832)).unwrap();
-        assert!(s.save_preset("my crt", &c, (1, 1)).is_err());
+        s.save_preset("My CRT", &c, (1216, 832), false).unwrap();
+        assert!(s.save_preset("my crt", &c, (1, 1), false).is_err());
         for name in ["../oops", "CON", "", "nested/file", "trailing "] {
-            assert!(s.save_preset(name, &c, (1, 1)).is_err());
+            assert!(s.save_preset(name, &c, (1, 1), false).is_err());
+            assert!(s.save_preset(name, &c, (1, 1), true).is_err());
         }
         std::fs::write(temp.path().join("presets/broken.json"), "not json").unwrap();
         let reopened = store(temp.path());
@@ -406,6 +454,41 @@ mod tests {
             s.presets_location(),
             temp.path().join("presets").display().to_string()
         );
+    }
+
+    #[test]
+    fn personal_presets_are_replaced_and_deleted_on_request() {
+        let temp = tempfile::tempdir().unwrap();
+        let s = store(temp.path());
+        let first = Config::general();
+        let second = Config::default();
+        assert_ne!(first, second);
+        s.save_preset("My CRT", &first, (256, 224), false).unwrap();
+        s.set_description("My CRT", "Kept").unwrap();
+        assert_eq!(s.saved_preset("my crt").unwrap().as_deref(), Some("My CRT"));
+        assert_eq!(s.saved_preset("Other").unwrap(), None);
+        // Replacing keeps the saved name, in its own letter case, and its description.
+        let saved = s.save_preset("my crt", &second, (256, 224), true).unwrap();
+        assert_eq!(saved, "My CRT");
+        let presets = s.presets().unwrap().0;
+        assert_eq!(presets.len(), 1);
+        assert_eq!(presets[0].name, "My CRT");
+        assert_eq!(presets[0].config, second);
+        assert_eq!(presets[0].description, "Kept");
+        // A new name is saved as typed, whether or not replacing was allowed.
+        assert_eq!(
+            s.save_preset("Other", &first, (256, 224), true).unwrap(),
+            "Other"
+        );
+        s.delete_preset("My CRT").unwrap();
+        assert!(!temp.path().join("presets/My CRT.json").exists());
+        assert!(!temp.path().join("presets/My CRT.txt").exists());
+        let names: Vec<_> = s.presets().unwrap().0.into_iter().map(|p| p.name).collect();
+        assert_eq!(names, ["Other"]);
+        assert!(s.delete_preset("My CRT").is_err());
+        assert!(s.delete_preset("../oops").is_err());
+        // Deleted, the name is free again.
+        s.save_preset("my crt", &first, (256, 224), false).unwrap();
     }
 
     #[test]

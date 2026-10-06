@@ -7,6 +7,8 @@
   shading before. Measured against the mesh as Super Win the Game draws it, the glass's shade moves from 0.83 steps
   off on average to 0.01, and the picture from 0.46 to 0.30. Renders move by about a tenth of a step on average, and
   by more on the outline's pixels. RetroArch exports carry the image as `glass.png`.
+- **My presets** can be deleted, after confirming. Saving under a name already there, in any letter case, asks
+  before replacing that preset, which keeps its name and description and takes the settings in use.
 - **Flip artifact pattern** (Signal) draws the composite artifact pattern upside down, each tick blending the row above,
   as Super Win the Game's Linux build does; with it, the composite signal matches that build's frames within 2 steps.
   Off by default, as in the public source; the **Super Win the Game** preset turns it on. RetroArch presets carry it.

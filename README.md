@@ -34,10 +34,10 @@ an interesting technical account of how the effect developed.
 **Preset gallery** includes General image, Original CRTSim, Super Win the Game, Soft television, Clean RGB, Pixel art 240p, NTSC 240p, NTSC 480i, PAL 288p, PAL 576i, Warm analog and Linear light.
 The NTSC and PAL presets set the line count, interlacing and composite phase. The artifact model is the original NTSC-derived one, so the PAL presets approximate PAL's line-alternating color with gentler, stable artifacts rather than simulating it. Video frame rate is chosen separately in Export → Video.
 Each preset shows a thumbnail rendered from your current image. Point at a preset to preview it on the full image without applying it (nothing is changed or added to Undo), and click to apply it.
-Enter a name and choose **Save current** to add your exact settings to **My presets**; they reappear after restarting. Use **Edit description** on any personal preset to add, change or clear its description.
+Enter a name and choose **Save current** to add your exact settings to **My presets**; they reappear after restarting. Use **Edit description** on any personal preset to add, change or clear its description, and **Delete** to remove it, after confirming.
 Descriptions are saved beside gallery JSON files as UTF-8 `.txt` files; the JSON stays CLI-compatible.
 To add an existing JSON, load it, then use Save current in the gallery. JSON export remains available for sharing.
-Names are never overwritten; malformed files are skipped with an explanation. Personal JSON files live outside the checkout,
+Saving under a name already in My presets, in any letter case, asks first, then replaces that preset's settings and keeps its name and description; malformed files are skipped with an explanation. Personal JSON files live outside the checkout,
 in the app data directory shown in the gallery. `CRTSIM_DATA_DIR` can override that directory with an absolute path.
 The desktop also saves a recoverable session every two seconds and on exit. **Project** opens/saves `.crtsim`
 projects and lists the ten most recent projects. Recovery restores edits and leaves the export queue paused.
