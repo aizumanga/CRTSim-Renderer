@@ -26,7 +26,7 @@ def heads(lines, k):
 HEAD = [c.glow_text_layer(spec["intro"])] + [heads(cl["headline"], k + 1) for k, cl in enumerate(clips)] \
     + [c.glow_text_layer(spec["outro"])]
 LOOK = [c.chip(cl["look"], ACCENTS[k % len(ACCENTS)], size=50) for k, cl in enumerate(clips)]
-ERA = [c.small_text(f'{k + 1:02} / {len(clips):02}  ·  {cl["era"].upper()}', 30, (190, 170, 255), "Inter-Bold.otf")
+ERA = [c.small_text(f'{k + 1:02} / {len(clips):02}  ·  {cl["era"]}', 30, (190, 170, 255), "Inter-Bold.otf")
        for k, cl in enumerate(clips)]
 INTRO_SUB = c.small_text(spec.get("intro_sub", "Original animations, rendered through CRTSim"), 34)
 URL = c.chip("github.com/aizumanga/CRTSim-Renderer", c.YELLOW, size=38)
