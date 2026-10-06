@@ -28,3 +28,27 @@ tools/showcase/make.sh /tmp/showcase          # writes /tmp/showcase/crtsim-show
 The renders take about 15 minutes on lavapipe, the software Vulkan driver, and much less on a GPU.
 Python needs Pillow and NumPy. The fonts are Inter and DejaVu, which the scripts load from
 `/usr/share/fonts`.
+
+## Animations and the reel
+
+`animations/` holds six more original animations, each 240 frames (8 s at 30 fps) at its own
+resolution, made to be seen through the CRT. Each script runs as `animations/NAME.py OUT_DIR`.
+
+| Animation | Size | Look in `clips.json` |
+|---|---|---|
+| `arcade`: a space shooter's attract mode | 256×224 | Original CRTSim with longer persistence |
+| `terminal`: a green-phosphor terminal booting and running a program | 640×480 | Monochrome, no artifacts, long glow |
+| `demoscene`: copper bars, plasma, a 3D solid and a sine scroller | 320×240 | PAL 288p |
+| `rpg`: a 16-bit overworld and a dialog window | 256×224 | Super Win the Game |
+| `racer`: a pseudo-3D road at dusk | 320×224 | NTSC 240p |
+| `broadcast`: snow, a test card, a station ident and a TV's on-screen display | 640×480 | NTSC 480i |
+
+`clips.py` renders each through the CRT as a 1440×1080 clip with music from `musicgen.py`, which
+synthesizes a chiptune in a mood per clip. `reel.py` edits four seconds of each into a vertical reel,
+between the title and outro shots that `make.sh` renders.
+
+```sh
+tools/showcase/clips.py /tmp/showcase tools/showcase/clips.json     # writes crtsim-NAME.mp4
+tools/showcase/reel.py /tmp/showcase tools/showcase/clips.json /tmp/showcase/crtsim-reel.mp4
+```
+

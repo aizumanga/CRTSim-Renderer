@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # Original chiptune tracks in several moods, one per showcase clip, synthesized from scratch.
 # Usage: musicgen.py STYLE SECONDS OUT.wav   (STYLE: see STYLES below)
 import sys, wave

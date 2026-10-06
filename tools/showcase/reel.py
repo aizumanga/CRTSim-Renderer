@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # Edits the animation clips (tools/showcase/animations) into a vertical reel, one CRT look per clip.
 # Usage: reel.py WORKDIR CLIPS.json OUT.mp4 [stills frame...]
 # CLIPS.json: {"intro": ["LINE 1", "LINE 2"], "outro": [...],

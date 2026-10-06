@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # Renders each animation in CLIPS.json through the CRT and encodes it as a 4:3 clip with its music.
 # Usage: clips.py WORKDIR CLIPS.json [name...]
 # Each clip: {"name": .., "base": "default"|"general", "config": {..}, "mask_signal": bool, ...}
