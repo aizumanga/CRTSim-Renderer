@@ -269,6 +269,10 @@ pub enum PreviewJob {
 }
 
 /// Work for the other thread: loading, exports and playback, one at a time.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a job is sent once for something the user asked for, so its size costs nothing"
+)]
 pub enum Job {
     Load(PathBuf),
     /// An image handed over by name and contents, as a browser gives a file picked or dropped.
@@ -300,7 +304,6 @@ pub enum Job {
     },
     Playback {
         video: Video,
-        config: Config,
         options: Options,
         feed: Feed,
     },
@@ -416,12 +419,33 @@ pub struct PlaybackFrame {
     pub source: RgbaImage,
     pub crt: RgbaImage,
 }
-/// The worker's end of a playback: where in the video to start, where to send the frames it
-/// renders, and the flag that says to stop.
+/// The worker's end of a playback: where in the video to start, the settings to render with,
+/// where to send the frames it renders, and the flag that says to stop.
 pub struct Feed {
     pub start: f64,
+    pub settings: PlayingSettings,
     pub frames: mpsc::SyncSender<Result<PlaybackFrame, String>>,
     pub cancel: Arc<AtomicBool>,
+}
+
+/// The settings a video playing renders with, shared between the interface, which replaces
+/// them as they are edited, and the worker, which takes them as it starts each frame.
+#[derive(Clone)]
+pub struct PlayingSettings(Arc<Mutex<Arc<Config>>>);
+
+impl PlayingSettings {
+    pub fn new(config: Config) -> Self {
+        Self(Arc::new(Mutex::new(Arc::new(config))))
+    }
+
+    /// The settings the next frame starts with.
+    pub fn get(&self) -> Arc<Config> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    pub fn set(&self, config: Config) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Arc::new(config);
+    }
 }
 /// A finished preview. A renderer on its own device cannot hand its textures to the
 /// interface, so it still sends pixels.
@@ -558,8 +582,9 @@ async fn preview_lane(
     events: mpsc::Sender<Event>,
 ) {
     let mut graphics = Graphics::new(gpu);
-    // The CRT on screen, which interactive previews run on and a settled one starts afresh.
-    let mut editing = None;
+    // The CRT on screen and the source it shows, which interactive previews of that source run
+    // on. A settled preview, or another source, starts it afresh.
+    let mut editing: Option<(Arc<RgbaImage>, Sequence)> = None;
     let mut backlog = VecDeque::new();
     loop {
         // Collect everything waiting, waiting only when there is nothing to do.
@@ -582,10 +607,14 @@ async fn preview_lane(
                 config,
             } => {
                 let started = Instant::now();
-                if kind == Kind::Settled {
-                    editing = None;
+                let runs_on = kind == Kind::Interactive
+                    && editing
+                        .as_ref()
+                        .is_some_and(|(shown, _)| Arc::ptr_eq(shown, &input));
+                if !runs_on {
+                    editing = Some((input.clone(), Sequence::editing()));
                 }
-                let sequence = editing.get_or_insert_with(Sequence::editing);
+                let (_, sequence) = editing.as_mut().expect("made above");
                 let result = preview(&mut graphics, sequence, &input, &config)
                     .await
                     .map(|image| Previewed {
@@ -674,11 +703,10 @@ async fn work_lane(ctx: egui::Context, gpu: Gpu, jobs: Inbox<Job>, events: mpsc:
             Job::Shutdown => break,
             Job::Playback {
                 video,
-                config,
                 options,
                 feed,
             } => {
-                play(&mut graphics, &ctx, &video, &config, &options, &feed).await;
+                play(&mut graphics, &ctx, &video, &options, &feed).await;
                 continue;
             }
             // Loading an image cannot be cancelled.
@@ -1069,15 +1097,16 @@ async fn play(
     graphics: &mut Graphics,
     ctx: &egui::Context,
     video: &Video,
-    config: &Config,
     options: &Options,
     feed: &Feed,
 ) {
     let Feed {
         start,
+        settings,
         frames,
         cancel,
     } = feed;
+    let config = || settings.get();
     let played = graphics
         .guard("Playback graphics driver failed", async |g| {
             let renderer = g.renderer(|| {}).await?;
@@ -1561,7 +1590,7 @@ mod tests {
         stop(worker);
     }
 
-    /// Interactive previews run the CRT on screen on, through a change of output size; a
+    /// Interactive previews run the CRT on screen on, until another source or output size; a
     /// settled preview is the still an export of the same settings renders.
     #[test]
     #[ignore = "requires a Vulkan adapter"]
@@ -1583,7 +1612,7 @@ mod tests {
         let still =
             |c: &Config| pollster::block_on(renderer.still(&input, c, None, |_| {})).unwrap();
         for (runtime, worker, next) in workers() {
-            let preview = |revision, kind, config: &Config| {
+            let preview_of = |input: &Arc<RgbaImage>, revision, kind, config: &Config| {
                 worker
                     .jobs
                     .preview(PreviewJob::Preview {
@@ -1605,6 +1634,8 @@ mod tests {
                     _ => panic!("{runtime}: expected preview {revision}"),
                 }
             };
+            let preview =
+                |revision, kind, config: &Config| preview_of(&input, revision, kind, config);
             assert_eq!(
                 preview(1, Kind::Interactive, &config),
                 still(&config),
@@ -1614,6 +1645,12 @@ mod tests {
                 preview(2, Kind::Interactive, &grey),
                 still(&grey),
                 "{runtime}: an edit runs on over the glow before it"
+            );
+            let reopened = Arc::new((*input).clone());
+            assert_eq!(
+                preview_of(&reopened, 3, Kind::Interactive, &grey),
+                still(&grey),
+                "{runtime}: another source starts afresh, without the glow of the last"
             );
             assert_eq!(
                 preview(3, Kind::Interactive, &wide).dimensions(),

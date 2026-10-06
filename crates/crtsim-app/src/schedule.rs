@@ -150,6 +150,12 @@ impl Schedule {
         self.shown == Some(self.revision)
     }
 
+    /// Whether the picture on screen shows the current revision as it settled, with nothing
+    /// more to render.
+    pub fn is_settled(&self) -> bool {
+        self.is_current() && self.pending.is_none() && self.rendering.is_none()
+    }
+
     pub fn rendering(&self) -> bool {
         self.rendering.is_some()
     }
@@ -253,7 +259,10 @@ mod tests {
         );
         let settled = schedule.take(Kind::Settled).unwrap();
         assert_eq!(settled, second);
+        assert!(!schedule.is_settled(), "on screen, but not as it settled");
         assert!(schedule.returned(settled));
+        schedule.show(settled);
+        assert!(schedule.is_settled());
         assert_eq!(schedule.due(start + SETTLE * 4, false), Due::Nothing);
     }
 

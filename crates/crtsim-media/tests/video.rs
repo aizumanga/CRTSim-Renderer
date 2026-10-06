@@ -374,10 +374,16 @@ fn video_gpu_sequence_export() {
         pollster::block_on(renderer.still(&frame, &screen_config, None, |_| {})).unwrap()
     );
     let mut times = vec![];
+    let screen_config = std::sync::Arc::new(screen_config);
+    // Read for every frame rendered, the warm-up's included, so edits reach the next one.
+    let reads = std::cell::Cell::new(0);
     crtsim_media::playback(
         &info,
         0.15,
-        &screen_config,
+        || {
+            reads.set(reads.get() + 1);
+            screen_config.clone()
+        },
         &Options::default(),
         &renderer,
         &cancel,
@@ -390,12 +396,16 @@ fn video_gpu_sequence_export() {
     )
     .unwrap();
     assert!(!times.is_empty());
+    assert!(
+        reads.get() > times.len(),
+        "once a frame, from the warm-up on"
+    );
     assert!(times[0] >= 0.15);
     assert!(times.windows(2).all(|p| p[0] < p[1]));
     assert!(crtsim_media::playback(
         &info,
         0.,
-        &screen_config,
+        || screen_config.clone(),
         &Options::default(),
         &renderer,
         &cancel,

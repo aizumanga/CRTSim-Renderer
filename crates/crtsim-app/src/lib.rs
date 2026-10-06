@@ -371,7 +371,7 @@ impl App {
     }
 
     fn changed(&mut self) {
-        self.stop_playback();
+        self.retune_playback();
         self.schedule.changed(Change::Edit, Instant::now());
     }
     fn replace_config(&mut self, config: Config) {

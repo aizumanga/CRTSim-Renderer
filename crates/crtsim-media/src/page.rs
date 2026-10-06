@@ -138,7 +138,9 @@ fn planned(video: &Video, request: &Request) -> Result<Decoded> {
 
 /// Plays `video` from `start` seconds: each frame rendered on `renderer` at the playback rate,
 /// with a short warm-up before `start` so the CRT's history is already running, and handed to
-/// `shown` with its time and source. `shown` sets the pace by awaiting room for the frame.
+/// `shown` with its time and source. `shown` sets the pace by awaiting room for the frame. Each
+/// frame renders with the settings `config` gives as it starts, so edits made while playing
+/// show on the frames rendered after them.
 #[expect(
     clippy::too_many_arguments,
     reason = "each is one part the host supplies"
@@ -146,7 +148,7 @@ fn planned(video: &Video, request: &Request) -> Result<Decoded> {
 pub async fn playback<S: FrameSource>(
     video: &Video,
     start: f64,
-    config: &Config,
+    config: impl Fn() -> std::sync::Arc<Config>,
     options: &Options,
     renderer: &Renderer,
     mut open: impl AsyncFnMut(&Span) -> Result<S>,
@@ -166,7 +168,7 @@ pub async fn playback<S: FrameSource>(
     while let Some(input) = source.next().await? {
         check_cancel(cancel)?;
         renderer
-            .frame(&mut sequence, &input, config, Some(cancel), |_| {})
+            .frame(&mut sequence, &input, &config(), Some(cancel), |_| {})
             .await?;
         let crt = renderer.read(&mut sequence).await?;
         let time = preroll + index as f64 / rate.fps;

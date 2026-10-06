@@ -106,7 +106,9 @@ already exists; after confirmation, the app writes a complete temporary file and
 
 The original-image display is limited to a 2048-pixel thumbnail; export always uses the loaded source.
 While a control is being changed, each preview runs the CRT on screen on with the new settings, so the
-glow of the old ones fades over a few frames; the exact still follows once the change settles. Video playback streams frames with persistent CRT history and a short buffer.
+glow of the old ones fades over a few frames; the exact still follows once the change settles. Video playback streams frames with persistent CRT history and a short buffer, and keeps
+playing while you edit: the new settings show once the few frames already buffered have played. A change of
+signal or preview size, or of colour mode, plays on again from the frame on screen.
 The CRT mask can look different at different preview sizes; exports retain the requested resolution.
 Recovery does not overwrite explicitly saved presets or project files.
 

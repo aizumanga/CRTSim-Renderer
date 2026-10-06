@@ -10,9 +10,9 @@ resolution from the settings captured when it was asked for.
 for at once rather than once the edit settles. It runs the CRT already on screen on for a couple
 of ticks with the settings as they are now (an **editing sequence**, `Sequence::editing`), the way
 a game's picture follows its options menu, so the glow of the settings before fades over a few
-previews. One that comes back after the edit has moved on is still shown, being closer to it
-than the picture on screen. Once the edit settles, a **settled preview** renders it exactly, as
-a still.
+previews; another source starts it afresh. One that comes back after the edit has moved on is
+still shown, being closer to it than the picture on screen. Once the edit settles, a **settled
+preview** renders it exactly, as a still.
 
 **Sequence**: frames rendered one after another that share the CRT's history, so the glow of
 one frame persists into the next. A video is a sequence with a timing and a frame rate. An
@@ -62,7 +62,9 @@ controls have picked to go to, and the time playing starts from
 
 **Playback**: playing a video in the preview (`crates/crtsim-app/src/playback.rs`). The
 worker renders frames ahead into a small buffer, and each is shown when its time comes. Frames
-already overdue are skipped rather than shown late.
+already overdue are skipped rather than shown late. Settings edited while it plays reach the
+frames rendered next, once the few already buffered have played; one that needs a new
+sequence, such as another output size, plays again from the frame on screen.
 
 **Preroll**: the frames playback waits for before its clock starts: three, or all the buffer
 holds when large frames make it smaller. When the renderer falls behind, the clock stops and

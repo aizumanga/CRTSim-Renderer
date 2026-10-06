@@ -186,11 +186,13 @@ fn decode_one(
 }
 
 /// Stream a CFR preview, retaining a short history before the requested media time.
-/// The callback provides backpressure; cancellation also interrupts decoder reads.
+/// The callback provides backpressure; cancellation also interrupts decoder reads. Each frame
+/// renders with the settings `config` gives as it starts, so edits made while playing show on
+/// the frames rendered after them.
 pub fn playback(
     video: &Video,
     start: f64,
-    config: &Config,
+    config: impl Fn() -> Arc<Config>,
     options: &Options,
     renderer: &Renderer,
     cancel: &Arc<AtomicBool>,
@@ -218,7 +220,7 @@ pub fn playback(
         output
             .read_exact(&mut bytes[1..])
             .context("Truncated playback frame")?;
-        let rendered = render_frame(renderer, &mut sequence, &input, config, cancel)?;
+        let rendered = render_frame(renderer, &mut sequence, &input, &config(), cancel)?;
         let time = preroll + index as f64 / rate.fps;
         index += 1;
         if time + 0.00001 >= start {
