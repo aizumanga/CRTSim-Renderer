@@ -4,10 +4,12 @@ from functools import lru_cache
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-S = sys.argv[1]
-OUT = sys.argv[2]
-LIMIT = int(sys.argv[3]) if len(sys.argv) > 3 else None   # render only some frames (preview)
-STILLS = sys.argv[4:] if len(sys.argv) > 4 else None       # frame numbers to save as PNG instead
+# reel.py imports the helpers below, so arguments are only read when run as a script.
+MAIN = __name__ == "__main__"
+S = sys.argv[1] if MAIN else None
+OUT = sys.argv[2] if MAIN else None
+LIMIT = int(sys.argv[3]) if MAIN and len(sys.argv) > 3 else None   # render only some frames (preview)
+STILLS = sys.argv[4:] if MAIN and len(sys.argv) > 4 else None       # frame numbers to save as PNG instead
 R = f"{S}/renders"
 W, H, FPS, TOTAL = 1080, 1920, 30, 1020
 BOX = (0, 590, 1080, 810)   # x, y, w, h of the CRT picture
@@ -292,20 +294,23 @@ def render(f):
         arr = (arr * max(0, 1 - (f - 1012) / 7)).astype(np.uint8)
     return arr
 
-frames = range(TOTAL if LIMIT is None else LIMIT)
-if STILLS:
-    for s in STILLS:
-        Image.fromarray(render(int(s))).save(f"{OUT}_{int(s):04}.png")
-    sys.exit()
-cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24",
-       "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-", "-i", f"{S}/music.wav",
-       "-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-preset", "slow", "-crf", "17",
-       "-pix_fmt", "yuv420p", "-profile:v", "high", "-level", "4.2",
-       "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709",
-       "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", OUT]
-p = subprocess.Popen(cmd, stdin=subprocess.PIPE)
-for f in frames:
-    p.stdin.write(render(f).tobytes())
-    if f % 60 == 0: print("frame", f, flush=True)
-p.stdin.close(); p.wait()
-print("done", p.returncode)
+def main():
+    if STILLS:
+        for s in STILLS:
+            Image.fromarray(render(int(s))).save(f"{OUT}_{int(s):04}.png")
+        return
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24",
+           "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-", "-i", f"{S}/music.wav",
+           "-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-preset", "slow", "-crf", "17",
+           "-pix_fmt", "yuv420p", "-profile:v", "high", "-level", "4.2",
+           "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709",
+           "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", OUT]
+    p = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    for f in range(TOTAL if LIMIT is None else LIMIT):
+        p.stdin.write(render(f).tobytes())
+        if f % 60 == 0: print("frame", f, flush=True)
+    p.stdin.close(); p.wait()
+    print("done", p.returncode)
+
+if MAIN:
+    main()
