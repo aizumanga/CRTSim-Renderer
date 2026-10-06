@@ -11,20 +11,19 @@ impl App {
                     self.lane.finished();
                     match result {
                         Ok(imported) => {
-                            self.presets.name = file_stem(&imported.path);
-                            self.replace_config(imported.config);
-                            if let Some(options) = imported.options {
-                                self.video_options = options;
-                            }
-                            self.status =
-                                format!("Imported preset from {}", imported.path.display());
-                            self.error = None;
+                            let name = file_name(&imported.path);
+                            let brought = incoming::Brought::imported(
+                                imported.config,
+                                imported.options,
+                                &name,
+                            );
+                            self.bring_in(Ok(brought));
                         }
                         Err(Failure::Cancelled) => {
                             self.status = "Preset import cancelled".into();
                         }
                         Err(Failure::Failed(e)) => {
-                            self.error = Some(format!("Cannot import preset: {e:#}"))
+                            self.bring_in(Err(format!("Cannot import preset: {e:#}")))
                         }
                     }
                 }

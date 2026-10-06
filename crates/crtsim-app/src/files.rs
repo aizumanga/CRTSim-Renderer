@@ -2,7 +2,7 @@ use anyhow::{ensure, Context, Result};
 use crtsim_core::config::Config;
 use image::{DynamicImage, ImageOutputFormat, RgbaImage};
 use std::{
-    io::{Cursor, Read, Write},
+    io::{Cursor, Write},
     path::Path,
 };
 
@@ -15,14 +15,6 @@ pub fn media_extensions() -> Vec<&'static str> {
         crtsim_media::VIDEO_EXTENSIONS,
     ]
     .concat()
-}
-
-pub fn load_preset(path: &Path, input: (u32, u32)) -> Result<Config> {
-    ensure!(
-        path.metadata()?.len() <= 32 * 1024 * 1024,
-        "Preset exceeds 32 MB"
-    );
-    preset_from_json(&std::fs::read(path)?, input)
 }
 
 /// A preset from its JSON, checked against a source of size `input`.
@@ -73,18 +65,6 @@ pub fn png_bytes(image: RgbaImage, preset: Option<&Config>) -> Result<Vec<u8>> {
         add_text_chunk(&mut bytes, PRESET_KEYWORD, &json)?;
     }
     Ok(bytes)
-}
-
-/// Read the embedded settings from a PNG produced by this application.
-pub fn load_preset_from_image(path: &Path, input: (u32, u32)) -> Result<Config> {
-    let file = std::fs::File::open(path).context("Cannot read image file")?;
-    ensure!(
-        file.metadata()?.len() <= 512 * 1024 * 1024,
-        "Image file exceeds 512 MB"
-    );
-    let mut bytes = Vec::new();
-    file.take(512 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
-    preset_from_png(&bytes, input)
 }
 
 /// The settings a PNG this application made carries, checked against a source of size `input`.
@@ -316,12 +296,18 @@ mod tests {
         assert_eq!(c.lut.as_ref().unwrap().size, 64);
         let path = dir.path().join("nes-preset.json");
         save_preset(&path, &c).unwrap();
-        assert_eq!(load_preset(&path, (1, 1)).unwrap(), c);
+        assert_eq!(
+            preset_from_json(&std::fs::read(&path).unwrap(), (1, 1)).unwrap(),
+            c
+        );
         let png = dir.path().join("nes-image.png");
         let source = RgbaImage::from_pixel(1, 1, image::Rgba([32, 64, 128, 255]));
         save_png(&png, source.clone(), Some(&c)).unwrap();
         assert_eq!(crtsim_core::input::load_image(&png).unwrap(), source);
-        assert_eq!(load_preset_from_image(&png, (1, 1)).unwrap(), c);
+        assert_eq!(
+            preset_from_png(&std::fs::read(&png).unwrap(), (1, 1)).unwrap(),
+            c
+        );
     }
 
     #[test]
@@ -330,14 +316,23 @@ mod tests {
         let path = dir.path().join("preset.json");
         let c = Config::general();
         save_preset(&path, &c).unwrap();
-        assert_eq!(load_preset(&path, (1216, 832)).unwrap(), c);
+        assert_eq!(
+            preset_from_json(&std::fs::read(&path).unwrap(), (1216, 832)).unwrap(),
+            c
+        );
         save_preset(&path, &Config::default()).unwrap();
-        assert_eq!(load_preset(&path, (1216, 832)).unwrap(), Config::default());
+        assert_eq!(
+            preset_from_json(&std::fs::read(&path).unwrap(), (1216, 832)).unwrap(),
+            Config::default()
+        );
         let png = dir.path().join("image.png");
         let src = crtsim_core::config::test_card();
         save_png(&png, src.clone(), Some(&c)).unwrap();
         assert_eq!(crtsim_core::input::load_image(&png).unwrap(), src);
-        assert_eq!(load_preset_from_image(&png, (1216, 832)).unwrap(), c);
+        assert_eq!(
+            preset_from_png(&std::fs::read(&png).unwrap(), (1216, 832)).unwrap(),
+            c
+        );
         let mut damaged = std::fs::read(&png).unwrap();
         let index = damaged
             .windows(PRESET_KEYWORD.len())
@@ -346,7 +341,7 @@ mod tests {
         damaged[index + PRESET_KEYWORD.len() + 2] ^= 1;
         assert!(find_text_chunk(&damaged, PRESET_KEYWORD).is_none());
         save_png(&png, RgbaImage::new(1, 1), None).unwrap();
-        assert!(load_preset_from_image(&png, (1, 1)).is_err());
+        assert!(preset_from_png(&std::fs::read(&png).unwrap(), (1, 1)).is_err());
         let original = std::fs::read(&png).unwrap();
         assert!(save_atomic(&png, |f| {
             f.write_all(b"incomplete")?;

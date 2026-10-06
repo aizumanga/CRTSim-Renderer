@@ -101,6 +101,10 @@ project's source that is missing or could not be opened, with the test card in i
 video's comes with its timeline. A project opens its source first and is held until that has
 loaded; then its settings and queue apply, whether the source opened or not.
 
+**Incoming file**: a file picked or dropped for a LUT or a preset, read the same way whether it
+came as a path on the desktop or as a browser's name and bytes, with one size limit for each
+kind, and applied in one place (`crates/crtsim-app/src/incoming.rs`).
+
 **Project**: a source, its settings and the batch queue, saved as a `.crtsim` file to pick up
 later (`crates/crtsim-app/src/project.rs`).
 

@@ -892,24 +892,13 @@ fn import_preset(
     input: (u32, u32),
     cancel: &Arc<AtomicBool>,
 ) -> Result<ImportedPreset> {
-    if path
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("png"))
-    {
-        let config = files::load_preset_from_image(&path, input)?;
-        Ok(ImportedPreset {
-            path,
-            config,
-            options: None,
-        })
-    } else {
-        let preset = crtsim_media::import_preset(&path, input, cancel)?;
-        Ok(ImportedPreset {
-            path,
-            config: preset.config,
-            options: Some(preset.video_options),
-        })
-    }
+    let file = crate::incoming::File::Path(path.clone());
+    let (config, options) = crate::incoming::imported(&file, input, cancel)?;
+    Ok(ImportedPreset {
+        path,
+        config,
+        options,
+    })
 }
 
 /// A render's progress in the words the status bar shows.

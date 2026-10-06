@@ -194,27 +194,7 @@ impl App {
         match kind {
             Dialog::OpenProject => self.open_project(path),
             Dialog::SaveProject => self.save_project_file(path),
-            Dialog::Lut => {
-                let result = (|| -> anyhow::Result<_> {
-                    anyhow::ensure!(
-                        path.metadata()?.len() <= 16 * 1024 * 1024,
-                        "LUT exceeds 16 MB"
-                    );
-                    crtsim_core::workflow::Lut::parse_cube(
-                        file_name(&path),
-                        &std::fs::read_to_string(&path)?,
-                    )
-                })();
-                match result {
-                    Ok(lut) => {
-                        let mut c = self.config.clone();
-                        c.set_lut(Some(Arc::new(lut)));
-                        self.replace_config(c);
-                        self.status = "LUT imported".into();
-                    }
-                    Err(e) => self.error = Some(format!("Cannot import LUT: {e:#}")),
-                }
-            }
+            Dialog::Lut => self.bring_file(incoming::Purpose::Lut, incoming::File::Path(path)),
             Dialog::File => self.load(path),
             Dialog::ExportVideo => self.export_video(path),
             Dialog::ImportPreset => {
@@ -225,16 +205,9 @@ impl App {
                 };
                 self.start(job, "Reading preset metadata…".into());
             }
-            Dialog::LoadPreset => match files::load_preset(&path, self.source.input().dimensions())
-            {
-                Ok(c) => {
-                    self.presets.name = file_stem(&path);
-                    self.replace_config(c);
-                    self.status = format!("Loaded preset {}", path.display());
-                    self.error = None;
-                }
-                Err(e) => self.error = Some(format!("Cannot load preset: {e:#}")),
-            },
+            Dialog::LoadPreset => {
+                self.bring_file(incoming::Purpose::LoadPreset, incoming::File::Path(path));
+            }
             Dialog::SavePreset => {
                 match self
                     .config
@@ -369,7 +342,6 @@ impl App {
 
     /// Applies a file the browser handed over.
     fn picked(&mut self, kind: Dialog, name: String, bytes: Vec<u8>) {
-        let input = self.source.input().dimensions();
         match kind {
             Dialog::File => {
                 // Videos and animations open with their frames; the worker tells them apart.
@@ -377,33 +349,13 @@ impl App {
                 let opening = self.source.open_bytes(name, bytes);
                 self.start_opening(opening, status);
             }
-            Dialog::Lut => {
-                let lut = String::from_utf8(bytes)
-                    .map_err(anyhow::Error::from)
-                    .and_then(|text| crtsim_core::workflow::Lut::parse_cube(name, &text));
-                match lut {
-                    Ok(lut) => {
-                        let mut c = self.config.clone();
-                        c.set_lut(Some(Arc::new(lut)));
-                        self.replace_config(c);
-                        self.status = "LUT imported".into();
-                    }
-                    Err(e) => self.error = Some(format!("Cannot import LUT: {e:#}")),
-                }
-            }
-            Dialog::LoadPreset | Dialog::ImportPreset => {
-                match preset_in(kind, &name, &bytes, input) {
-                    Ok((c, options)) => {
-                        self.presets.name = file_stem(Path::new(&name));
-                        self.replace_config(c);
-                        if let Some(options) = options {
-                            self.video_options = options;
-                        }
-                        self.status = format!("Loaded preset {name}");
-                        self.error = None;
-                    }
-                    Err(e) => self.error = Some(format!("Cannot load preset: {e:#}")),
-                }
+            Dialog::Lut | Dialog::LoadPreset | Dialog::ImportPreset => {
+                let purpose = match kind {
+                    Dialog::Lut => incoming::Purpose::Lut,
+                    Dialog::LoadPreset => incoming::Purpose::LoadPreset,
+                    _ => incoming::Purpose::ImportPreset,
+                };
+                self.bring_file(purpose, incoming::File::Bytes { name, bytes });
             }
             _ => {}
         }
@@ -415,69 +367,29 @@ impl App {
     }
 }
 
-/// The preset in the file called `name` that was picked to load or import one: a JSON
-/// preset, or the one a rendered PNG or video holds. A video's also holds the video export
-/// settings it was made with.
-#[cfg_attr(
-    all(not(test), not(target_arch = "wasm32")),
-    expect(dead_code, reason = "the desktop imports presets from files by path")
-)]
-fn preset_in(
-    kind: Dialog,
-    name: &str,
-    bytes: &[u8],
-    input: (u32, u32),
-) -> anyhow::Result<(Config, Option<crtsim_media::Options>)> {
-    let path = Path::new(name);
-    match kind {
-        Dialog::LoadPreset => files::preset_from_json(bytes, input).map(|c| (c, None)),
-        _ if crtsim_media::MediaKind::of(path) == crtsim_media::MediaKind::Video => {
-            let preset = crtsim_media::import_preset_from_bytes(path, bytes, input)?;
-            Ok((preset.config, Some(preset.video_options)))
-        }
-        _ => files::preset_from_png(bytes, input).map(|c| (c, None)),
+impl App {
+    /// Brings in `file` for `purpose`, whichever way it came.
+    fn bring_file(&mut self, purpose: incoming::Purpose, file: incoming::File) {
+        let input = self.source.input().dimensions();
+        let brought = incoming::bring(purpose, &file, &self.config, input);
+        self.bring_in(brought);
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crtsim_media::mux;
-
-    /// A video's preset, picked as a browser hands it over, brings its settings and its video
-    /// export settings.
-    #[test]
-    fn a_preset_imports_from_a_picked_video() {
-        let config = Config {
-            bloom: 0.5,
-            ..Config::general()
-        };
-        let options = crtsim_media::Options {
-            audio: crtsim_media::Audio::Mute,
-            ..Default::default()
-        };
-        let preset = serde_json::json!({"version": 1, "config": config, "video_options": options});
-        let video = mux::EncodedVideo {
-            codec: "vp09.00.10.08".into(),
-            description: None,
-            size: (2, 2),
-            packets: vec![mux::Packet {
-                data: vec![0; 4],
-                time: 0.,
-                duration: 0.04,
-                key: true,
-            }],
-        };
-        let comment = format!("CRTSim-Renderer-Preset:{preset}");
-        let file = mux::write(crtsim_media::Container::Webm, &video, None, Some(&comment));
-        let file = file.unwrap();
-        let (imported, options) =
-            preset_in(Dialog::ImportPreset, "made.webm", &file, (256, 224)).unwrap();
-        assert_eq!(imported, config);
-        assert_eq!(options.unwrap().audio, crtsim_media::Audio::Mute);
-        // A video without one says so.
-        let plain = mux::write(crtsim_media::Container::Webm, &video, None, None).unwrap();
-        let error = preset_in(Dialog::ImportPreset, "plain.webm", &plain, (256, 224));
-        assert!(error.unwrap_err().to_string().contains("does not contain"));
+    /// Applies what a file brought, or says why it brought nothing.
+    pub(crate) fn bring_in(&mut self, brought: Result<incoming::Brought, String>) {
+        match brought {
+            Ok(brought) => {
+                if let Some(name) = brought.preset_name {
+                    self.presets.name = name;
+                }
+                self.replace_config(brought.config);
+                if let Some(options) = brought.options {
+                    self.video_options = options;
+                }
+                self.status = brought.status;
+                self.error = None;
+            }
+            Err(error) => self.error = Some(error),
+        }
     }
 }

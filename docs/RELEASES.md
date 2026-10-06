@@ -12,6 +12,9 @@
   comment, so either app imports it. The web app's **Import preset from Image/Video…** now reads
   a preset from an MP4 or WebM as well as a PNG.
 - On the desktop, an animation opened from a browser's bytes exports as a video too.
+- LUTs and presets are read the same way in both apps: the web app now refuses a LUT over 16 MB as
+  the desktop does, and both say "Loaded preset", "Imported preset from" and "Cannot import
+  preset" with the file's name.
 - A project or recovered session whose source cannot be opened, or whose opening is cancelled,
   still restores its settings and export queue, as one whose source is missing already did; they
   were dropped before. The source panel names a missing or unopened source and says to relink it
