@@ -1,4 +1,4 @@
-use crate::{file_name, files, timeline::Timeline};
+use crate::{file_name, files, schedule::Kind, timeline::Timeline};
 use anyhow::{ensure, Result};
 use crtsim_core::{config::Config, nes_luts, RenderProgress, Renderer, Sequence, Stage};
 use crtsim_media::{Options, Progress, Video};
@@ -253,6 +253,7 @@ pub struct Worker {
 pub enum PreviewJob {
     Preview {
         revision: u64,
+        kind: Kind,
         input: Arc<RgbaImage>,
         config: Box<Config>,
     },
@@ -268,6 +269,10 @@ pub enum PreviewJob {
 }
 
 /// Work for the other thread: loading, exports and playback, one at a time.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a job is sent once for something the user asked for, so its size costs nothing"
+)]
 pub enum Job {
     Load(PathBuf),
     /// An image handed over by name and contents, as a browser gives a file picked or dropped.
@@ -299,7 +304,6 @@ pub enum Job {
     },
     Playback {
         video: Video,
-        config: Config,
         options: Options,
         feed: Feed,
     },
@@ -399,7 +403,12 @@ impl Export {
 /// Which gallery entry a thumbnail belongs to.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ThumbnailKey {
-    Preset(String),
+    /// A preset by name, included or personal. Personal presets saved before included names
+    /// were refused can share one with an included preset, and each keeps its own picture.
+    Preset {
+        name: String,
+        personal: bool,
+    },
     Lut(usize),
 }
 /// What a thumbnail shows.
@@ -415,12 +424,33 @@ pub struct PlaybackFrame {
     pub source: RgbaImage,
     pub crt: RgbaImage,
 }
-/// The worker's end of a playback: where in the video to start, where to send the frames it
-/// renders, and the flag that says to stop.
+/// The worker's end of a playback: where in the video to start, the settings to render with,
+/// where to send the frames it renders, and the flag that says to stop.
 pub struct Feed {
     pub start: f64,
+    pub settings: PlayingSettings,
     pub frames: mpsc::SyncSender<Result<PlaybackFrame, String>>,
     pub cancel: Arc<AtomicBool>,
+}
+
+/// The settings a video playing renders with, shared between the interface, which replaces
+/// them as they are edited, and the worker, which takes them as it starts each frame.
+#[derive(Clone)]
+pub struct PlayingSettings(Arc<Mutex<Arc<Config>>>);
+
+impl PlayingSettings {
+    pub fn new(config: Config) -> Self {
+        Self(Arc::new(Mutex::new(Arc::new(config))))
+    }
+
+    /// The settings the next frame starts with.
+    pub fn get(&self) -> Arc<Config> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    pub fn set(&self, config: Config) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Arc::new(config);
+    }
 }
 /// A finished preview. A renderer on its own device cannot hand its textures to the
 /// interface, so it still sends pixels.
@@ -557,6 +587,9 @@ async fn preview_lane(
     events: mpsc::Sender<Event>,
 ) {
     let mut graphics = Graphics::new(gpu);
+    // The CRT on screen and the source it shows, which interactive previews of that source run
+    // on. A settled preview, or another source, starts it afresh.
+    let mut editing: Option<(Arc<RgbaImage>, Sequence)> = None;
     let mut backlog = VecDeque::new();
     loop {
         // Collect everything waiting, waiting only when there is nothing to do.
@@ -574,16 +607,29 @@ async fn preview_lane(
             PreviewJob::Shutdown => return,
             PreviewJob::Preview {
                 revision,
+                kind,
                 input,
                 config,
             } => {
                 let started = Instant::now();
-                let result = preview(&mut graphics, &input, &config)
+                let runs_on = kind == Kind::Interactive
+                    && editing
+                        .as_ref()
+                        .is_some_and(|(shown, _)| Arc::ptr_eq(shown, &input));
+                if !runs_on {
+                    editing = Some((input.clone(), Sequence::editing()));
+                }
+                let (_, sequence) = editing.as_mut().expect("made above");
+                let result = preview(&mut graphics, sequence, &input, &config)
                     .await
                     .map(|image| Previewed {
                         image,
                         seconds: started.elapsed().as_secs_f32(),
                     });
+                // A failed render may have lost its renderer, which the sequence belongs to.
+                if result.is_err() {
+                    editing = None;
+                }
                 Event::Preview { revision, result }
             }
             PreviewJob::Thumbnail {
@@ -662,11 +708,10 @@ async fn work_lane(ctx: egui::Context, gpu: Gpu, jobs: Inbox<Job>, events: mpsc:
             Job::Shutdown => break,
             Job::Playback {
                 video,
-                config,
                 options,
                 feed,
             } => {
-                play(&mut graphics, &ctx, &video, &config, &options, &feed).await;
+                play(&mut graphics, &ctx, &video, &options, &feed).await;
                 continue;
             }
             // Loading an image cannot be cancelled.
@@ -867,22 +912,26 @@ async fn still(
         .await
 }
 
-/// A frame for the screen. On the interface's own device it is left there; otherwise it is
-/// read back, which is what the interface then has to upload again.
-async fn preview(graphics: &mut Graphics, input: &RgbaImage, c: &Config) -> Result<Preview> {
+/// `sequence`'s next frame, for the screen. On the interface's own device it is left there;
+/// otherwise it is read back, which is what the interface then has to upload again.
+async fn preview(
+    graphics: &mut Graphics,
+    sequence: &mut Sequence,
+    input: &RgbaImage,
+    c: &Config,
+) -> Result<Preview> {
     graphics
         .guard(
             "Graphics device failed while rendering the preview",
             async |g| {
-                if g.gpu.render_state().is_none() {
-                    return still(g, input, c, None, |_| {}).await.map(Preview::Pixels);
-                }
+                let shared = g.gpu.render_state().is_some();
                 let renderer = g.renderer(|| {}).await?;
-                let mut sequence = Sequence::still();
-                renderer
-                    .frame(&mut sequence, input, c, None, |_| {})
-                    .await?;
-                renderer.show(&sequence).map(Preview::Frame)
+                renderer.frame(sequence, input, c, None, |_| {}).await?;
+                if shared {
+                    renderer.show(sequence).map(Preview::Frame)
+                } else {
+                    renderer.read(sequence).await.map(Preview::Pixels)
+                }
             },
         )
         .await
@@ -1053,15 +1102,16 @@ async fn play(
     graphics: &mut Graphics,
     ctx: &egui::Context,
     video: &Video,
-    config: &Config,
     options: &Options,
     feed: &Feed,
 ) {
     let Feed {
         start,
+        settings,
         frames,
         cancel,
     } = feed;
+    let config = || settings.get();
     let played = graphics
         .guard("Playback graphics driver failed", async |g| {
             let renderer = g.renderer(|| {}).await?;
@@ -1172,6 +1222,7 @@ mod tests {
             thumbnail(1, 1),
             PreviewJob::Preview {
                 revision: 3,
+                kind: Kind::Settled,
                 input: Arc::new(RgbaImage::new(1, 1)),
                 config: Box::default(),
             },
@@ -1544,6 +1595,82 @@ mod tests {
         stop(worker);
     }
 
+    /// Interactive previews run the CRT on screen on, until another source or output size; a
+    /// settled preview is the still an export of the same settings renders.
+    #[test]
+    #[ignore = "requires a Vulkan adapter"]
+    fn interactive_previews_run_on_and_a_settled_one_is_a_still() {
+        let renderer = pollster::block_on(Renderer::new(wgpu::Backends::VULKAN)).unwrap();
+        let input = Arc::new(crtsim_core::config::test_card());
+        let config = Config {
+            output: "320x240".into(),
+            ..Config::default()
+        };
+        let grey = Config {
+            chroma: 0.,
+            ..config.clone()
+        };
+        let wide = Config {
+            output: "400x240".into(),
+            ..grey.clone()
+        };
+        let still =
+            |c: &Config| pollster::block_on(renderer.still(&input, c, None, |_| {})).unwrap();
+        for (runtime, worker, next) in workers() {
+            let preview_of = |input: &Arc<RgbaImage>, revision, kind, config: &Config| {
+                worker
+                    .jobs
+                    .preview(PreviewJob::Preview {
+                        revision,
+                        kind,
+                        input: input.clone(),
+                        config: Box::new(config.clone()),
+                    })
+                    .unwrap();
+                match next(&worker) {
+                    Event::Preview {
+                        revision: back,
+                        result:
+                            Ok(Previewed {
+                                image: Preview::Pixels(image),
+                                ..
+                            }),
+                    } if back == revision => image,
+                    _ => panic!("{runtime}: expected preview {revision}"),
+                }
+            };
+            let preview =
+                |revision, kind, config: &Config| preview_of(&input, revision, kind, config);
+            assert_eq!(
+                preview(1, Kind::Interactive, &config),
+                still(&config),
+                "{runtime}: the first is a still"
+            );
+            assert_ne!(
+                preview(2, Kind::Interactive, &grey),
+                still(&grey),
+                "{runtime}: an edit runs on over the glow before it"
+            );
+            let reopened = Arc::new((*input).clone());
+            assert_eq!(
+                preview_of(&reopened, 3, Kind::Interactive, &grey),
+                still(&grey),
+                "{runtime}: another source starts afresh, without the glow of the last"
+            );
+            assert_eq!(
+                preview(3, Kind::Interactive, &wide).dimensions(),
+                (400, 240),
+                "{runtime}: a new size starts again"
+            );
+            assert_eq!(
+                preview(4, Kind::Settled, &wide),
+                still(&wide),
+                "{runtime}: settled"
+            );
+            stop(worker);
+        }
+    }
+
     /// The point of the second lane: a preview finishes while an export is still running,
     /// where it used to wait in the queue behind all of it. On threads the lanes run at once;
     /// as tasks on one thread they take turns between the export's batches.
@@ -1575,6 +1702,7 @@ mod tests {
                 .jobs
                 .preview(PreviewJob::Preview {
                     revision: 7,
+                    kind: Kind::Settled,
                     input,
                     config: Box::new(Config {
                         output: "320x180".into(),

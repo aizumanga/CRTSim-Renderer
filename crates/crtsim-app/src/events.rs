@@ -64,7 +64,7 @@ impl App {
                             let (width, height) = previewed.image.dimensions();
                             let shown = self.displayed(ctx, previewed.image);
                             self.show_preview(shown);
-                            self.schedule.show_current();
+                            self.schedule.show(revision);
                             if !self.work.is_exporting() {
                                 self.status = format!(
                                     "Preview {width} × {height} · {:.2}s",

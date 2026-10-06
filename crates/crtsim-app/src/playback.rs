@@ -1,9 +1,10 @@
 //! Playing a video in the preview. The worker renders frames ahead into a small buffer and each
 //! is shown when its time comes. Playback waits for a few frames before its clock starts, and
-//! waits again whenever the renderer falls behind.
+//! waits again whenever the renderer falls behind. Settings edited while it plays reach the
+//! frames rendered next, as a game's picture follows its options menu.
 use crate::*;
 use std::collections::VecDeque;
-use worker::{Feed, PlaybackFrame};
+use worker::{Feed, PlaybackFrame, PlayingSettings};
 
 /// Frames buffered before the clock starts, or all the buffer holds if that is fewer.
 const PREROLL: usize = 3;
@@ -23,6 +24,10 @@ pub struct Playback {
     frame_duration: f64,
     /// The media time of the frame shown last.
     shown: f64,
+    /// What the worker renders with, which edits replace.
+    settings: PlayingSettings,
+    /// The size of the video's frames.
+    source: (u32, u32),
 }
 
 /// How playing changed.
@@ -49,8 +54,14 @@ pub struct Tick {
 
 impl Playback {
     /// Playback of `video` from `position` in seconds, or from the beginning when that is its
-    /// last frame, with frames rendered at `output` size. Returns it with the worker's end.
-    pub fn new(video: &crtsim_media::Video, position: f64, output: (u32, u32)) -> (Self, Feed) {
+    /// last frame, with frames rendered with `config` at its `output` size. Returns it with the
+    /// worker's end.
+    pub fn new(
+        video: &crtsim_media::Video,
+        position: f64,
+        output: (u32, u32),
+        config: Config,
+    ) -> (Self, Feed) {
         let frame_duration = 1. / video.fps;
         let start = if position >= video.duration - frame_duration {
             0.
@@ -64,6 +75,7 @@ impl Playback {
         let capacity = ((64 * 1024 * 1024) / pair_bytes.max(1)).clamp(1, 4) as usize;
         let (frames, receive) = mpsc::sync_channel(capacity);
         let cancel = Arc::new(AtomicBool::new(false));
+        let settings = PlayingSettings::new(config);
         let playback = Self {
             cancel: cancel.clone(),
             receive,
@@ -73,15 +85,39 @@ impl Playback {
             capacity,
             frame_duration,
             shown: start,
+            settings: settings.clone(),
+            source: video.size,
         };
         (
             playback,
             Feed {
                 start,
+                settings,
                 frames,
                 cancel,
             },
         )
+    }
+
+    /// Renders the frames from the next one on with `config`, unless it needs a CRT of another
+    /// signal size, output size or colour mode than the one playing, which only a new playback
+    /// can start. Whether it was taken. The frames already buffered play as they are, so the
+    /// edit shows within a few frames without the playback stopping to wait for it.
+    pub fn retune(&self, config: Config) -> bool {
+        // What the CRT playing is made for.
+        let made_for = |c: &Config| {
+            (
+                c.signal_size(self.source).ok(),
+                c.output_size(self.source).ok(),
+                c.color_mode,
+            )
+        };
+        let next = made_for(&config);
+        let taken = next.0.is_some() && next.1.is_some() && next == made_for(&self.settings.get());
+        if taken {
+            self.settings.set(config);
+        }
+        taken
     }
 
     /// Takes what the worker has rendered, and moves the clock on to `now`.
@@ -169,16 +205,35 @@ impl App {
             }
         };
         let output = config.output_size(video.size).unwrap_or(video.size);
-        let (playback, feed) = Playback::new(&video, time, output);
+        let (playback, feed) = Playback::new(&video, time, output, config);
         self.playback = Some(playback);
         self.schedule.drop_pending();
         self.status = "Buffering · warming CRT history…".into();
         self.send(Job::Playback {
             video,
-            config,
             options: self.video_options.clone(),
             feed,
         });
+    }
+
+    /// Hands the settings in use to the video playing, if one is, for its next frames. Ones
+    /// it cannot take play from the frame on screen again; ones that cannot be played at all
+    /// pause it, leaving the preview to say why.
+    pub(crate) fn retune_playback(&mut self) {
+        let Some(playback) = &self.playback else {
+            return;
+        };
+        let config = self
+            .config
+            .with_max_output_side(self.input.dimensions(), self.preview_limit);
+        if config.is_ok_and(|config| playback.retune(config)) {
+            return;
+        }
+        let restart = self.config.validate().is_ok();
+        self.stop_playback();
+        if restart {
+            self.start_playback();
+        }
     }
 
     pub(crate) fn tick_playback(&mut self, ctx: &egui::Context) {
@@ -225,6 +280,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crtsim_core::config::ColorMode;
 
     const MS: Duration = Duration::from_millis(1);
 
@@ -263,7 +319,8 @@ mod tests {
 
     #[test]
     fn it_buffers_before_it_starts_and_shows_each_frame_when_it_is_due() {
-        let (mut playback, feed) = Playback::new(&video(10., (4, 4)), 0., (4, 4));
+        let (mut playback, feed) =
+            Playback::new(&video(10., (4, 4)), 0., (4, 4), Config::default());
         let start = Instant::now();
         feed.frames.send(frame(0.)).unwrap();
         let tick = playback.tick(start);
@@ -290,7 +347,8 @@ mod tests {
 
     #[test]
     fn it_waits_when_the_renderer_falls_behind_and_resumes_from_the_next_frame() {
-        let (mut playback, feed) = Playback::new(&video(10., (4, 4)), 0., (4, 4));
+        let (mut playback, feed) =
+            Playback::new(&video(10., (4, 4)), 0., (4, 4), Config::default());
         let start = Instant::now();
         for time in [0., 0.04, 0.08] {
             feed.frames.send(frame(time)).unwrap();
@@ -313,7 +371,8 @@ mod tests {
 
     #[test]
     fn frames_before_an_error_still_play_and_then_it_finishes() {
-        let (mut playback, feed) = Playback::new(&video(10., (4, 4)), 0., (4, 4));
+        let (mut playback, feed) =
+            Playback::new(&video(10., (4, 4)), 0., (4, 4), Config::default());
         let start = Instant::now();
         feed.frames.send(frame(0.)).unwrap();
         feed.frames.send(frame(0.04)).unwrap();
@@ -334,20 +393,102 @@ mod tests {
     #[test]
     fn it_starts_over_from_the_last_frame_and_buffers_less_of_larger_frames() {
         let clip = video(2., (4, 4));
-        assert_eq!(Playback::new(&clip, 1., (4, 4)).1.start, 1.);
-        assert_eq!(Playback::new(&clip, 2. - 1. / 25., (4, 4)).1.start, 0.);
+        assert_eq!(
+            Playback::new(&clip, 1., (4, 4), Config::default()).1.start,
+            1.
+        );
+        assert_eq!(
+            Playback::new(&clip, 2. - 1. / 25., (4, 4), Config::default())
+                .1
+                .start,
+            0.
+        );
         // A 4K source and picture fill the buffer on their own, so one frame starts the clock.
-        let (mut playback, feed) = Playback::new(&video(2., (3840, 2160)), 0., (3840, 2160));
+        let (mut playback, feed) = Playback::new(
+            &video(2., (3840, 2160)),
+            0.,
+            (3840, 2160),
+            Config::default(),
+        );
         feed.frames.send(frame(0.)).unwrap();
         assert_eq!(playback.tick(Instant::now()).status, Some(Status::Playing));
     }
 
     #[test]
     fn stopping_it_stops_the_worker_and_discards_what_it_rendered() {
-        let (playback, feed) = Playback::new(&video(10., (4, 4)), 0., (4, 4));
+        let (playback, feed) = Playback::new(&video(10., (4, 4)), 0., (4, 4), Config::default());
         drop(playback);
         assert!(feed.cancel.load(Ordering::Relaxed));
         assert!(feed.frames.send(frame(0.)).is_err());
+    }
+
+    #[test]
+    fn it_takes_a_new_look_but_not_a_new_size_or_colour_mode() {
+        let config = Config {
+            output: "320x240".into(),
+            ..Config::default()
+        };
+        let (playback, feed) = Playback::new(&video(10., (4, 4)), 0., (320, 240), config.clone());
+        let brighter = Config {
+            bloom: 1.5,
+            ..config.clone()
+        };
+        assert!(playback.retune(brighter.clone()));
+        assert_eq!(
+            *feed.settings.get(),
+            brighter,
+            "the worker's next frame takes it"
+        );
+        for refused in [
+            Config {
+                output: "640x480".into(),
+                ..brighter.clone()
+            },
+            Config {
+                signal: "128x112".into(),
+                ..brighter.clone()
+            },
+            Config {
+                color_mode: ColorMode::LinearLight,
+                ..brighter.clone()
+            },
+            Config {
+                output: "nonsense".into(),
+                ..brighter.clone()
+            },
+        ] {
+            assert!(!playback.retune(refused));
+            assert_eq!(*feed.settings.get(), brighter);
+        }
+    }
+
+    #[test]
+    fn an_edit_while_playing_keeps_it_playing_and_a_new_size_stops_it_to_start_again() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(
+            &ctx,
+            worker::Gpu::Own(wgpu::Backends::PRIMARY),
+            Ok(app_data::Store::temporary()),
+            None,
+            Some(Smoke::new("unused-smoke.png".into())),
+        );
+        let input = app.input.dimensions();
+        let config = app
+            .config
+            .with_max_output_side(input, app.preview_limit)
+            .unwrap();
+        let output = config.output_size(input).unwrap();
+        let (playback, feed) = Playback::new(&video(10., input), 0., output, config);
+        app.playback = Some(playback);
+        app.config.bloom = 0.;
+        app.changed();
+        assert!(app.playback.is_some() && !feed.cancel.load(Ordering::Relaxed));
+        assert_eq!(feed.settings.get().bloom, 0.);
+        // A smaller preview needs a new sequence. Without a video open there is nothing to
+        // start again, which leaves it stopped.
+        app.preview_limit = Some(800);
+        app.changed();
+        assert!(app.playback.is_none() && feed.cancel.load(Ordering::Relaxed));
     }
 
     #[test]
@@ -360,7 +501,7 @@ mod tests {
             None,
             Some(Smoke::new("unused-smoke.png".into())),
         );
-        let (playback, feed) = Playback::new(&video(10., (4, 4)), 0., (4, 4));
+        let (playback, feed) = Playback::new(&video(10., (4, 4)), 0., (4, 4), Config::default());
         app.playback = Some(playback);
         for time in [0., 0.04, 0.08] {
             feed.frames.send(frame(time)).unwrap();
@@ -416,5 +557,64 @@ mod tests {
         assert_eq!(app.status, "Playback finished");
         assert!(times.windows(2).all(|pair| pair[0] < pair[1]), "{times:?}");
         assert!(times.last().is_some_and(|&last| last >= 0.4), "{times:?}");
+    }
+
+    /// Edited while playing, a real video plays on with the new look, and starts again from
+    /// the frame on screen for a new preview size, to play to its end.
+    #[test]
+    #[ignore = "requires a Vulkan adapter and FFmpeg"]
+    fn edits_while_playing_reach_the_next_frames_without_stopping() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("clip.mkv");
+        let made = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-f", "lavfi", "-i"])
+            .args(["testsrc2=size=64x48:rate=10", "-t", "2", "-c:v", "ffv1"])
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let ctx = egui::Context::default();
+        let mut app = App::new(
+            &ctx,
+            worker::Gpu::Own(wgpu::Backends::VULKAN),
+            Ok(app_data::Store::temporary()),
+            Some(path),
+            Some(Smoke::new("unused-smoke.png".into())),
+        );
+        app.show_welcome = false;
+        let started = Instant::now();
+        let waited = |app: &mut App| {
+            app.receive(&ctx);
+            app.tick_playback(&ctx);
+            assert!(app.error.is_none(), "{:?}", app.error);
+            assert!(started.elapsed() < Duration::from_secs(120), "stalled");
+            std::thread::sleep(5 * MS);
+        };
+        while app.timeline.is_none() {
+            waited(&mut app);
+        }
+        app.start_playback();
+        let time = |app: &App| app.timeline.as_ref().unwrap().time;
+        while app.status != "Playing" {
+            waited(&mut app);
+        }
+        app.config.bloom = 0.;
+        app.changed();
+        assert_eq!(app.status, "Playing", "the look changes without stopping");
+        while time(&app) < 0.6 {
+            waited(&mut app);
+        }
+        app.preview_limit = Some(320);
+        app.changed();
+        let restarted_at = time(&app);
+        assert!(app.playback.is_some(), "a new size starts it again");
+        while app.playback.is_some() {
+            waited(&mut app);
+        }
+        assert_eq!(app.status, "Playback finished");
+        assert!(
+            time(&app) >= 1.9 && restarted_at >= 0.6,
+            "from the frame on screen to the end"
+        );
     }
 }

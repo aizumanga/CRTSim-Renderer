@@ -371,7 +371,7 @@ impl App {
     }
 
     fn changed(&mut self) {
-        self.stop_playback();
+        self.retune_playback();
         self.schedule.changed(Change::Edit, Instant::now());
     }
     fn replace_config(&mut self, config: Config) {
@@ -546,20 +546,24 @@ impl App {
     }
     /// Also while exporting: previews have their own worker, and the export works from the
     /// settings it captured, so the ones on screen are free to change.
-    fn request_preview(&mut self) {
+    fn request_preview(&mut self, kind: schedule::Kind) {
         if self.work.is_loading() || self.playback.is_some() {
             return;
         }
-        let Some(revision) = self.schedule.take() else {
+        let Some(revision) = self.schedule.take(kind) else {
             return;
         };
-        self.history.commit(&self.config);
+        // An edit under way becomes an undo step once it settles, not at every frame of a drag.
+        if kind == schedule::Kind::Settled {
+            self.history.commit(&self.config);
+        }
         match self
             .shown_config()
             .with_max_output_side(self.input.dimensions(), self.preview_limit)
         {
             Ok(config) => self.send_preview(PreviewJob::Preview {
                 revision,
+                kind,
                 input: self.input.clone(),
                 config: Box::new(config),
             }),
@@ -676,7 +680,7 @@ impl eframe::App for App {
             ui.horizontal(|ui| {
                 chrome::status_light(
                     ui,
-                    self.schedule.rendering() || !self.work.is_idle(),
+                    self.schedule.rendering_settled() || !self.work.is_idle(),
                     self.error.is_some() || self.preview_error.is_some(),
                 );
                 ui.label(&self.status);
@@ -742,10 +746,12 @@ impl eframe::App for App {
         match self.schedule.due(now, ctx.input(|i| i.pointer.any_down())) {
             schedule::Due::Nothing => {}
             schedule::Due::Commit => self.history.commit(&self.config),
-            schedule::Due::Preview => {
-                self.history.commit(&self.config);
+            schedule::Due::Preview(kind) => {
+                if kind == schedule::Kind::Settled {
+                    self.history.commit(&self.config);
+                }
                 if !self.show_welcome {
-                    self.request_preview();
+                    self.request_preview(kind);
                 }
             }
         }
@@ -788,7 +794,7 @@ mod tests {
         );
         let (send, receive) = mpsc::channel();
         app.events = receive;
-        let asked = app.schedule.take().unwrap();
+        let asked = app.schedule.take(schedule::Kind::Settled).unwrap();
         app.config.bloom = 0.;
         app.changed();
         send.send(Event::Preview {
@@ -805,7 +811,7 @@ mod tests {
         let settled = Instant::now() + Duration::from_secs(1);
         assert_eq!(
             app.schedule.due(settled, false),
-            schedule::Due::Preview,
+            schedule::Due::Preview(schedule::Kind::Settled),
             "the change is still to be previewed"
         );
         send.send(Event::Loaded(Err(Failure::Failed(anyhow::anyhow!(
@@ -813,7 +819,7 @@ mod tests {
         )))))
         .unwrap();
         send.send(Event::Preview {
-            revision: app.schedule.take().unwrap(),
+            revision: app.schedule.take(schedule::Kind::Settled).unwrap(),
             result: Ok(worker::Previewed {
                 image: worker::Preview::Pixels(config::test_card()),
                 seconds: 0.1,
@@ -823,6 +829,74 @@ mod tests {
         app.receive(&ctx);
         assert!(app.schedule.is_current());
         assert_eq!(app.error.as_deref(), Some("Cannot decode selected file"));
+    }
+
+    #[test]
+    fn a_drag_is_previewed_as_it_goes_and_becomes_one_undo_step() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(
+            &ctx,
+            worker::Gpu::Own(wgpu::Backends::PRIMARY),
+            Ok(app_data::Store::temporary()),
+            None,
+            None,
+        );
+        app.show_welcome = false;
+        let (jobs, _work, previews) = worker::Jobs::capture();
+        app.jobs = jobs;
+        let (send, receive) = mpsc::channel();
+        app.events = receive;
+        let original = app.config.clone();
+        // Each frame of the drag: the slider moves, and the frame's due preview is asked for.
+        let drag = |app: &mut App, bloom| {
+            app.config.bloom = bloom;
+            app.changed();
+            let due = app.schedule.due(Instant::now(), true);
+            assert_eq!(due, schedule::Due::Preview(schedule::Kind::Interactive));
+            app.request_preview(schedule::Kind::Interactive);
+            match previews.try_recv() {
+                Ok(PreviewJob::Preview {
+                    revision,
+                    kind: schedule::Kind::Interactive,
+                    config,
+                    ..
+                }) => {
+                    assert_eq!(config.bloom, bloom);
+                    revision
+                }
+                _ => panic!("expected an interactive preview mid-drag"),
+            }
+        };
+        let first = drag(&mut app, 0.5);
+        // The slider moves on before the preview comes back; it is still shown.
+        app.config.bloom = 0.25;
+        app.changed();
+        send.send(Event::Preview {
+            revision: first,
+            result: Ok(worker::Previewed {
+                image: worker::Preview::Pixels(config::test_card()),
+                seconds: 0.01,
+            }),
+        })
+        .unwrap();
+        app.receive(&ctx);
+        assert!(app.rendered.is_some() && !app.schedule.is_current());
+        assert!(
+            !app.schedule.stale(),
+            "the drag's next preview is on its way"
+        );
+        drag(&mut app, 0.);
+        let settled = Instant::now() + Duration::from_secs(1);
+        assert_eq!(
+            app.schedule.due(settled, false),
+            schedule::Due::Preview(schedule::Kind::Settled)
+        );
+        app.history.commit(&app.config);
+        assert_eq!(
+            app.history.undo(&app.config),
+            Some(original),
+            "the whole drag is one step"
+        );
     }
 
     #[test]
@@ -842,7 +916,7 @@ mod tests {
         assert!(matches!(work.try_recv(), Ok(Job::Export { .. })));
         app.config.bloom = 0.;
         app.changed();
-        app.request_preview();
+        app.request_preview(schedule::Kind::Settled);
         match previews.try_recv() {
             Ok(PreviewJob::Preview { config, .. }) => assert_eq!(config.bloom, 0.),
             _ => panic!("expected a preview while exporting"),

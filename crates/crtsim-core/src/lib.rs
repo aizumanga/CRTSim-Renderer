@@ -541,13 +541,21 @@ impl Renderer {
         } else {
             Some(config::prepare(input, c)?)
         };
+        if sequence
+            .workspace
+            .as_ref()
+            .is_some_and(|workspace| !workspace.matches(&plan))
+        {
+            ensure!(
+                sequence.restarts(),
+                "Start a new video sequence after changing signal size, output size or color mode"
+            );
+            *sequence = Sequence::editing();
+        }
+        let ticks = sequence.ticks(c.warmup);
         let workspace = sequence
             .workspace
             .get_or_insert_with(|| self.workspace(&plan));
-        ensure!(
-            workspace.matches(&plan),
-            "Start a new video sequence after changing signal size, output size or color mode"
-        );
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -573,7 +581,6 @@ impl Renderer {
                 gpu::clear(&mut encoder, target);
             }
         }
-        let ticks = if first { c.warmup + 1 } else { 1 };
         report(0.05, Stage::Simulating { done: 0, of: ticks });
         for step in 0..ticks {
             ensure!(!cancelled(), "Render cancelled");

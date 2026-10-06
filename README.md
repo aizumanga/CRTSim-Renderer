@@ -37,7 +37,8 @@ Each preset shows a thumbnail rendered from your current image. Point at a prese
 Enter a name and choose **Save current** to add your exact settings to **My presets**; they reappear after restarting. Use **Edit description** on any personal preset to add, change or clear its description, and **Delete** to remove it, after confirming.
 Descriptions are saved beside gallery JSON files as UTF-8 `.txt` files; the JSON stays CLI-compatible.
 To add an existing JSON, load it, then use Save current in the gallery. JSON export remains available for sharing.
-Saving under a name already in My presets, in any letter case, asks first, then replaces that preset's settings and keeps its name and description; malformed files are skipped with an explanation. Personal JSON files live outside the checkout,
+Saving under a name already in My presets, in any letter case, asks first, then replaces that preset's settings and keeps its name and description.
+The included presets' names are refused, in any letter case, so an included preset is never replaced or shadowed. Malformed files are skipped with an explanation. Personal JSON files live outside the checkout,
 in the app data directory shown in the gallery. `CRTSIM_DATA_DIR` can override that directory with an absolute path.
 The desktop also saves a recoverable session every two seconds and on exit. **Project** opens/saves `.crtsim`
 projects and lists the ten most recent projects. Recovery restores edits and leaves the export queue paused.
@@ -87,7 +88,8 @@ cargo run --release --locked -p crtsim-app
 ```
 
 Use **Open File** or drag one PNG/JPEG/WebP/BMP/GIF into the window. Adjust the controls on the left;
-the preview refreshes after you finish a drag or pause typing. **Export PNG** renders using the export size,
+with **Live preview** on, the preview follows a slider as you drag it, the way a game's picture follows its
+options menu, then renders exactly once you let go. **Export PNG** renders using the export size,
 even when the preview is smaller. The window remains responsive while loading, rendering and exporting.
 Settings changed during an export apply to the next export. The native save dialog asks for confirmation when a desktop PNG or JSON preset
 already exists; after confirmation, the app writes a complete temporary file and atomically replaces the destination.
@@ -104,7 +106,10 @@ already exists; after confirmation, the app writes a complete temporary file and
 - Click or drag a slider to give it the keyboard: **←/→** step it by 1% of its range, **Shift** by 10%, **Alt** by 0.1%, and **Delete** returns it to its default. **Esc** or a click elsewhere lets go.
 
 The original-image display is limited to a 2048-pixel thumbnail; export always uses the loaded source.
-Still previews are debounced; video playback streams frames with persistent CRT history and a short buffer.
+While a control is being changed, each preview runs the CRT on screen on with the new settings, so the
+glow of the old ones fades over a few frames; the exact still follows once the change settles. Video playback streams frames with persistent CRT history and a short buffer, and keeps
+playing while you edit: the new settings show once the few frames already buffered have played. A change of
+signal or preview size, or of colour mode, plays on again from the frame on screen.
 The CRT mask can look different at different preview sizes; exports retain the requested resolution.
 Recovery does not overwrite explicitly saved presets or project files.
 

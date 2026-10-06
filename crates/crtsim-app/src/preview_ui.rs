@@ -17,7 +17,7 @@ impl App {
                 )
                 .clicked()
             {
-                self.request_preview();
+                self.request_preview(schedule::Kind::Settled);
             }
         });
         ui.horizontal_wrapped(|ui| {
@@ -63,7 +63,7 @@ impl App {
                 }
             }
         }
-        if self.schedule.rendering() || !self.work.is_idle() {
+        if self.schedule.rendering_settled() || !self.work.is_idle() {
             ui.horizontal(|ui| {
                 ui.spinner();
                 ui.label(match self.work {
@@ -82,7 +82,7 @@ impl App {
                 ),
             );
         }
-        if self.rendered.is_some() && !self.schedule.is_current() {
+        if self.rendered.is_some() && self.schedule.stale() {
             ui.colored_label(ui.visuals().warn_fg_color, "Preview is out of date.");
         }
         let controls_height = if self.timeline.is_some() { 136. } else { 0. };
