@@ -7,7 +7,8 @@
 // The game draws with glDrawElements, which it imports, and loads GL 2.0 through
 // glXGetProcAddressARB, which this wraps. Shader programs are told apart by uniforms only one
 // CRT pass declares. Until SHIM_DIR/go exists the game runs untouched. The file holds lines:
-//   input <path>   a 256x224 RGBA image, rows top first, raw bytes
+//   input <path>   a 256x224 RGBA image, rows top first, raw bytes; without it the scene's
+//                  own frames are recorded as the game draws them
 //   frames <n>     frames to capture, counted in NTSC passes
 //   skip <n>       frames to let pass first, so the glow of the scene before has decayed
 //   tag <name>     prefix for the files written
@@ -153,7 +154,7 @@ static void my_uniform_matrix4fv(GLint l, GLsizei c, GLboolean t, const GLfloat 
 
 static char go_text[4096];
 static unsigned char *input;   // 256x224 RGBA, rows bottom first for GL
-static int injecting, frames_wanted, frames_skipped, frame;
+static int injecting, capturing, frames_wanted, frames_skipped, frame;
 static char tag[256] = "capture";
 
 static void check_go(void) {
@@ -176,6 +177,10 @@ static void check_go(void) {
         else if (!strncmp(line, "skip ", 5)) frames_skipped = atoi(line + 5);
         else if (!strncmp(line, "tag ", 4)) snprintf(tag, sizeof tag, "%s", line + 4);
     }
+    frame = -frames_skipped;
+    capturing = 1;
+    injecting = 0;
+    if (!image[0]) { fprintf(stderr, "shim: %s, recording %d frames\n", tag, frames_wanted); return; }
     FILE *img = fopen(image, "rb");
     if (!img) { fprintf(stderr, "shim: cannot open %s\n", image); return; }
     unsigned char *top_first = malloc(256 * 224 * 4);
@@ -185,7 +190,6 @@ static void check_go(void) {
     input = malloc(256 * 224 * 4);
     for (int y = 0; y < 224; y++) memcpy(input + y * 1024, top_first + (223 - y) * 1024, 1024);
     free(top_first);
-    frame = -frames_skipped;
     injecting = 1;
     fprintf(stderr, "shim: %s, %d frames from %s\n", tag, frames_wanted, image);
 }
@@ -241,8 +245,8 @@ void glDrawElements(GLenum mode, GLsizei count, GLenum type, const void *indices
         if (injecting) inject();
     }
     real_draw_elements(mode, count, type, indices);
-    if (injecting && kind != NONE && frame >= 0 && frame < frames_wanted) save(kind);
-    if (injecting && kind == COMPOSE) frame++;
+    if (capturing && kind != NONE && frame >= 0 && frame < frames_wanted) save(kind);
+    if (capturing && kind == COMPOSE) frame++;
 }
 
 // --- getting the functions -------------------------------------------------------------

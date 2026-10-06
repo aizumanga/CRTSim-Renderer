@@ -11,7 +11,7 @@ It is not an official product or an exact reconstruction of a commercial game's 
 - PNG/JPEG/WebP/BMP/GIF input and PNG export; an original test card when input is omitted.
 - Animated GIF and WebP open as animations, decoded without FFmpeg; videos, GIFs and animated WebPs export to MP4, MKV, WebM, GIF or animated WebP.
 - **File → Video test card** opens ten seconds of original side-scrolling pixel-art gameplay at 256x224 and 60 frames per second, drawn by the app, to see a look on moving pixels before exporting it. It opens and plays without a file or FFmpeg, and exports like an opened animation.
-- The original curved screen, ray-traced as the sphere its mesh was cut from, with the same UVs, normals, rounded outline and edge shading; the original bezel, baked from its mesh with its colors, normals, UVs and reflection weights and traced the same way, so both draw in one full-screen pass.
+- The original curved screen, ray-traced as the sphere its mesh was cut from, with the same UVs and normals, and the mesh's own outline and edge shading baked across its UVs; the original bezel, baked from its mesh with its colors, normals, UVs and reflection weights and traced the same way, so both draw in one full-screen pass.
 - Composite artifacts, horizontal ringing, separate RGB persistence, shadow mask, lighting, edge reflections and bloom.
 - Deterministic still jobs, cleared feedback buffers, phase A/B/stable/alternating selection and configurable warm-up.
 - Logical signal and output resolution presets; custom dimensions; JSON settings.
@@ -34,10 +34,10 @@ an interesting technical account of how the effect developed.
 **Preset gallery** includes General image, Original CRTSim, Super Win the Game, Soft television, Clean RGB, Pixel art 240p, NTSC 240p, NTSC 480i, PAL 288p, PAL 576i, Warm analog and Linear light.
 The NTSC and PAL presets set the line count, interlacing and composite phase. The artifact model is the original NTSC-derived one, so the PAL presets approximate PAL's line-alternating color with gentler, stable artifacts rather than simulating it. Video frame rate is chosen separately in Export → Video.
 Each preset shows a thumbnail rendered from your current image. Point at a preset to preview it on the full image without applying it (nothing is changed or added to Undo), and click to apply it.
-Enter a name and choose **Save current** to add your exact settings to **My presets**; they reappear after restarting. Use **Edit description** on any personal preset to add, change or clear its description.
+Enter a name and choose **Save current** to add your exact settings to **My presets**; they reappear after restarting. Use **Edit description** on any personal preset to add, change or clear its description, and **Delete** to remove it, after confirming.
 Descriptions are saved beside gallery JSON files as UTF-8 `.txt` files; the JSON stays CLI-compatible.
 To add an existing JSON, load it, then use Save current in the gallery. JSON export remains available for sharing.
-Names are never overwritten; malformed files are skipped with an explanation. Personal JSON files live outside the checkout,
+Saving under a name already in My presets, in any letter case, asks first, then replaces that preset's settings and keeps its name and description; malformed files are skipped with an explanation. Personal JSON files live outside the checkout,
 in the app data directory shown in the gallery. `CRTSIM_DATA_DIR` can override that directory with an absolute path.
 The desktop also saves a recoverable session every two seconds and on exit. **Project** opens/saves `.crtsim`
 projects and lists the ten most recent projects. Recovery restores edits and leaves the export queue paused.
@@ -63,7 +63,7 @@ original did, so a finer signal gets a finer mask. Original CRTSim and the line-
 use it; the general-image presets keep a fixed 128 × 224 mask. Presets saved with fixed columns and rows keep them.
 
 **Super Win the Game** uses the game's own CRT options on top of the public reference: a 30° field of view, **NTSC blending**
-at 0.35, its **NTSC palette** and the artifact pattern flipped as its Linux build draws it (**Flip artifact pattern**). NTSC blending moves the two composite artifact patterns towards each other in the game's
+at 0.35, its **NTSC palette** and the artifact pattern as its Windows build draws it. NTSC blending moves the two composite artifact patterns towards each other in the game's
 units, so alternating ticks mix them 17.5/82.5 and 82.5/17.5 instead of switching cleanly; 0, the default, is the public
 source's switch, and 1 shows their average on every tick. **NES palette** (Color & LUT) makes the palette from the game's
 **Tint**, **Tint I** and **Tint Q**, one of two ways. **The game's** makes it exactly as Super Win the Game does, matching
@@ -280,7 +280,7 @@ Export directories must be new. Sixteen warm-up ticks means 17 total ticks; it i
 `alternating` advances phase once per tick; the final phase depends on warm-up parity. Stable mode is recommended for still images.
 
 **Interlaced fields** (`"interlace": true`) makes each tick scan every other signal row, alternating fields, while the rows it skips only fade by persistence, as on an interlaced set. Use it with a 480- or 576-row signal. On a still, the last tick's field is the bright one, so warm-up parity picks which; in a video each frame is one field.
-**Flip artifact pattern** (`"flip_artifacts": true`) turns the composite artifact pattern upside down against the picture, each tick blending in the row above rather than the one below, as Super Win the Game's Linux build draws it; compared with that build's own frames, the composite signal then matches within 2 steps. Off, the default, is the public CRTSim source's orientation, which the game's Windows build may also use; the **Super Win the Game** preset turns it on. RetroArch presets carry it.
+**Flip artifact pattern** (`"flip_artifacts": true`) turns the composite artifact pattern upside down against the picture, each tick blending in the row above rather than the one below, as Super Win the Game's Linux build draws it; compared with that build's own frames, the composite signal then matches within 2 steps. Off, the default, is the public CRTSim source's orientation, which the game's Windows build, on Direct3D 9, also draws; the **Super Win the Game** preset leaves it off. The Mac build draws through OpenGL as the Linux build does, so it likely flips too; turn this on to match those. RetroArch presets carry it.
 
 ### GPU troubleshooting
 

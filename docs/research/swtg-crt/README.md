@@ -30,6 +30,16 @@ itch.io Linux build, `ValkyrieVersion.npk` → `Version.ini`: *September 25, 202
 | `ValkyrieVersion.npk` | 362 | `4d33f511e0cf6d2684dd380903e6e2afac4396d2c3ee28a2e11228afec7f824c` |
 | `SWG_Campaign.vpk` (not needed) | 12886444 | `97cc015b3ccd704c3aa380b23c6117f75c3731aaedf52fb4b245a47f14c9606c` |
 
+The itch.io Windows and macOS releases (session 8) ship the same four data files, byte for byte;
+only their executables differ:
+
+| File | Size | SHA-256 |
+| --- | ---: | --- |
+| `SuperGame_Install.exe` (Windows, NSIS 2.46) | 4186422 | `6e8f2c27d6bb5169364a18d9325fe8443b3d6924763e887689059b0550324ac0` |
+| … `SuperGame.exe` inside it | 2514944 | `d7c865a3118859c9e36e3b453bfd261173271bd2ce819fcbb51cecdc60b90a9d` |
+| `SuperGame.dmg` (macOS) | 4302829 | `de6188f005a3ebd68ad6ef349a4511f311ca14cc999f5499161acbb2f75f4635` |
+| … `SuperGame.app/Contents/MacOS/Valkyrie` | 3994980 | `0920957cc4701fc83de7f0e1127d0c22572383f74bdcf7bc0194d7c9a7186113` |
+
 The Steam build may differ; nothing here has been checked against it.
 
 `SuperGame_NFML` is a 32-bit i386 ELF, OpenGL via GLEW, SDL2 statically linked. It is **not
@@ -222,8 +232,8 @@ Game** preset (`crates/crtsim-app/src/gallery.rs`) unless a row says otherwise.
 | Mask density on the bezel | (128, 224), as on the screen | (128, 112) on the frame | (128, 112) on the bezel | **difference**, bezel reflection only |
 | Mask texture and mips | `mask.bmp` + box mips, trilinear | `mask.bmp`, D3DX mips | `mask.bmp` + box mips (`halve`) | match |
 | Artifact texture | `artifacts.bmp` | same | same | match |
-| Screen geometry | `screen.m3d`, rasterised | same | ray-traced sphere fitted to it, analytic edge dimming | intentional extension; error vs mesh **unmeasured** |
-| Bezel geometry | `frame.m3d` | same | baked from `frame.m3d`, ray-marched | intentional extension; **unmeasured** |
+| Screen geometry | `screen.m3d`, rasterised | same | ray-traced sphere fitted to it, analytic edge dimming | intentional extension; measured (session 6): shape within 0.016 signal px, picture 0.45 steps inside, from the mesh's shade bands and faceted UVs |
+| Bezel geometry | `frame.m3d` | same | baked from `frame.m3d`, ray-marched | intentional extension; measured (session 6): picture 0.13 steps inside, UV p99 0.77 signal px |
 | FOV | 30° | 15° | preset 30° (default 15°) | match (preset) |
 | Artifact pattern orientation | flipped against the picture; second sample one row up (Linux build, session 4) | row *y* and the row below | either, **Flip artifact pattern** (`flip_artifacts`, session 5), off by default | **matches with the setting on**; Windows build unknown |
 | Lighting, light position | CRTSim's, (−10, −5, 10) | same | same | match |
@@ -288,9 +298,166 @@ and FOV 30.
   where a ray meets the sphere), and lines along the glass's outline and the bezel's edge.
 - **Final:** the surface's differences, spread a little by the bloom.
 
-Whether the Windows build, on Direct3D 9, flips the pattern too is not known: its textures and
-render targets would both be top first, as in public CRTSim. Matching "the game" here may
-depend on which build is meant.
+The Windows build, on Direct3D 9, does not flip it (session 8).
+
+## Glass and bezel against the meshes (session 6)
+
+The renderer draws the glass as the sphere `screen.m3d` was cut from and steps each ray across
+images baked from `frame.m3d`; the game rasterises the meshes. `scripts/surfaces.py` computes
+both per pixel: `rasterize` meets each pixel's ray with the nearest mesh triangle and blends its
+corners' UV, normal, colour and reflection there (what GL's perspective-correct interpolation
+gives), and `approximate` is `crtsim.wgsl`'s `surface()` ported line for line, reading the
+images `scripts/bezel_maps` writes. `scripts/measure_surfaces.py` compares them at the game's
+camera (FOV 30, 1280×960).
+
+**Both models checked first.** Each was shaded with a numpy port of `screen.fx`/`monitor.fx`
+and compared with real output, mask and artifacts off so only geometry and lighting count:
+
+- the mesh model with the game's captured composite against the game's own surface pass:
+  every one of 1 228 800 pixels within 1 step (rounding), outlines included;
+- the port with the renderer's composite against the renderer's surface: glass within 1 step,
+  bezel within 1 step on 99.97% of its pixels (worst 5, float differences in the ray march).
+
+**Results.** Where both show the same surface:
+
+| | Glass (1 076 212 px) | Bezel (151 648 px) |
+| --- | --- | --- |
+| UV, in signal pixels | mean 0.003, max 0.016 | mean 0.03, p99 0.77, max 1.4 |
+| Normal | mean 0.0007°, max 0.004° | mean 0.0009°, max 0.06° |
+| Shade (vertex colour), 8-bit steps | mean 0.83, max 2.6 | mean 0.26, p99 3.2, max 7.4 |
+| Reflection, 8-bit steps | — | mean 0.30, p99 5.1, max 8.6 |
+
+They disagree on which surface a pixel shows at 940 pixels, all along the screen's outline: the
+mesh's outline is a chain of straight segments between its vertices, the renderer's the smooth
+superellipse they lie on.
+
+**What it costs the picture.** Both shaded alike, as the game shades them, mask on, with the
+game's composite of the probe at default settings (8-bit steps, worst channel per pixel):
+
+| Region | Pixels | Mean | Past 2 | Past 8 | Max |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Whole picture | 1 228 800 | 0.46 | 0.84% | 0.15% | 242 |
+| Glass, inside | 1 067 930 | 0.45 | 0.69% | 0.03% | 58 |
+| Bezel, inside | 142 364 | 0.13 | 0.47% | 0.18% | 25 |
+| Outlines (4 px) | 18 506 | 3.9 | 12.3% | 6.8% | 242 |
+
+The whole-picture mean agrees with the 0.50 measured between the real captures (session 4),
+which also held the composite's rounding. Taking one attribute at a time from the renderer into
+the mesh model, inside the surfaces:
+
+| From the renderer | Glass | Bezel |
+| --- | ---: | ---: |
+| Shade | 0.33 | 0.02 |
+| UV | 0.29 | 0.11 |
+| Reflection | — | 0.04 |
+| Normal, position | 0.00 | 0.00 |
+
+- **The glass's shape is exact.** The sphere puts every point within 0.016 signal pixels of the
+  mesh and its normals within 0.005°. What remains is the mesh's own faceting: its UVs change
+  linearly within each triangle, so the mask's level of detail and phase shift from triangle to
+  triangle. That faint moiré is the UV row; the sphere is the smoother of the two.
+- **The glass's shade cannot come closer as a formula.** `1 − 0.5·r⁶` over the superellipse is
+  already the best fit of its kind (searching corner exponents and powers finds the same), but
+  the mesh stores its vertex colours as bytes, 15 greys in all, and blends them linearly across
+  each triangle: 0.62 steps from the formula at the vertices on average, 1.3 at most. Only the
+  mesh's own colours, baked as the bezel's are, would reproduce those bands.
+- **The bezel's bake is close**, its largest errors at steep or narrow faces where 1024×818
+  texels are coarse: UV p99 0.77 signal pixels, reflection p99 5 steps.
+- **Outlines are where it shows**: the polygon against the superellipse, and the bezel's edge.
+
+*Correction (session 7):* of the 940 pixels, 452 are at the bezel's outer rim, where the mesh
+shows the bezel and the renderer nothing, not at the screen's outline.
+
+## The mesh's glass, baked (session 7)
+
+Proposal 7, made. `screen.m3d` is a 49×49 grid of vertices on the sphere, and its UVs are exactly
+the renderer's `((4/3 − y)·0.375, (1 − z)·0.5)` (to 6·10⁻⁸), so its outline and shading can be
+indexed by the UV the sphere already gives. `crtsim-core`'s `glass.rs` bakes them into one
+1024×768 image across UV 0 to 1, each value over two bytes:
+
+- **shade**: each texel's vertex colour blended across the triangle it lies in, as GL blends it;
+  texels just outside the outline carry the nearest triangle's blend on past its edge, so the
+  bilinear read stays true up to the edge;
+- **edge**: the distance to the outline (the 192 edges only one triangle has), in mesh units,
+  positive inside, within ±1/64. Blended between texels it puts the outline on the polygon's
+  straight segments.
+
+The surface pass (`crtsim.wgsl`, `surface.slang`) reads both where the ray meets the sphere, in
+place of the superellipse and `1 − 0.5·r⁶`. At the mesh's vertices the image gives each vertex's
+colour within 0.28 steps inside and 0.66 at the four corners, and its outline within 0.0002
+units (a test checks both).
+
+**Checked first**, as in session 6: the renderer's surface pass against the port in
+`surfaces.py`, now reading `bezel_maps`' `glass.png`, mask and artifacts off: glass within 1 step
+on every one of 1 076 284 pixels, bezel as before. The RetroArch parity cases stay within 1 step
+of the renderer.
+
+**Results** (`measure_surfaces.py`; `GLASS=formula` gives session 6's):
+
+| | Formula (session 6) | Baked (session 7) |
+| --- | ---: | ---: |
+| Glass shade, mean / max steps | 0.83 / 2.6 | 0.006 / 0.58 |
+| Pixels showing a different surface | 940 | 576 |
+| … glass in the meshes, not in the renderer | 36 | 0 |
+| … bezel in the meshes, glass in the renderer | 452 | 36 |
+| … bezel in the meshes, nothing in the renderer | 452 | 540 |
+| Picture, whole, mean steps | 0.46 | 0.30 |
+| Picture, glass inside | 0.45 | 0.30 |
+| Picture, outline band (4 px) | 3.9 (18 506 px) | 2.1 (13 054 px) |
+
+Every pixel the mesh shows as glass, the renderer now does too. The 576 left are where the meshes show the
+bezel: 540 at its outer rim, which the ray march misses at grazing angles, and 36 at its inner
+lip, in front of the glass. Those come from the bezel's bake, not the glass. Inside the glass,
+what remains is the faceted UVs (0.29 steps, as session 6 found): the mesh's mask shifts from
+triangle to triangle and the sphere's does not. Baking the mesh's UVs would remove that too, but
+would bring the faceting into the renderer's picture, which is a choice about fidelity to the
+game, not a gap in the measurement.
+
+## The Windows and macOS builds (session 8)
+
+**Static.** The three builds share their data files (see Inputs): the same GLSL, the same
+compiled Direct3D effects (`*.fxo`), the same textures, meshes and render states. What differs
+is how each executable draws them:
+
+- **Windows** `SuperGame.exe`, a 32-bit PE: imports `d3d9.dll` and `d3dx9_42.dll`
+  (`D3DXCreateEffect`, `D3DXCreateTexture`) and no OpenGL, and names the `.fxo` effects and
+  `ntschack.bmp`. It draws with Direct3D 9.
+- **macOS** `Valkyrie`, a 64-bit x86-64 Mach-O: links `OpenGL.framework` and imports
+  `glTexImage2D`, with no Direct3D. It draws through OpenGL with the GLSL, as Linux does.
+
+**Runtime (Windows).** The Windows build, run under Wine 9 (`scripts/play_windows.sh`; Wine
+draws Direct3D 9 through OpenGL on Mesa llvmpipe, keeping Direct3D's conventions), and the
+Linux build were played into the same first scene with identical settings: the defaults, at
+1280×960. `capture_shim.c`, with no `input`, recorded the scene's own NTSC frame from the Linux
+build; `render_probe` (`PALETTE=0`) rendered that frame with the pattern unflipped and flipped,
+and `scripts/compare_builds.py` compared each build's screen with both. Mean of the worst
+channel inside the glass, 8-bit steps, mask off (Scanline Opacity 0) so the artifacts show
+plainly:
+
+| Build | Unflipped | Flipped | Control: artifacts off (NTSC 0) |
+| --- | ---: | ---: | ---: |
+| Linux | 3.95 | **1.19** | 1.28 |
+| Windows | **1.67** | 4.24 | 1.64 |
+
+Each build comes as close as its control with one orientation and nowhere near with the other.
+**The Windows build draws the pattern unflipped**, as public CRTSim and this renderer's default
+do; the Linux build flips it, as session 4 found.
+
+Two other differences, neither in the CRT itself:
+
+- The Windows build's whole picture lies half a pixel right of and below the Linux build's:
+  with artifacts off, that shift alone takes the difference from 2.64 to 0.59 steps (mean
+  over channels, the screen's middle). It is Direct3D 9's pixel centre convention in the final
+  pass, not worth reproducing.
+- With the mask on, the two builds' masks, each divided by its frame with the mask off, agree
+  with this renderer's as closely (0.013 and 0.014) once the Windows one is moved back by that
+  half pixel.
+
+**macOS** was not run. Drawing through OpenGL from the same GLSL and the same render targets,
+it most likely flips the pattern as the Linux build does (hypothesis).
+
+The Super Win the Game preset now leaves **Flip artifact pattern** off, matching the Windows
+build; turning it on matches the Linux build, and probably the Mac one.
 
 ## Unresolved
 
@@ -301,11 +468,13 @@ depend on which build is meant.
 4. ~~Whether parity flips once per presented frame~~: it does, frame to frame (session 4).
    Behaviour on dropped or repeated frames is still unchecked.
 5. ~~`MonitorColor` and the Brightness default~~: (0.06, 0.06, 0.06, 0) and 0 (session 4).
-   The vertex colours `Tuning_Dimming` reads from `screen.m3d` are still unchecked.
-8. Whether the Windows build flips the artifact pattern as the Linux build does.
-6. How large the renderer's analytic glass and baked bezel errors are against the meshes the
-   game rasterises: about 0.5 steps on average over the probe, before bloom (session 4); not
-   yet broken down by region.
+   The vertex colours `Tuning_Dimming` reads from `screen.m3d`: 15 greys, which the renderer
+   reads baked since session 7.
+8. ~~Whether the Windows build flips the artifact pattern~~: it does not (session 8). The
+   macOS build, on OpenGL, is not checked at runtime; it most likely flips, as Linux does.
+6. ~~How large the glass and bezel approximations are~~: measured (session 6), 0.46 steps
+   on average over the probe; 0.30 since the glass's shade and outline are baked (session 7),
+   most of what is left the mesh's faceted UVs and the bezel's rim.
 7. Viewport handling of the 4:3 target aspect in non-4:3 windows.
 
 ## Proposals
@@ -335,7 +504,14 @@ None of these are made yet. In order of how much they would close the gap:
    (`CRTSIM_FLIP_ARTIFACTS`), off by default. Against the session-4 capture at default
    settings with it on: composite worst 2, mean 0.26 (from worst 152, mean 1.6), the same
    residual as with artifacts off; final mean 0.72 (from 1.4). A RetroArch parity case covers
-   it. The Super Win the Game preset turns it on, matching the Linux build.
+   it. The Super Win the Game preset turned it on, matching the Linux build, until session 8
+   found the Windows build unflipped; it leaves it off since.
+
+7. **Glass shade and outline from the mesh.** *Done in session 7:* `glass.rs` bakes
+   `screen.m3d`'s vertex colours and outline across the glass's UVs; the surface pass and the
+   RetroArch port read them (`glass.png`). Glass shade from 0.83 steps to 0.006, every
+   pixel the mesh shows as glass shown as glass, picture 0.46 → 0.30. Goldens
+   regenerated: about 0.1 step on average, more on the outline's pixels.
 
 Frame-by-frame comparison is set up (session 4); more probes, motion and other settings can go
 through it.
@@ -377,6 +553,37 @@ With artifacts off, set `NTSC: 0` in the game's `Config.ini` (under the run's ho
 `.local/share/Minor Key Games/Super Win the Game/Config`) before starting it, and run
 `ARTIFACTS=0 render_probe …`; `BLOOM=0` gives the surface before bloom, which compares with the
 game's `monitor` pass.
+
+Glass and bezel against the meshes (sessions 6 and 7), no game needed beyond a composite frame
+to shade with (any 256×224 PNG works); `GLASS=formula` measures the glass as drawn before
+session 7:
+
+```bash
+(cd SCRIPTS/bezel_maps && cargo build --release)    # then: bezel_maps maps
+SCRIPTS/measure_surfaces.py maps composite.png measure   # report.txt and error maps
+```
+
+The Windows build against the Linux build (session 8). Both read the same settings: copy the
+Linux `Config.ini` over the one the Windows build writes under the Wine prefix
+(`drive_c/users/$USER/Documents/My Games/Super Win the Game/Config`) after its first run, and
+for the Linux build set `Fullscreen: false` with 1280×960 windowed, since fullscreen can leave
+its window 1×1 under Xvfb. The game ignores SIGTERM; stop it with `kill -9`.
+
+```bash
+apt-get install p7zip-full wine32:i386 wine ffmpeg
+7z x -oWIN SuperGame_Install.exe                     # SuperGame.exe and the data files
+SCRIPTS/play_windows.sh WIN win                      # win/frames: the first scene
+SCRIPTS/play_to_gameplay.sh GAME shim.so run         # the Linux build, into the same scene
+ffmpeg -f x11grab -framerate 30 -video_size 1280x960 -i :99 -frames:v 40 lin/f%03d.png
+printf "frames 2\nskip 10\ntag scene\n" > run/go; sleep 10   # records the scene's passes
+python3 -c "import numpy as n; a=n.fromfile('run/scene_000_ntsc.rgba',n.uint8)\
+.reshape(224,256,4)[::-1].copy(); a[...,3]=255; a.tofile('scene.rgba')"   # rows top first
+for f in 0 1; do PALETTE=0 MASK_OPACITY=0 FLIP_ARTIFACTS=$f render_probe scene.rgba ren$f 42 40; done
+SCRIPTS/compare_builds.py win/frames ren0 ren1 --half-pixel
+SCRIPTS/compare_builds.py lin ren0 ren1
+```
+
+`MASK_OPACITY=0` above goes with `ScanOpacity: 0` in both games' settings, as the table used.
 
 Function addresses (`nm -C SuperGame_NFML`): `CRTBaseMaterial::SetParam` 08081c60,
 `NTSCMaterial::SetParam` 080c7610, `ValkyrieGame::CreateAssets` 08144ae0,

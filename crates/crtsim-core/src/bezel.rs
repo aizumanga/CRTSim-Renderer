@@ -142,7 +142,7 @@ fn interpolate(v: [Vertex; 3], w: [f32; 3]) -> Texel {
 /// neighbour's values and the greatest depth.
 fn encode(grid: &[Option<Texel>]) -> Maps {
     let (w, h) = SIZE;
-    let filled = fill(grid);
+    let filled = fill(grid, SIZE);
     let at = |x: u32, y: u32| {
         (
             grid[(y * w + x) as usize].is_some(),
@@ -181,8 +181,8 @@ fn encode(grid: &[Option<Texel>]) -> Maps {
 
 /// Every texel's values: its own, or those of the nearest covered texel, found by growing
 /// the covered area outwards a texel at a time.
-fn fill(grid: &[Option<Texel>]) -> Vec<Texel> {
-    let (w, h) = (SIZE.0 as usize, SIZE.1 as usize);
+pub(crate) fn fill<T: Copy>(grid: &[Option<T>], (w, h): (u32, u32)) -> Vec<T> {
+    let (w, h) = (w as usize, h as usize);
     let mut filled = grid.to_vec();
     let mut queue: std::collections::VecDeque<usize> =
         (0..filled.len()).filter(|&i| filled[i].is_some()).collect();
@@ -203,7 +203,7 @@ fn fill(grid: &[Option<Texel>]) -> Vec<Texel> {
     }
     filled
         .into_iter()
-        .map(|t| t.expect("the bezel covers some texel"))
+        .map(|t| t.expect("the mesh covers some texel"))
         .collect()
 }
 

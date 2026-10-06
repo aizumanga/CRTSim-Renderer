@@ -130,7 +130,7 @@ pub struct Config {
     pub ntsc_blending: f32,
     /// The composite artifact pattern upside down against the picture, each tick blending the
     /// row above rather than the one below, as Super Win the Game's Linux build draws it. Off
-    /// is the public source's (Direct3D) orientation.
+    /// is the public source's (Direct3D) orientation, which the game's Windows build draws.
     pub flip_artifacts: bool,
     pub persistence: [f32; 3],
     pub overscan: f32,

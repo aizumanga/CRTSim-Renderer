@@ -1,8 +1,8 @@
 #version 450
 // CC0. The curved glass and its bezel: for each pixel, where a ray from the camera meets the
-// screen, a cap of a sphere of radius 4 centred 4 units behind its middle, or the bezel, baked
-// from its mesh seen straight on, whichever it meets first, and how that point is lit. The
-// reference renderer draws them with this same pass.
+// screen, a cap of a sphere of radius 4 centred 4 units behind its middle within the outline its
+// mesh baked, or the bezel, baked from its mesh seen straight on, whichever it meets first, and
+// how that point is lit. The reference renderer draws them with this same pass.
 
 #include "parameters.inc"
 
@@ -60,11 +60,13 @@ layout(set = 0, binding = 3) uniform sampler2D CRTSIM_SHADOW_MASK;
 layout(set = 0, binding = 4) uniform sampler2D CRTSIM_BEZEL_SHAPE;
 layout(set = 0, binding = 5) uniform sampler2D CRTSIM_BEZEL_UV;
 layout(set = 0, binding = 6) uniform sampler2D CRTSIM_BEZEL_NORMAL;
+// The glass's shade and the distance to its outline, baked from its mesh across its UVs, the
+// distance positive inside and within ±GLASS_EDGE. Texel (i, j) is UV (i, j) / (size - 1).
+layout(set = 0, binding = 7) uniform sampler2D CRTSIM_GLASS;
 
 const vec3 GLASS_CENTRE = vec3(4.0, 0.0, 0.0);
 const float GLASS_RADIUS = 4.0;
-// The outline is a superellipse in UV space; its edge shading follows the same curves inward.
-const float GLASS_CORNER = 11.54;
+const float GLASS_EDGE = 0.015625;
 const vec2 BEZEL_HALF = vec2(1.6533334, 1.32);
 const float BEZEL_NEAR = -0.1;
 const float BEZEL_FAR = 0.33;
@@ -202,9 +204,8 @@ float bezel_depth(vec2 yz) {
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 
-// A two-value image's texels decoded, blended between texels at (y, z).
-vec2 bezel_pairs(sampler2D t, vec2 yz) {
-    vec2 g = bezel_texel(yz);
+// A two-value image's texels decoded, blended between texels at texel position g.
+vec2 pairs(sampler2D t, vec2 g) {
     ivec2 xy = ivec2(floor(g));
     vec2 f = fract(g);
     vec4 k[4] = vec4[4](bezel_load(t, xy), bezel_load(t, xy + ivec2(1, 0)),
@@ -212,6 +213,15 @@ vec2 bezel_pairs(sampler2D t, vec2 yz) {
     vec2 v[4];
     for (int i = 0; i < 4; i++) v[i] = vec2(pair(k[i].r, k[i].g), pair(k[i].b, k[i].a));
     return mix(mix(v[0], v[1], f.x), mix(v[2], v[3], f.x), f.y);
+}
+
+vec2 bezel_pairs(sampler2D t, vec2 yz) { return pairs(t, bezel_texel(yz)); }
+
+// The glass's shade and distance to its outline at uv.
+vec2 glass_baked(vec2 uv) {
+    vec2 last = vec2(textureSize(CRTSIM_GLASS, 0)) - vec2(1.0);
+    vec2 v = pairs(CRTSIM_GLASS, clamp(uv, vec2(0.0), vec2(1.0)) * last);
+    return vec2(v.x, mix(-GLASS_EDGE, GLASS_EDGE, v.y));
 }
 
 vec2 bezel_bytes(vec2 yz) {
@@ -278,14 +288,15 @@ void main() {
     vec3 glass_at = camera + ray * (-b - sqrt(max(reach, 0.0)));
     Surface glass;
     glass.uv = vec2((4.0 / 3.0 - glass_at.y) * 0.375, (1.0 - glass_at.z) * 0.5);
-    vec2 edge = abs(glass.uv * 2.0 - vec2(1.0));
-    float radius = pow(pow(edge.x, GLASS_CORNER) + pow(edge.y, GLASS_CORNER), 1.0 / GLASS_CORNER);
+    vec2 baked = glass_baked(glass.uv);
     glass.normal = (glass_at - GLASS_CENTRE) / GLASS_RADIUS;
-    glass.shade = 1.0 - 0.5 * pow(radius, 6.0);
+    glass.shade = baked.x;
     glass.reflection = 0.0;
     glass.camera = camera - glass_at;
     glass.light = light_at - glass_at;
-    float glass_depth = (reach < 0.0 || radius > 1.0) ? NOTHING : glass_at.x;
+    bool outside = any(lessThan(glass.uv, vec2(0.0))) || any(greaterThan(glass.uv, vec2(1.0)))
+        || baked.y < 0.0;
+    float glass_depth = (reach < 0.0 || outside) ? NOTHING : glass_at.x;
 
     // Only rays that may meet the bezel step across it. Nothing here takes a derivative, so
     // the branch leaves the mask's derivatives below defined.

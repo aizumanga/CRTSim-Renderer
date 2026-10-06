@@ -1,4 +1,5 @@
 //! The preset gallery and credits windows.
+use crate::gallery::Confirm;
 use crate::{chrome, gallery, model, thumbnails, App, Dialog};
 use crtsim_core::config::Config;
 use eframe::egui::{self, TextureHandle};
@@ -18,6 +19,7 @@ impl App {
         let mut selected = None;
         let mut hovered = None;
         let mut edit = None;
+        let mut confirm = None;
         let wanted: Vec<(String, Config)> = self
             .presets
             .entries
@@ -40,14 +42,32 @@ impl App {
                 );
                 ui.horizontal(|ui| {
                     ui.label("Name");
-                    ui.text_edit_singleline(&mut self.presets.name);
+                    // A replacement asked about is for the name it was asked about.
+                    if ui.text_edit_singleline(&mut self.presets.name).changed()
+                        && matches!(self.presets.confirming, Some(Confirm::Replace(_)))
+                    {
+                        self.presets.confirming = None;
+                    }
                     if ui
                         .add_enabled(self.store.is_some(), egui::Button::new("Save current"))
                         .clicked()
                     {
-                        self.save_to_gallery();
+                        self.save_to_gallery(false);
                     }
                 });
+                if let Some(Confirm::Replace(name)) = self.presets.confirming.clone() {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(format!(
+                            "“{name}” is already in My presets. Replace its settings with yours?"
+                        ));
+                        if ui.button("Replace").clicked() {
+                            self.save_to_gallery(true);
+                        }
+                        if ui.button("Cancel").clicked() {
+                            self.presets.confirming = None;
+                        }
+                    });
+                }
                 ui.horizontal(|ui| {
                     if ui.button("Load JSON…").clicked() {
                         self.dialog(Dialog::LoadPreset, ctx);
@@ -58,7 +78,7 @@ impl App {
                 });
                 ui.small(
                     "Load an existing JSON, then choose Save current to add it to My presets. \
-                     Existing names are never overwritten.",
+                     Saving under a name already there asks before replacing that preset.",
                 );
                 match &self.store {
                     Some(store) => {
@@ -95,11 +115,15 @@ impl App {
                             let mut count = 0;
                             for entry in self.presets.entries.iter().filter(|e| e.user == user) {
                                 count += 1;
+                                let deleting = entry.user
+                                    && self.presets.confirming
+                                        == Some(Confirm::Delete(entry.name.clone()));
                                 let response = preset_entry(
                                     ui,
                                     entry,
                                     pictures.get(&entry.name),
                                     &self.config,
+                                    deleting,
                                 );
                                 if response.selected {
                                     selected = Some(entry.config.clone());
@@ -113,6 +137,9 @@ impl App {
                                 if response.edit {
                                     edit = Some((entry.name.clone(), entry.description.clone()));
                                 }
+                                if let Some(answer) = response.delete {
+                                    confirm = Some((entry.name.clone(), answer));
+                                }
                             }
                             if count == 0 {
                                 ui.label(
@@ -125,6 +152,14 @@ impl App {
             });
             if let Some(edit) = edit.take() {
                 self.presets.editing = Some(edit);
+            }
+            match confirm.take() {
+                Some((name, Delete::Ask)) => {
+                    self.presets.confirming = Some(Confirm::Delete(name));
+                }
+                Some((name, Delete::Confirm)) => self.delete_from_gallery(&name),
+                Some((_, Delete::Cancel)) => self.presets.confirming = None,
+                None => {}
             }
             // Shown inside the gallery's own window, next to the preset being edited.
             self.description_window(ui.ctx());
@@ -142,18 +177,62 @@ impl App {
     pub(crate) fn refresh_gallery(&mut self) {
         self.presets.refresh(self.store.as_ref());
     }
-    fn save_to_gallery(&mut self) {
+    /// Saves the settings in use as the preset named in the gallery. One already there under
+    /// that name is replaced only when `replace` is set, which the person confirms first.
+    fn save_to_gallery(&mut self, replace: bool) {
         let Some(store) = &self.store else {
             return;
         };
-        match store.save_preset(&self.presets.name, &self.config, self.input.dimensions()) {
-            Ok(()) => {
-                self.status = format!("Saved '{}' to My presets", self.presets.name);
+        self.presets.confirming = None;
+        let name = self.presets.name.clone();
+        if !replace {
+            match store.saved_preset(&name) {
+                Ok(Some(taken)) => {
+                    self.presets.confirming = Some(Confirm::Replace(taken));
+                    self.error = None;
+                    return;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    self.error = Some(format!("Cannot save gallery preset: {e:#}"));
+                    return;
+                }
+            }
+        }
+        match store.save_preset(&name, &self.config, self.input.dimensions(), replace) {
+            Ok(saved) => {
+                self.status = if replace {
+                    format!("Replaced '{saved}' in My presets")
+                } else {
+                    format!("Saved '{saved}' to My presets")
+                };
                 self.error = None;
                 self.refresh_gallery();
             }
             Err(e) => self.error = Some(format!("Cannot save gallery preset: {e:#}")),
         }
+    }
+    fn delete_from_gallery(&mut self, name: &str) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        self.presets.confirming = None;
+        match store.delete_preset(name) {
+            Ok(()) => {
+                self.status = format!("Deleted '{name}' from My presets");
+                self.error = None;
+                if self
+                    .presets
+                    .editing
+                    .as_ref()
+                    .is_some_and(|(n, _)| n == name)
+                {
+                    self.presets.editing = None;
+                }
+            }
+            Err(e) => self.error = Some(format!("Cannot delete gallery preset: {e:#}")),
+        }
+        self.refresh_gallery();
     }
     fn description_window(&mut self, ctx: &egui::Context) {
         if let Some((name, mut description)) = self.presets.editing.clone() {
@@ -285,6 +364,14 @@ pub(crate) struct EntryResponse {
     pub(crate) selected: bool,
     pub(crate) hovered: bool,
     pub(crate) edit: bool,
+    pub(crate) delete: Option<Delete>,
+}
+
+/// A step in deleting a personal preset.
+pub(crate) enum Delete {
+    Ask,
+    Confirm,
+    Cancel,
 }
 
 /// One preset in the gallery: its thumbnail, name and description, and how it differs from the
@@ -294,6 +381,7 @@ fn preset_entry(
     entry: &gallery::Entry,
     picture: Option<&TextureHandle>,
     current: &Config,
+    deleting: bool,
 ) -> EntryResponse {
     let mut response = EntryResponse::default();
     ui.group(|ui| {
@@ -307,7 +395,27 @@ fn preset_entry(
                     response.selected = label.clicked() || picture.clicked();
                     response.hovered = (label.hovered() || picture.hovered()) && ui.is_enabled();
                     response.edit = entry.user && ui.small_button("Edit description").clicked();
+                    if entry.user
+                        && !deleting
+                        && ui
+                            .small_button("Delete")
+                            .on_hover_text("Delete this preset from My presets")
+                            .clicked()
+                    {
+                        response.delete = Some(Delete::Ask);
+                    }
                 });
+                if deleting {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Delete this preset? This cannot be undone.");
+                        if ui.button("Delete").clicked() {
+                            response.delete = Some(Delete::Confirm);
+                        }
+                        if ui.button("Cancel").clicked() {
+                            response.delete = Some(Delete::Cancel);
+                        }
+                    });
+                }
                 let description = if entry.description.is_empty() {
                     "No description"
                 } else {
