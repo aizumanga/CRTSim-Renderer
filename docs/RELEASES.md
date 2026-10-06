@@ -1,5 +1,22 @@
 # Portable releases (Phase 4)
 
+## v1.0.1
+
+The preview now follows the controls as Super Win the Game's picture follows its options menu: with **Live preview** on,
+a slider shows its effect while it is being dragged, and a video keeps playing while its settings are edited.
+
+- While a control is being changed, each preview runs the CRT already on screen on with the new settings, so an edit
+  shows at once and the glow of the old settings fades over a few frames. Once the change settles it becomes one undo
+  step and is rendered again exactly, as an export renders it. Previews used to wait until the pointer was let go.
+- Editing while a video plays no longer pauses it: the new settings show once the few frames already buffered have
+  played. A new signal or preview size, or colour mode, plays on again from the frame on screen.
+- Deleting a personal preset removes its description first, so a description can no longer be left behind and picked
+  up by the next preset saved under that name. Presets are found in any letter case when deleted or described.
+- The included presets' names cannot be used for personal presets, in any letter case, so an included preset is never
+  replaced or shown twice. A personal preset saved under one before keeps working and can be deleted.
+- `tools/showcase` makes a vertical showcase video of the renderer from six original animations, with per-clip music
+  and a reel editor. It is a development tool and is not part of the packages.
+
 ## v1.0.0
 
 The **Super Win the Game** preset now draws the CRT as the shipped game does, checked against the game's own frames:
