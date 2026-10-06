@@ -107,6 +107,13 @@ they can write, and how to install them (`crates/crtsim-app/src/ffmpeg_setup.rs`
 programs are found, never downloaded (`crates/crtsim-media/src/tools.rs`); see
 [the decision](docs/adr/0001-find-ffmpeg-never-download-it.md).
 
+**Video job**: playing a video, or exporting it as a video or an animation
+(`crates/crtsim-media/src/jobs.rs`). Each is one loop whatever the host: frames are read from
+a frame source (FFmpeg, the browser's decoder, or an animation decoded here), rendered, and
+handed on, to the preview or to an **output** that makes the file (FFmpeg on the desktop,
+the browser's encoders or the GIF and WebP writers on a page). The desktop drives the same
+loops from its worker thread.
+
 **Web app**: the whole app, with editing, the galleries, playback and exports, running in a
 browser from the author's Neocities site. It is not a cut-down demo: what the desktop app does
 with a look, the web app does too, within what a browser allows. It needs WebGPU and never

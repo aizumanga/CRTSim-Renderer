@@ -769,7 +769,10 @@ mod tests {
             read.push(frame);
         }
         assert_eq!(read, [60, 62, 64].map(test_clip::frame));
-        assert!(jobs::frame(&video, 600).is_err(), "there are 600 frames");
+        assert!(
+            jobs::decoded_frame(&video, 600).is_err(),
+            "there are 600 frames"
+        );
     }
 
     #[test]

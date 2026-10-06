@@ -11,8 +11,8 @@ use crate::{
     check_cancel,
     decode::{self, Request},
     export::{self, Encoding},
-    made_here, mux, AnimationFormat, AnimationOptions, Audio, Container, Options, Progress, Rate,
-    Source, Video,
+    made_here, mux, AnimationFormat, AnimationOptions, Container, Options, Progress, Rate, Source,
+    Video,
 };
 use anyhow::{bail, ensure, Result};
 use crtsim_core::{config::Config, Renderer, Sequence};
@@ -134,8 +134,18 @@ pub fn frames(video: &Video, span: &Span, cancel: &Arc<AtomicBool>) -> Result<Fr
     }
 }
 
-/// Frame `number` of `video`, counting from 0, when it can be decoded here.
-pub fn frame(video: &Video, number: u64) -> Result<RgbaImage> {
+/// Frame `number` of `video`, counting from 0, wherever this crate decodes it, as `frames`
+/// reads them: by FFmpeg or on a thread of its own on the desktop, and on a page here.
+pub fn frame(video: &Video, number: u64, cancel: &Arc<AtomicBool>) -> Result<RgbaImage> {
+    match video.source {
+        Source::Demuxed(_) => bail!("This video is decoded by the browser"),
+        _ if cfg!(target_arch = "wasm32") => decoded_frame(video, number),
+        _ => decode::preview_frame(video, number, cancel),
+    }
+}
+
+/// Frame `number` of `video`, counting from 0, decoded here.
+pub(crate) fn decoded_frame(video: &Video, number: u64) -> Result<RgbaImage> {
     let request = Request {
         rate: None,
         start: 0.,
@@ -284,104 +294,28 @@ pub async fn export_video<S: FrameSource, E: VideoEncoding>(
     container: Container,
     config: &Config,
     options: &Options,
-    mut open: impl AsyncFnMut(&Span) -> Result<S>,
-    mut render: impl AsyncFnMut(&mut Sequence, &RgbaImage, &Config) -> Result<RgbaImage>,
+    open: impl AsyncFnMut(&Span) -> Result<S>,
+    render: impl AsyncFnMut(&mut Sequence, &RgbaImage, &Config) -> Result<RgbaImage>,
     encoder: impl AsyncFnOnce(&EncoderSettings) -> Result<E>,
     reencode: impl AsyncFnOnce(&mux::EncodedAudio) -> Result<mux::EncodedAudio>,
     cancel: &AtomicBool,
     progress: &dyn Fn(Progress),
 ) -> Result<Vec<u8>> {
-    options.validate()?;
+    let size = crate::plan::video_size(video, config, options)?;
     let rate = Rate::of(video, options);
-    let size = config.output_size(video.size)?;
     let settings = EncoderSettings::new(container, size, rate.fps, options.quality)?;
-    let mut encoder = encoder(&settings).await?;
-    let span = Span {
+    let frames = export::Frames {
+        video,
+        render: config,
+        timing: options.timing,
+        size,
+        rate: &rate,
         start: 0.,
-        rate: Some(rate.clone()),
         limit: None,
     };
-    let expected = Ticks::new(&span, rate.fps, video.duration).rest();
-    // A keyframe every two seconds, for seeking.
-    let group = (rate.fps * 2.).round().max(1.) as u64;
-    let mut source = open(&span).await?;
-    let mut sequence = Sequence::video(options.timing, rate.fps);
-    let started = Instant::now();
-    let mut count = 0u64;
-    while let Some(frame) = source.next().await? {
-        check_cancel(cancel)?;
-        let output = render(&mut sequence, &frame, config).await?;
-        ensure!(
-            output.dimensions() == size,
-            "Renderer returned the wrong video dimensions"
-        );
-        let time = count as f64 / rate.fps;
-        encoder
-            .encode(&output, time, 1. / rate.fps, count.is_multiple_of(group))
-            .await?;
-        count += 1;
-        let done = (count as f64 / expected as f64).min(1.);
-        let elapsed = started.elapsed().as_secs_f64();
-        progress(Progress {
-            fraction: (done * 0.9) as f32,
-            stage: format!(
-                "Frame {count} of {expected} · {:.1} FPS · approximately {:.0}s remaining",
-                count as f64 / elapsed.max(0.001),
-                elapsed * (1. - done) / done
-            ),
-        });
-    }
-    ensure!(count > 0, "No frames decoded");
-    progress(Progress {
-        fraction: 0.92,
-        stage: "Finishing encoding".into(),
-    });
-    let encoded = encoder.finish().await?;
-    let audio = match (&video.source, &video.contents) {
-        (Source::Demuxed(demuxed), Some(contents)) if options.audio != Audio::Mute => {
-            demuxed.audio.as_ref().map(|track| mux::EncodedAudio {
-                codec: track.codec.clone(),
-                description: track.description.clone(),
-                sample_rate: track.sample_rate,
-                channels: track.channels,
-                packets: track
-                    .samples
-                    .iter()
-                    .map(|sample| mux::Packet {
-                        data: contents.as_ref()[sample.range.clone()].to_vec(),
-                        time: sample.time,
-                        duration: sample.duration,
-                        key: true,
-                    })
-                    .collect(),
-            })
-        }
-        _ => None,
-    };
-    let audio = match audio {
-        Some(audio)
-            if options.audio == Audio::Encode || !mux::takes_audio(container, &audio.codec) =>
-        {
-            progress(Progress {
-                fraction: 0.95,
-                stage: "Converting the sound to Opus".into(),
-            });
-            Some(reencode(&audio).await.map_err(|error| {
-                anyhow::anyhow!(
-                    "Cannot convert the sound ({}) to Opus for {}: {error:#}. Choose No audio, \
-                     or another format.",
-                    audio.codec,
-                    container.extension().to_uppercase()
-                )
-            })?)
-        }
-        audio => audio,
-    };
-    progress(Progress {
-        fraction: 0.98,
-        stage: "Writing the file".into(),
-    });
-    mux::write(container, &encoded, audio.as_ref())
+    let encoder = encoder(&settings).await?;
+    let output = made_here::Video::new(video, container, options, rate.fps, encoder, reencode);
+    export(&frames, open, render, output, cancel, progress).await
 }
 
 /// Where an export's rendered frames go: an encoder, and what makes the file from them.
@@ -498,7 +432,7 @@ pub async fn export_animation<S: FrameSource>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::webp_writer;
+    use crate::{webp_writer, Audio};
     use crate::{Contents, Dither};
     use image::{codecs::gif::GifEncoder, AnimationDecoder, Delay, Frame, Rgba};
     use std::sync::Arc;
@@ -562,7 +496,7 @@ mod tests {
         let video = clip(3);
         assert_eq!((video.size, video.frames), ((4, 4), Some(3)));
         assert_eq!(
-            frame(&video, 2).unwrap().get_pixel(0, 0).0,
+            decoded_frame(&video, 2).unwrap().get_pixel(0, 0).0,
             [120, 120, 120, 255]
         );
         let span = Span {

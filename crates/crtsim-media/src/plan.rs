@@ -15,6 +15,20 @@ use std::{
     sync::{atomic::AtomicBool, Arc},
 };
 
+/// Checks that `video` can be exported as a video with these settings, whoever encodes it:
+/// the size its frames are rendered at.
+pub(crate) fn video_size(video: &Video, config: &Config, options: &Options) -> Result<(u32, u32)> {
+    options.validate()?;
+    config.validate()?;
+    config.signal_size(video.size)?;
+    let size = config.output_size(video.size)?;
+    ensure!(
+        size.0 % 2 == 0 && size.1 % 2 == 0,
+        "Video output width and height must be even (for example 1920×1080)"
+    );
+    Ok(size)
+}
+
 /// Largest metadata an export writes, in bytes.
 const METADATA_LIMIT: usize = 16 * 1024 * 1024;
 
@@ -37,14 +51,7 @@ impl<'a> ExportPlan<'a> {
         config: &'a Config,
         options: &'a Options,
     ) -> Result<Self> {
-        options.validate()?;
-        config.validate()?;
-        config.signal_size(video.size)?;
-        let size = config.output_size(video.size)?;
-        ensure!(
-            size.0 % 2 == 0 && size.1 % 2 == 0,
-            "Video output width and height must be even (for example 1920×1080)"
-        );
+        let size = video_size(video, config, options)?;
         let container = Container::of(output).context("Choose an MP4, MKV or WebM filename")?;
         let codec = options.encoder.codec(container)?;
         let rate = Rate::of(video, options);

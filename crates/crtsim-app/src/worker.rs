@@ -389,20 +389,7 @@ impl Export {
                 video,
                 options,
                 config,
-            } if made_here(video) => {
-                export_animation_here(graphics, video, config, options, path, cancel, progress)
-                    .await
-            }
-            Self::Animation {
-                video,
-                options,
-                config,
-            } => {
-                let renderer = graphics.renderer(|| {}).await?;
-                crtsim_media::export_animation(
-                    video, path, config, options, renderer, cancel, progress,
-                )
-            }
+            } => export_animation(graphics, video, config, options, path, cancel, progress).await,
             Self::Batch {
                 source,
                 options,
@@ -823,7 +810,8 @@ async fn load_bytes(name: String, bytes: Vec<u8>) -> Result<Loaded> {
     };
     if let Some(video) = video {
         let frames = video.frames.unwrap_or(1);
-        let image = crate::frames::frame(&video, 0).await?;
+        let cancel = Arc::new(AtomicBool::new(false));
+        let image = crate::frames::frame(&video, 0, &cancel).await?;
         return Ok(opened(video, 0, frames, image));
     }
     let image = crtsim_core::input::decode_image(contents.as_ref())?;
@@ -845,20 +833,8 @@ async fn load_video(
         }
     };
     ensure!(frame < frames, "Frame is outside the video");
-    let image = if made_here(&video) {
-        crate::frames::frame(&video, frame).await?
-    } else {
-        crtsim_media::preview_frame(&video, frame, cancel)?
-    };
+    let image = crate::frames::frame(&video, frame, cancel).await?;
     Ok(opened(video, frame, frames, image))
-}
-
-/// Whether `video` is read, played and exported here, one frame at a time as a browser page
-/// does: always in a browser, and on the desktop a file handed over as bytes, as tests do.
-/// Otherwise `crtsim_media` reads it, with FFmpeg for a video file and without for an
-/// animation or the video test card, and FFmpeg encodes its exports.
-fn made_here(video: &Video) -> bool {
-    cfg!(target_arch = "wasm32") || video.contents.is_some()
 }
 
 /// Frame `frame` of `video`, of `frames`, opened for editing with its timeline.
@@ -990,8 +966,27 @@ async fn export_image(
     );
 }
 
-/// An animation of a video handed over as bytes, made here without FFmpeg and saved, which in
-/// a browser is a download.
+/// An animated GIF or WebP of `video`: encoded by FFmpeg on the desktop, and in a browser
+/// written here.
+async fn export_animation(
+    graphics: &mut Graphics,
+    video: &Video,
+    config: &Config,
+    options: &crtsim_media::AnimationOptions,
+    path: &Path,
+    cancel: &Arc<AtomicBool>,
+    progress: &dyn Fn(Progress),
+) -> Result<()> {
+    if cfg!(target_arch = "wasm32") {
+        return export_animation_here(graphics, video, config, options, path, cancel, progress)
+            .await;
+    }
+    let renderer = graphics.renderer(|| {}).await?;
+    crtsim_media::export_animation(video, path, config, options, renderer, cancel, progress)
+}
+
+/// An animation made here without FFmpeg, as a browser makes it, and saved, which in a
+/// browser is a download.
 async fn export_animation_here(
     graphics: &mut Graphics,
     video: &Video,
@@ -1027,9 +1022,10 @@ async fn export_animation_here(
     save(path, &bytes, mime)
 }
 
-/// A video handed over as bytes, exported here without FFmpeg and saved, which in a browser
-/// is a download. Its frames and sound are encoded by the browser.
-async fn export_video_here(
+/// A whole video exported in a browser without FFmpeg, and downloaded. Its frames and sound
+/// are encoded by the browser.
+#[cfg(target_arch = "wasm32")]
+async fn export_video(
     graphics: &mut Graphics,
     video: &Video,
     config: &Config,
@@ -1038,38 +1034,30 @@ async fn export_video_here(
     cancel: &Arc<AtomicBool>,
     progress: &dyn Fn(Progress),
 ) -> Result<()> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let _ = (graphics, video, config, options, path, cancel, progress);
-        anyhow::bail!("Videos handed over as bytes are encoded only in a browser")
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let container = crtsim_media::Container::of(path)
-            .ok_or_else(|| anyhow::anyhow!("Choose an MP4 or WebM filename"))?;
-        let renderer = graphics.renderer(|| {}).await?;
-        let bytes = crtsim_media::jobs::export_video(
-            video,
-            container,
-            config,
-            options,
-            async |span| crate::frames::open(video, span, cancel).await,
-            async |sequence, frame, config| {
-                crtsim_media::jobs::render(renderer, sequence, frame, config, cancel).await
-            },
-            async |settings| crate::web_encode::Encoder::open(settings).await,
-            async |audio| crate::web_encode::opus(audio).await,
-            cancel,
-            progress,
-        )
-        .await?;
-        ensure!(!cancel.load(Ordering::Relaxed), "Render cancelled");
-        let mime = match container {
-            crtsim_media::Container::Webm => "video/webm",
-            _ => "video/mp4",
-        };
-        save(path, &bytes, mime)
-    }
+    let container = crtsim_media::Container::of(path)
+        .ok_or_else(|| anyhow::anyhow!("Choose an MP4 or WebM filename"))?;
+    let renderer = graphics.renderer(|| {}).await?;
+    let bytes = crtsim_media::jobs::export_video(
+        video,
+        container,
+        config,
+        options,
+        async |span| crate::frames::open(video, span, cancel).await,
+        async |sequence, frame, config| {
+            crtsim_media::jobs::render(renderer, sequence, frame, config, cancel).await
+        },
+        async |settings| crate::web_encode::Encoder::open(settings).await,
+        async |audio| crate::web_encode::opus(audio).await,
+        cancel,
+        progress,
+    )
+    .await?;
+    ensure!(!cancel.load(Ordering::Relaxed), "Render cancelled");
+    let mime = match container {
+        crtsim_media::Container::Webm => "video/webm",
+        _ => "video/mp4",
+    };
+    save(path, &bytes, mime)
 }
 
 /// A frame as a lossy still WebP, which only a browser's own encoder writes here.
@@ -1096,7 +1084,8 @@ fn save(path: &Path, bytes: &[u8], mime: &str) -> Result<()> {
     }
 }
 
-/// A whole video rendered and encoded, with its audio and other tracks.
+/// A whole video rendered and encoded by FFmpeg, with its audio and other tracks.
+#[cfg(not(target_arch = "wasm32"))]
 async fn export_video(
     graphics: &mut Graphics,
     video: &Video,
@@ -1106,9 +1095,6 @@ async fn export_video(
     cancel: &Arc<AtomicBool>,
     progress: &dyn Fn(Progress),
 ) -> Result<()> {
-    if made_here(video) {
-        return export_video_here(graphics, video, config, options, path, cancel, progress).await;
-    }
     let renderer = graphics.renderer(|| {}).await?;
     crtsim_media::export(video, path, config, options, renderer, cancel, progress)
 }
@@ -1536,10 +1522,11 @@ mod tests {
         }
     }
 
-    /// Animations of a video handed over as bytes are written here, as a browser writes them.
+    /// An animation handed over as bytes, as a browser hands it over, exports on the desktop as
+    /// any other: as animations and as a video, all encoded by FFmpeg.
     #[test]
-    #[ignore = "requires a Vulkan adapter"]
-    fn an_animation_handed_over_as_bytes_exports_without_ffmpeg() {
+    #[ignore = "requires a Vulkan adapter and FFmpeg"]
+    fn an_animation_handed_over_as_bytes_exports_as_animations_and_as_a_video() {
         let dir = tempfile::tempdir().unwrap();
         let (_, worker, next) = workers().remove(1);
         worker
@@ -1553,22 +1540,37 @@ mod tests {
             panic!("expected the animation");
         };
         let video = loaded.timeline.unwrap().video;
-        for (name, lossless) in [("crt.gif", false), ("crt.webp", true)] {
-            let options = crtsim_media::AnimationOptions {
+        let animation = |lossless| Export::Animation {
+            video: video.clone(),
+            options: crtsim_media::AnimationOptions {
                 max_side: 96,
                 fps: 10,
                 lossless,
                 ..Default::default()
-            };
+            },
+            config: Config::default(),
+        };
+        let exports = [
+            ("crt.gif", animation(false)),
+            ("crt.webp", animation(true)),
+            (
+                "crt.mp4",
+                Export::Video {
+                    video: video.clone(),
+                    options: Options::default(),
+                    config: Config {
+                        output: "640x480".into(),
+                        ..Config::default()
+                    },
+                },
+            ),
+        ];
+        for (name, export) in exports {
             let path = dir.path().join(name);
             worker
                 .jobs
                 .send(Job::Export {
-                    export: Export::Animation {
-                        video: video.clone(),
-                        options,
-                        config: Config::default(),
-                    },
+                    export,
                     path: path.clone(),
                     cancel: Arc::new(AtomicBool::new(false)),
                 })
@@ -1583,12 +1585,18 @@ mod tests {
                     _ => panic!("{name}: unexpected event"),
                 }
             }
-            let bytes = std::fs::read(&path).unwrap();
-            let size = image::load_from_memory(&bytes)
-                .unwrap()
-                .to_rgba8()
-                .dimensions();
-            assert_eq!(size.0.max(size.1), 96, "{name}");
+            let size = if name == "crt.mp4" {
+                let cancel = Arc::new(AtomicBool::new(false));
+                crtsim_media::probe(&path, &cancel).unwrap().size
+            } else {
+                let bytes = std::fs::read(&path).unwrap();
+                image::load_from_memory(&bytes)
+                    .unwrap()
+                    .to_rgba8()
+                    .dimensions()
+            };
+            let longest = size.0.max(size.1);
+            assert_eq!(longest, if name == "crt.mp4" { 640 } else { 96 }, "{name}");
         }
         stop(worker);
     }

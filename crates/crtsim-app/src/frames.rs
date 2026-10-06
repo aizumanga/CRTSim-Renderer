@@ -36,12 +36,10 @@ pub async fn open(video: &Video, span: &Span, cancel: &Arc<AtomicBool>) -> Resul
 }
 
 /// Frame `number` of `video`, counting from 0 in the order they show.
-pub async fn frame(video: &Video, number: u64) -> Result<RgbaImage> {
+pub async fn frame(video: &Video, number: u64, cancel: &Arc<AtomicBool>) -> Result<RgbaImage> {
+    #[cfg(target_arch = "wasm32")]
     if let crtsim_media::Source::Demuxed(_) = video.source {
-        #[cfg(target_arch = "wasm32")]
         return crate::web_video::frame(video, number).await;
-        #[cfg(not(target_arch = "wasm32"))]
-        anyhow::bail!("Video files handed over as bytes are decoded only in a browser");
     }
-    jobs::frame(video, number)
+    jobs::frame(video, number, cancel)
 }
