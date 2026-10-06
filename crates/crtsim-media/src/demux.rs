@@ -106,6 +106,141 @@ pub fn demux(name: &Path, bytes: &[u8]) -> Result<Demuxed> {
     Ok(demuxed)
 }
 
+/// The video file's comment, which an export's preset is kept in: an MP4's `©cmt` entry, as
+/// FFmpeg writes it, or a WebM or Matroska file's global `COMMENT` tag. `None` without one.
+pub fn comment(bytes: &[u8]) -> Result<Option<String>> {
+    if bytes.starts_with(&[0x1a, 0x45, 0xdf, 0xa3]) {
+        matroska_comment(bytes)
+    } else if bytes.len() >= 8 && is_mp4(&bytes[4..8]) {
+        mp4_comment(bytes)
+    } else {
+        bail!("This is not an MP4, MOV, WebM or MKV video")
+    }
+}
+
+/// The boxes directly inside `range` of an MP4: each one's name and contents.
+fn boxes(bytes: &[u8], range: Range<usize>) -> Result<Vec<([u8; 4], Range<usize>)>> {
+    let mut found = vec![];
+    let mut at = range.start;
+    while at + 8 <= range.end {
+        let size = u32::from_be_bytes(bytes[at..at + 4].try_into()?) as u64;
+        let name: [u8; 4] = bytes[at + 4..at + 8].try_into()?;
+        let (header, size) = match size {
+            0 => (8, (range.end - at) as u64),
+            1 => {
+                ensure!(at + 16 <= range.end, "The MP4 is cut short");
+                (16, u64::from_be_bytes(bytes[at + 8..at + 16].try_into()?))
+            }
+            size => (8, size),
+        };
+        let end = at
+            .checked_add(usize::try_from(size)?)
+            .context("The MP4 is damaged")?;
+        ensure!(end <= range.end && size >= header, "The MP4 is damaged");
+        found.push((name, at + header as usize..end));
+        at = end;
+    }
+    Ok(found)
+}
+
+/// The box called `name` directly inside `range`, if there is one.
+fn mp4_child(bytes: &[u8], range: Range<usize>, name: &[u8; 4]) -> Result<Option<Range<usize>>> {
+    Ok(boxes(bytes, range)?
+        .into_iter()
+        .find(|(found, _)| found == name)
+        .map(|(_, body)| body))
+}
+
+fn mp4_comment(bytes: &[u8]) -> Result<Option<String>> {
+    let Some(moov) = mp4_child(bytes, 0..bytes.len(), b"moov")? else {
+        return Ok(None);
+    };
+    let Some(udta) = mp4_child(bytes, moov, b"udta")? else {
+        return Ok(None);
+    };
+    // FFmpeg writes it as iTunes metadata: meta, a full box, holding ilst.
+    if let Some(meta) = mp4_child(bytes, udta.clone(), b"meta")? {
+        let entries = (meta.start + 4).min(meta.end)..meta.end;
+        if let Some(ilst) = mp4_child(bytes, entries, b"ilst")? {
+            if let Some(comment) = mp4_child(bytes, ilst, b"\xa9cmt")? {
+                if let Some(data) = mp4_child(bytes, comment, b"data")? {
+                    // Its type and locale come before the text.
+                    ensure!(data.len() >= 8, "The MP4's comment is damaged");
+                    let text = &bytes[data.start + 8..data.end];
+                    return Ok(Some(String::from_utf8_lossy(text).into_owned()));
+                }
+            }
+        }
+    }
+    // Or in QuickTime's own way: the text's length and language, then the text.
+    if let Some(comment) = mp4_child(bytes, udta, b"\xa9cmt")? {
+        ensure!(comment.len() >= 4, "The MP4's comment is damaged");
+        let length = usize::from(u16::from_be_bytes(
+            bytes[comment.start..comment.start + 2].try_into()?,
+        ));
+        let text = comment.start + 4..(comment.start + 4 + length).min(comment.end);
+        return Ok(Some(String::from_utf8_lossy(&bytes[text]).into_owned()));
+    }
+    Ok(None)
+}
+
+fn matroska_comment(bytes: &[u8]) -> Result<Option<String>> {
+    let segment = children(bytes, 0..bytes.len())?
+        .into_iter()
+        .find(|element| element.id == 0x1853_8067)
+        .context("The WebM has no segment")?;
+    // A level of the file whose sizes were not written cannot be stepped over, so the tags
+    // are looked for only up to there.
+    let mut at = segment.body.start;
+    while at < segment.body.end {
+        let element = element(bytes, at, segment.body.end)?;
+        if element.id == 0x1254_C367 {
+            if let Some(comment) = global_comment(bytes, element.body.clone())? {
+                return Ok(Some(comment));
+            }
+        }
+        if element.unknown {
+            break;
+        }
+        at = element.body.end;
+    }
+    Ok(None)
+}
+
+/// The `COMMENT` among the file-wide tags in `tags`: those whose targets name no track.
+fn global_comment(bytes: &[u8], tags: Range<usize>) -> Result<Option<String>> {
+    for tag in children(bytes, tags)?
+        .into_iter()
+        .filter(|e| e.id == 0x7373)
+    {
+        let parts = children(bytes, tag.body)?;
+        let targeted = parts.iter().filter(|e| e.id == 0x63C0).try_fold(
+            false,
+            |targeted, targets| -> Result<bool> {
+                let ids = children(bytes, targets.body.clone())?;
+                Ok(targeted || ids.iter().any(|e| matches!(e.id, 0x63C5 | 0x63C9 | 0x63C4)))
+            },
+        )?;
+        if targeted {
+            continue;
+        }
+        for simple in parts.iter().filter(|e| e.id == 0x67C8) {
+            let fields = children(bytes, simple.body.clone())?;
+            let field = |id| {
+                fields
+                    .iter()
+                    .find(|e| e.id == id)
+                    .map(|e| &bytes[e.body.clone()])
+            };
+            let named = field(0x45A3).is_some_and(|name| name.eq_ignore_ascii_case(b"COMMENT"));
+            if let (true, Some(text)) = (named, field(0x4487)) {
+                return Ok(Some(String::from_utf8_lossy(text).into_owned()));
+            }
+        }
+    }
+    Ok(None)
+}
+
 fn is_mp4(kind: &[u8]) -> bool {
     matches!(
         kind,

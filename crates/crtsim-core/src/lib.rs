@@ -27,7 +27,7 @@ use std::sync::{
 };
 
 pub use gpu_prepare::PrepareOn;
-pub use sequence::{Sequence, Timing};
+pub use sequence::{Sequence, Shape, Timing};
 
 pub const SHADER: &str = include_str!("../../../shaders/crtsim.wgsl");
 
@@ -185,17 +185,8 @@ pub(crate) struct Workspace {
     prepare: gpu_prepare::Cache,
     uniforms: Uniforms,
     bindings: Bindings,
-    signal_size: (u32, u32),
-    output_size: (u32, u32),
-    surface_format: wgpu::TextureFormat,
-}
-
-impl Workspace {
-    fn matches(&self, plan: &Plan) -> bool {
-        self.signal_size == plan.signal
-            && self.output_size == plan.output
-            && self.surface_format == plan.surface_format
-    }
+    /// What its targets are made for.
+    shape: Shape,
 }
 
 /// Ticks encoded before each submission, which is also where a frame reports progress and
@@ -249,9 +240,7 @@ struct Bindings {
 
 /// What a render of one input with one configuration makes, checked against the device.
 struct Plan {
-    signal: (u32, u32),
-    output: (u32, u32),
-    surface_format: wgpu::TextureFormat,
+    shape: Shape,
     /// Whether to prepare the signal on the device rather than on this thread.
     prepare_on_gpu: bool,
 }
@@ -544,7 +533,7 @@ impl Renderer {
         if sequence
             .workspace
             .as_ref()
-            .is_some_and(|workspace| !workspace.matches(&plan))
+            .is_some_and(|workspace| workspace.shape != plan.shape)
         {
             ensure!(
                 sequence.restarts(),
@@ -573,7 +562,7 @@ impl Renderer {
                 &workspace.source,
             ),
         }
-        let mut params = Params::new(c, plan.signal, plan.output);
+        let mut params = Params::new(c, plan.shape.signal, plan.shape.output);
         // A sequence starts from cleared history, then warms up.
         let first = sequence.tick == 0;
         if first {
@@ -628,7 +617,7 @@ impl Renderer {
             .workspace
             .as_mut()
             .context("Render a frame before reading it")?;
-        let size = workspace.output_size;
+        let size = workspace.shape.output;
         workspace
             .readback
             .get_or_insert_with(|| Readback::new(&self.device, size))
@@ -692,8 +681,9 @@ impl Renderer {
     /// The targets for `plan`, and the bind groups their passes use.
     fn workspace(&self, plan: &Plan) -> Workspace {
         let device = &self.device;
-        let (signal_size, output_size) = (plan.signal, plan.output);
-        let surface = |name, size| Target::with_format(device, name, size, plan.surface_format, 1);
+        let (signal_size, output_size) = (plan.shape.signal, plan.shape.output);
+        let format = surface_format(plan.shape.color_mode);
+        let surface = |name, size| Target::with_format(device, name, size, format, 1);
         let source = Target::new(device, "clean signal", signal_size);
         let history = [
             Target::new(device, "history A", signal_size),
@@ -725,16 +715,14 @@ impl Renderer {
             full,
             down,
             up,
-            signal_size,
-            output_size,
-            surface_format: plan.surface_format,
+            shape: plan.shape,
         }
     }
 
     fn plan(&self, input: &RgbaImage, c: &Config) -> Result<Plan> {
         c.validate()?;
-        let signal = c.signal_size(input.dimensions())?;
-        let output = c.output_size(input.dimensions())?;
+        let shape = c.sequence_shape(input.dimensions())?;
+        let (signal, output) = (shape.signal, shape.output);
         let limit = self.device.limits().max_texture_dimension_2d;
         ensure!(
             [signal.0, signal.1, output.0, output.1]
@@ -770,9 +758,7 @@ impl Renderer {
             BUDGET / 1_000_000
         );
         Ok(Plan {
-            signal,
-            output,
-            surface_format: surface_format(c.color_mode),
+            shape,
             prepare_on_gpu,
         })
     }

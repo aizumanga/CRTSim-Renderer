@@ -9,22 +9,22 @@ impl App {
             ui.selectable_value(&mut self.view, View::Crt, "CRT");
             ui.selectable_value(&mut self.view, View::Compare, "Compare");
             ui.separator();
-            ui.checkbox(&mut self.schedule.live, "Live preview");
+            ui.checkbox(self.preview.live_mut(), "Live preview");
             if ui
                 .add_enabled(
-                    !self.schedule.rendering() && !self.work.is_loading(),
+                    !self.preview.rendering() && !self.lane.is_loading(),
                     egui::Button::new("Refresh"),
                 )
                 .clicked()
             {
-                self.request_preview(schedule::Kind::Settled);
+                self.refresh_preview();
             }
         });
         ui.horizontal_wrapped(|ui| {
             let chosen = choice(
                 ui,
                 "Preview quality",
-                &mut self.preview_limit,
+                &mut self.preview.quality,
                 &[
                     (Some(800), "Fast (800 px)"),
                     (Some(1280), "Balanced (1280 px)"),
@@ -48,9 +48,9 @@ impl App {
         );
         if let Ok(c) = self
             .config
-            .with_max_output_side(self.input.dimensions(), self.preview_limit)
+            .with_max_output_side(self.source.input().dimensions(), self.preview.quality)
         {
-            let input = self.input.dimensions();
+            let input = self.source.input().dimensions();
             if let (Ok((w, h)), Ok(signal)) = (c.output_size(input), c.signal_size(input)) {
                 let [columns, rows] = c.mask_repeats.resolve(signal);
                 if w as f32 / columns < 6. || h as f32 / rows < 3. {
@@ -63,29 +63,34 @@ impl App {
                 }
             }
         }
-        if self.schedule.rendering_settled() || !self.work.is_idle() {
+        if self.preview.rendering_settled() || self.lane.is_working() {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label(match self.work {
-                    Work::Exporting { .. } => "Exporting…",
-                    Work::Loading(_) => "Loading file/frame…",
-                    Work::Idle => "Rendering preview…",
+                ui.label(match self.lane.task() {
+                    Some(lane::Task::Exporting) => "Exporting…",
+                    Some(lane::Task::Loading) => "Loading file/frame…",
+                    Some(lane::Task::ImportingPreset) => "Reading preset…",
+                    Some(lane::Task::Playing) | None => "Rendering preview…",
                 });
             });
         }
-        if let Some(audition) = &self.audition {
+        if let Some(audition) = self.preview.audition() {
             ui.colored_label(
                 ui.visuals().selection.bg_fill,
                 format!(
-                    "Previewing {} — click it to apply, or move away to return to your settings",
-                    audition.label
+                    "Previewing {audition} — click it to apply, or move away to return to your \
+                     settings"
                 ),
             );
         }
-        if self.rendered.is_some() && self.schedule.stale() {
+        if self.preview.stale() {
             ui.colored_label(ui.visuals().warn_fg_color, "Preview is out of date.");
         }
-        let controls_height = if self.timeline.is_some() { 136. } else { 0. };
+        let controls_height = if self.source.timeline.is_some() {
+            136.
+        } else {
+            0.
+        };
         let available = egui::vec2(
             ui.available_width(),
             (ui.available_height() - controls_height).max(1.),
@@ -95,11 +100,11 @@ impl App {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 if self.view == View::Compare {
-                    if let Some(ref im) = self.rendered {
+                    if let Some(im) = self.preview.picture() {
                         compare(
                             ui,
-                            egui::load::SizedTexture::from_handle(&self.original),
-                            im.sized(),
+                            egui::load::SizedTexture::from_handle(self.source.original()),
+                            im,
                             available,
                             self.fit_preview,
                             self.zoom,
@@ -109,13 +114,13 @@ impl App {
                 } else if self.view == View::Original {
                     show_image(
                         ui,
-                        egui::load::SizedTexture::from_handle(&self.original),
+                        egui::load::SizedTexture::from_handle(self.source.original()),
                         available,
                         self.fit_preview,
                         self.zoom,
                     );
-                } else if let Some(ref im) = self.rendered {
-                    show_image(ui, im.sized(), available, self.fit_preview, self.zoom);
+                } else if let Some(im) = self.preview.picture() {
+                    show_image(ui, im, available, self.fit_preview, self.zoom);
                 } else {
                     ui.label(
                         "Open an image, video or test card. Your rendered preview \
@@ -132,7 +137,7 @@ impl App {
         let galleries_overlap = ui.ctx().embed_viewports() && (self.presets.open || self.luts.open);
         let enabled = self.can_start_work() && !galleries_overlap;
         let playing = self.playback.is_some();
-        let Some(timeline) = &mut self.timeline else {
+        let Some(timeline) = &mut self.source.timeline else {
             return;
         };
         let last = timeline.last();
@@ -180,8 +185,8 @@ impl App {
             });
             ui.scope(|ui| {
                 ui.spacing_mut().slider_width = (ui.available_width() - 20.).max(100.);
-                let response =
-                    ui.add(egui::Slider::new(&mut timeline.picked, 0..=last).show_value(false));
+                let response = Keyed::new(0..=last)
+                    .show(ui, &mut timeline.picked, |slider| slider.show_value(false));
                 seek |= response.drag_stopped()
                     || (response.changed() && !ui.input(|i| i.pointer.any_down()));
             });
@@ -206,13 +211,12 @@ impl App {
             selected (Esc lets go of it) · Export frame saves this settled CRT still as PNG.",
             timeline.shown + 1
         ));
-        let pick = (seek && enabled && timeline.seeking())
-            .then(|| (timeline.video.path.clone(), timeline.picked));
+        let pick = (seek && enabled && timeline.seeking()).then_some(timeline.picked);
         if toggle {
             self.toggle_playback();
         }
-        if let Some((path, frame)) = pick {
-            self.load_video(path, frame, true);
+        if let Some(opening) = pick.and_then(|frame| self.source.open_frame(frame)) {
+            self.start_opening(opening, String::new());
         }
     }
 }

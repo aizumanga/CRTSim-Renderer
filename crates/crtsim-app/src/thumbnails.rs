@@ -50,11 +50,11 @@ impl App {
         if thumbnails
             .source
             .as_ref()
-            .is_some_and(|source| Arc::ptr_eq(source, &self.input))
+            .is_some_and(|source| Arc::ptr_eq(source, self.source.input()))
         {
             return;
         }
-        thumbnails.source = Some(self.input.clone());
+        thumbnails.source = Some(self.source.input().clone());
         thumbnails.small = None;
         thumbnails.generation += 1;
         thumbnails.entries.clear();
@@ -78,7 +78,8 @@ impl App {
                 return entry.texture();
             }
         }
-        let small = config.with_max_output_side(self.input.dimensions(), Some(PRESET_SIDE));
+        let small =
+            config.with_max_output_side(self.source.input().dimensions(), Some(PRESET_SIDE));
         self.thumbnails.entries.insert(
             key.clone(),
             Thumbnail {
@@ -94,7 +95,7 @@ impl App {
             self.send_preview(PreviewJob::Thumbnail {
                 generation: self.thumbnails.generation,
                 key,
-                input: self.input.clone(),
+                input: self.source.input().clone(),
                 look: Look::Crt(Box::new(small)),
             });
         }
@@ -111,7 +112,7 @@ impl App {
         let small = self
             .thumbnails
             .small
-            .get_or_insert_with(|| Arc::new(opaque_thumbnail(&self.input, LUT_SIDE)))
+            .get_or_insert_with(|| Arc::new(opaque_thumbnail(self.source.input(), LUT_SIDE)))
             .clone();
         self.thumbnails.entries.insert(
             key.clone(),
@@ -228,8 +229,7 @@ mod tests {
             None,
             None,
         );
-        let (captured, _work, jobs) = worker::Jobs::capture();
-        app.jobs = captured;
+        let (_work, jobs) = app.capture_jobs();
         let preset = Config::general();
         assert!(app.lut_thumbnail(4).is_none());
         assert!(app
@@ -257,7 +257,7 @@ mod tests {
         assert!(asked(&jobs).is_empty());
         // A new source asks for everything again, under a new generation...
         let generation = first[0].0;
-        app.input = Arc::new(RgbaImage::new(32, 32));
+        app.source.set_image(RgbaImage::new(32, 32));
         app.lut_thumbnail(4);
         assert_eq!(asked(&jobs), vec![(generation + 1, ThumbnailKey::Lut(4))]);
         // ...and a late result for the old source is not shown.
@@ -287,8 +287,7 @@ mod tests {
             None,
             None,
         );
-        let (captured, _work, _previews) = worker::Jobs::capture();
-        app.jobs = captured;
+        let (_work, _previews) = app.capture_jobs();
         app.luts.open = true;
         app.lut_thumbnail(0);
         assert!(app.thumbnails_pending());

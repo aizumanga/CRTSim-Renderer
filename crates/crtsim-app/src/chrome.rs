@@ -64,6 +64,13 @@ pub fn monitor(ui: &mut egui::Ui) {
         Stroke::new(2.0_f32, ui.visuals().text_color()),
     );
 }
+/// The app's version, in the status bar's far corner.
+pub fn version(ui: &mut egui::Ui) {
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.weak(concat!("v", env!("CARGO_PKG_VERSION")));
+    });
+}
+
 pub fn status_light(ui: &mut egui::Ui, busy: bool, error: bool) {
     let (r, _) = ui.allocate_exact_size(egui::vec2(12., 16.), egui::Sense::hover());
     let color = if error {

@@ -170,7 +170,7 @@ impl App {
         self.store_window_state("Preset gallery", window);
         self.presets.open = open;
         if let Some((label, config)) = hovered.filter(|_| open) {
-            self.offer_audition(label, config);
+            self.preview.offer(label, config);
         }
         if let Some(config) = selected {
             self.replace_config(config);
@@ -209,7 +209,12 @@ impl App {
                 }
             }
         }
-        match store.save_preset(&name, &self.config, self.input.dimensions(), replace) {
+        match store.save_preset(
+            &name,
+            &self.config,
+            self.source.input().dimensions(),
+            replace,
+        ) {
             Ok(saved) => {
                 self.status = if replace {
                     format!("Replaced '{saved}' in My presets")

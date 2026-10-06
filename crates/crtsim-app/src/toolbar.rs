@@ -74,7 +74,7 @@ impl App {
                     }
                 });
                 ui.menu_button("Export", |ui| {
-                    let png = if self.timeline.is_some() {
+                    let png = if self.source.timeline.is_some() {
                         "Current frame as PNG…"
                     } else {
                         "Image as PNG…"
@@ -87,7 +87,7 @@ impl App {
                         ui.close();
                     }
                     if ui
-                        .add_enabled(self.timeline.is_some(), egui::Button::new("Video…"))
+                        .add_enabled(self.source.timeline.is_some(), egui::Button::new("Video…"))
                         .clicked()
                     {
                         self.open_video_export(false);

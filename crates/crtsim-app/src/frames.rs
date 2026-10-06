@@ -1,14 +1,15 @@
-//! Where a video's frames come from when FFmpeg does not decode them: an animation's are
-//! decoded here, and a video file's by the browser.
+//! Where a video's frames come from: wherever `crtsim_media` decodes them, or, for a video
+//! file handed over as bytes, the browser.
 use anyhow::Result;
 use crtsim_media::{
-    page::{self, FrameSource, Span},
+    jobs::{self, FrameSource, Span},
     Video,
 };
 use image::RgbaImage;
+use std::sync::{atomic::AtomicBool, Arc};
 
 pub enum Frames {
-    Decoded(page::Decoded),
+    Media(jobs::Frames),
     #[cfg(target_arch = "wasm32")]
     Browser(crate::web_video::Frames),
 }
@@ -16,7 +17,7 @@ pub enum Frames {
 impl FrameSource for Frames {
     async fn next(&mut self) -> Result<Option<RgbaImage>> {
         match self {
-            Self::Decoded(frames) => frames.next().await,
+            Self::Media(frames) => frames.next().await,
             #[cfg(target_arch = "wasm32")]
             Self::Browser(frames) => frames.next().await,
         }
@@ -24,25 +25,21 @@ impl FrameSource for Frames {
 }
 
 /// The frames of `video` that `span` asks for.
-pub async fn open(video: &Video, span: &Span) -> Result<Frames> {
+pub async fn open(video: &Video, span: &Span, cancel: &Arc<AtomicBool>) -> Result<Frames> {
+    #[cfg(target_arch = "wasm32")]
     if let crtsim_media::Source::Demuxed(_) = video.source {
-        #[cfg(target_arch = "wasm32")]
         return Ok(Frames::Browser(
             crate::web_video::frames(video, span).await?,
         ));
-        #[cfg(not(target_arch = "wasm32"))]
-        anyhow::bail!("Video files handed over as bytes are decoded only in a browser");
     }
-    Ok(Frames::Decoded(page::decoded(video, span)?))
+    Ok(Frames::Media(jobs::frames(video, span, cancel)?))
 }
 
 /// Frame `number` of `video`, counting from 0 in the order they show.
-pub async fn frame(video: &Video, number: u64) -> Result<RgbaImage> {
+pub async fn frame(video: &Video, number: u64, cancel: &Arc<AtomicBool>) -> Result<RgbaImage> {
+    #[cfg(target_arch = "wasm32")]
     if let crtsim_media::Source::Demuxed(_) = video.source {
-        #[cfg(target_arch = "wasm32")]
         return crate::web_video::frame(video, number).await;
-        #[cfg(not(target_arch = "wasm32"))]
-        anyhow::bail!("Video files handed over as bytes are decoded only in a browser");
     }
-    page::frame(video, number)
+    jobs::frame(video, number, cancel)
 }

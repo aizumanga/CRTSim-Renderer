@@ -281,6 +281,23 @@ impl Config {
         }
     }
 
+    /// Super Win the Game's own CRT options: the public reference with a 30° field of view,
+    /// NTSC blending at 0.35 and its NTSC palette made as the game makes it, with the artifact
+    /// pattern as its Windows build draws it and the bezel reflecting the picture as the screen
+    /// shows it.
+    pub fn super_win_the_game() -> Self {
+        Self {
+            fov: 30.,
+            phase: Phase::Alternating,
+            ntsc_blending: 0.35,
+            reflection_as_screen: true,
+            // The game's engine draws a backdrop at 1/16 grey, seen past the bezel.
+            backdrop_color: [0.0625; 3],
+            palette: Some(Default::default()),
+            ..Self::default()
+        }
+    }
+
     /// The colour table prepare applies: the NES palette's when one is set, else the LUT.
     pub fn lut_in_use(&self) -> Option<std::sync::Arc<crate::workflow::Lut>> {
         match &self.palette {
@@ -334,6 +351,15 @@ impl Config {
         ensure!(self.version == VERSION, "unsupported config version");
         ensure!(self.warmup <= 240, "warmup must be <=240 ticks");
         crate::settings::validate(self)
+    }
+    /// The shape a sequence of these settings has, for an input of size `input`: two settings
+    /// of one shape can follow each other in one sequence.
+    pub fn sequence_shape(&self, input: (u32, u32)) -> Result<crate::Shape> {
+        Ok(crate::Shape {
+            signal: self.signal_size(input)?,
+            output: self.output_size(input)?,
+            color_mode: self.color_mode,
+        })
     }
     pub fn signal_size(&self, input: (u32, u32)) -> Result<(u32, u32)> {
         validate_size(input)?;
@@ -506,6 +532,52 @@ pub fn test_card() -> RgbaImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sequence_shape_changes_with_its_sizes_and_color_mode_only() {
+        let input = (1216, 832);
+        let base = Config::general();
+        let shape = base.sequence_shape(input).unwrap();
+        assert_eq!(
+            (shape.signal, shape.output),
+            (
+                base.signal_size(input).unwrap(),
+                base.output_size(input).unwrap()
+            )
+        );
+        let edited = Config {
+            bloom: 0.,
+            mask_opacity: 0.2,
+            ..base.clone()
+        };
+        assert_eq!(
+            edited.sequence_shape(input).unwrap(),
+            shape,
+            "other settings keep it"
+        );
+        for other in [
+            Config {
+                signal: "240p".into(),
+                ..base.clone()
+            },
+            Config {
+                output: "720p".into(),
+                ..base.clone()
+            },
+            Config {
+                color_mode: ColorMode::LinearLight,
+                ..base.clone()
+            },
+        ] {
+            assert_ne!(other.sequence_shape(input).unwrap(), shape);
+        }
+        let unplayable = Config {
+            output: "not a size".into(),
+            ..base
+        };
+        assert!(unplayable.sequence_shape(input).is_err());
+    }
+
     #[test]
     fn old_presets_keep_reference_behavior_and_neutral_grade_is_exact() {
         let c = Config::from_json_slice(b"{\"version\":1,\"signal\":\"native\"}").unwrap();

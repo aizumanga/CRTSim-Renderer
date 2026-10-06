@@ -31,7 +31,7 @@ The welcome and credits also link to Pittman's
 [CRT Simulation in Super Win the Game](https://www.gamedeveloper.com/programming/crt-simulation-in-super-win-the-game),
 an interesting technical account of how the effect developed.
 
-**Preset gallery** includes General image, Original CRTSim, Super Win the Game, Soft television, Clean RGB, Pixel art 240p, NTSC 240p, NTSC 480i, PAL 288p, PAL 576i, Warm analog and Linear light.
+**Preset gallery** includes Super Win the Game, the preset the app starts with, General image, Soft television, Clean RGB, Pixel art 240p, NTSC 240p, NTSC 480i, PAL 288p, PAL 576i, Warm analog and Linear light.
 The NTSC and PAL presets set the line count, interlacing and composite phase. The artifact model is the original NTSC-derived one, so the PAL presets approximate PAL's line-alternating color with gentler, stable artifacts rather than simulating it. Video frame rate is chosen separately in Export → Video.
 Each preset shows a thumbnail rendered from your current image. Point at a preset to preview it on the full image without applying it (nothing is changed or added to Undo), and click to apply it.
 Enter a name and choose **Save current** to add your exact settings to **My presets**; they reappear after restarting. Use **Edit description** on any personal preset to add, change or clear its description, and **Delete** to remove it, after confirming.
@@ -60,14 +60,14 @@ Files without this metadata are rejected with an explanatory message; third-part
 game did, so the mask stays smooth where it is drawn smaller than it is. It is on by default; presets saved with it off keep
 their unfiltered sampling. Display resizing can still introduce moiré.
 **Mask follows the signal** gives the mask a column for every two signal columns and a row for every signal row, as the
-original did, so a finer signal gets a finer mask. Original CRTSim and the line-count presets (Pixel art 240p, NTSC and PAL)
+original did, so a finer signal gets a finer mask. Super Win the Game and the line-count presets (Pixel art 240p, NTSC and PAL)
 use it; the general-image presets keep a fixed 128 × 224 mask. Presets saved with fixed columns and rows keep them.
 
 **Super Win the Game** uses the game's own CRT options on top of the public reference: a 30° field of view, **NTSC blending**
 at 0.35, its **NTSC palette**, the artifact pattern as its Windows build draws it, and the bezel reflecting the picture as the screen shows it (**Reflection as on the screen**), and the game's grey backdrop past the bezel in wide outputs (**Backdrop color**). The game saves its screenshots with the two artifact patterns averaged; set **Phase** to **Stable** to compare with one. NTSC blending moves the two composite artifact patterns towards each other in the game's
 units, so alternating ticks mix them 17.5/82.5 and 82.5/17.5 instead of switching cleanly; 0, the default, is the public
 source's switch, and 1 shows their average on every tick. **NES palette** (Color & LUT) makes the palette from the game's
-**Tint**, **Tint I** and **Tint Q**, one of two ways. **The game's** makes it exactly as Super Win the Game does, matching
+**Tint**, **Tint I** and **Tint Q**, one of two ways. **Super Win the Game's** makes it exactly as the game does, matching
 the game's own output bit for bit, and recolours art drawn in the NES palette the game's art uses (the one beginning
 `7C7C7C 0000FC 0000BC`); its table has the game's 32 steps per channel, each taking the colour of the nearest art colour.
 **From the composite signal** decodes the NES's measured signal levels instead, fitted to FirebrandX's Composite Direct
@@ -94,8 +94,9 @@ even when the preview is smaller. The window remains responsive while loading, r
 Settings changed during an export apply to the next export. The native save dialog asks for confirmation when a desktop PNG or JSON preset
 already exists; after confirmation, the app writes a complete temporary file and atomically replaces the destination.
 
+- **Super Win the Game**, the preset the app starts with and **Reset** returns to, is the public-reference defaults,
+  including 256x224 signal resampling and saturation 1.35, with the game's own CRT options on top.
 - **General image** starts with square pixels, smooth resizing, contain fitting and saturation 1.0.
-- **Original CRTSim** restores the public-reference defaults, including 256x224 signal resampling and saturation 1.35.
 - **Original / CRT / Compare** compares the source with the rendered tube. Drag the comparison divider. The CRT bends the image, so the two views are not geometrically registered.
 - **Fast / Balanced / Export resolution** changes preview canvas resolution only. Use Export resolution and turn off Fit view at 1x zoom to inspect mask sampling.
 - **Load / Save preset** uses the same version-1 JSON format as the CLI. **Undo / Redo / Reset** acts on settings, not source files or exported files.
@@ -103,7 +104,10 @@ already exists; after confirmation, the app writes a complete temporary file and
 - Signal and export size boxes accept named presets or custom `WIDTHxHEIGHT`. Resolved dimensions and crop/mask warnings are shown in the window.
 - `Ctrl+O` opens a file, `Ctrl+S` saves the project (asking where, the first time) and `Ctrl+E` exports a PNG;
   the menus show them, with `Command` on macOS.
-- Click or drag a slider to give it the keyboard: **←/→** step it by 1% of its range, **Shift** by 10%, **Alt** by 0.1%, and **Delete** returns it to its default. **Esc** or a click elsewhere lets go.
+- Dragging a slider moves it a quarter as far as the pointer, so it can be set finely; hold **Shift** to move it as far
+  as the pointer, or **Alt** for a tenth as far again. A click still jumps it to the pointer.
+- Click or drag a slider to give it the keyboard: **←/→** step it by 0.1% of its range, **Shift** by 1%, **Alt** by 0.01%, and **Delete** returns it to its default. **Esc** or a click elsewhere lets go.
+- The status bar shows the app's version in its lower right corner.
 
 The original-image display is limited to a 2048-pixel thumbnail; export always uses the loaded source.
 While a control is being changed, each preview runs the CRT on screen on with the new settings, so the
@@ -146,7 +150,9 @@ The same app runs in a browser with WebGPU, as the web app. It opens images, ani
 WebP, and MP4, MOV, WebM or MKV videos you pick or drop on the page (the videos decoded by the
 browser, so the codecs are the browser's), previews and plays them, and saves PNGs, MP4 and WebM videos (encoded by the browser, so the
 formats offered are those it can write), GIF and animated WebP exports and presets as downloads;
-its settings, presets and session stay in the browser. Projects and batch export are
+its settings, presets and session stay in the browser. Its MP4 and WebM exports embed the
+preset as the desktop's do, and **Import preset from Image/Video…** reads one back from a PNG,
+MP4 or WebM, made by either app. Projects and batch export are
 desktop-only for now (see [the web plan](docs/WEB_PLAN.md)).
 
 ```sh

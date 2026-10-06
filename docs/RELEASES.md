@@ -1,5 +1,25 @@
 # Portable releases (Phase 4)
 
+## Unreleased
+
+- **Super Win the Game** is the preset the app starts with, and the one **Reset** and each setting's own reset return
+  to. It takes the place of Original CRTSim, which was the same public reference without the game's options.
+- Sliders move finely: dragging moves one a quarter as far as the pointer (**Shift** as far, **Alt** a tenth as far
+  again), and the arrow keys step it by 0.1% of its range (**Shift** 1%, **Alt** 0.01%).
+- The NES palette made as the game makes it is called **Super Win the Game's** rather than "the game's".
+- The status bar shows the app's version in its lower right corner.
+- The web app's MP4 and WebM exports embed their preset as the desktop's do, in the container's
+  comment, so either app imports it. The web app's **Import preset from Image/Video…** now reads
+  a preset from an MP4 or WebM as well as a PNG.
+- On the desktop, an animation opened from a browser's bytes exports as a video too.
+- LUTs and presets are read the same way in both apps: the web app now refuses a LUT over 16 MB as
+  the desktop does, and both say "Loaded preset", "Imported preset from" and "Cannot import
+  preset" with the file's name.
+- A project or recovered session whose source cannot be opened, or whose opening is cancelled,
+  still restores its settings and export queue, as one whose source is missing already did; they
+  were dropped before. The source panel names a missing or unopened source and says to relink it
+  with Open File, and the session keeps it, so the next start tries it again.
+
 ## v1.0.1
 
 The preview now follows the controls as Super Win the Game's picture follows its options menu: with **Live preview** on,

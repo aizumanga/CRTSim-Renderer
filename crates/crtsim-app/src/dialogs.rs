@@ -194,52 +194,24 @@ impl App {
         match kind {
             Dialog::OpenProject => self.open_project(path),
             Dialog::SaveProject => self.save_project_file(path),
-            Dialog::Lut => {
-                let result = (|| -> anyhow::Result<_> {
-                    anyhow::ensure!(
-                        path.metadata()?.len() <= 16 * 1024 * 1024,
-                        "LUT exceeds 16 MB"
-                    );
-                    crtsim_core::workflow::Lut::parse_cube(
-                        file_name(&path),
-                        &std::fs::read_to_string(&path)?,
-                    )
-                })();
-                match result {
-                    Ok(lut) => {
-                        let mut c = self.config.clone();
-                        c.set_lut(Some(Arc::new(lut)));
-                        self.replace_config(c);
-                        self.status = "LUT imported".into();
-                    }
-                    Err(e) => self.error = Some(format!("Cannot import LUT: {e:#}")),
-                }
-            }
+            Dialog::Lut => self.bring_file(incoming::Purpose::Lut, incoming::File::Path(path)),
             Dialog::File => self.load(path),
             Dialog::ExportVideo => self.export_video(path),
             Dialog::ImportPreset => {
-                let cancel = Arc::new(AtomicBool::new(false));
-                self.work = Work::Loading(Some(cancel.clone()));
-                self.status = "Reading preset metadata…".into();
-                self.send(Job::ImportPreset {
+                let job = Job::ImportPreset {
                     path,
-                    input: self.input.dimensions(),
-                    cancel,
-                });
+                    input: self.source.input().dimensions(),
+                    cancel: Arc::new(AtomicBool::new(false)),
+                };
+                self.start(job, "Reading preset metadata…".into());
             }
-            Dialog::LoadPreset => match files::load_preset(&path, self.input.dimensions()) {
-                Ok(c) => {
-                    self.presets.name = file_stem(&path);
-                    self.replace_config(c);
-                    self.status = format!("Loaded preset {}", path.display());
-                    self.error = None;
-                }
-                Err(e) => self.error = Some(format!("Cannot load preset: {e:#}")),
-            },
+            Dialog::LoadPreset => {
+                self.bring_file(incoming::Purpose::LoadPreset, incoming::File::Path(path));
+            }
             Dialog::SavePreset => {
                 match self
                     .config
-                    .validate_for(self.input.dimensions())
+                    .validate_for(self.source.input().dimensions())
                     .and_then(|()| files::save_preset(&path, &self.config))
                 {
                     Ok(()) => {
@@ -273,7 +245,7 @@ impl App {
             ));
             return;
         }
-        let Some(video) = self.timeline.as_ref().map(|t| t.video.clone()) else {
+        let Some(video) = self.source.timeline.as_ref().map(|t| t.video.clone()) else {
             return;
         };
         let config = self.config.clone();
@@ -327,7 +299,9 @@ impl App {
         // The videos a browser opens are those its container reader knows.
         let extensions = match kind {
             Dialog::File => [crtsim_core::input::IMAGE_EXTENSIONS, WEB_VIDEO_EXTENSIONS].concat(),
-            Dialog::ImportPreset => crtsim_core::input::IMAGE_EXTENSIONS.to_vec(),
+            Dialog::ImportPreset => {
+                [crtsim_core::input::IMAGE_EXTENSIONS, WEB_VIDEO_EXTENSIONS].concat()
+            }
             _ => chooser.extensions,
         };
         self.dialog_open = true;
@@ -368,43 +342,20 @@ impl App {
 
     /// Applies a file the browser handed over.
     fn picked(&mut self, kind: Dialog, name: String, bytes: Vec<u8>) {
-        let input = self.input.dimensions();
         match kind {
             Dialog::File => {
                 // Videos and animations open with their frames; the worker tells them apart.
-                self.stop_playback();
-                self.work = Work::Loading(None);
-                self.status = format!("Loading {name}…");
-                self.send(Job::LoadBytes { name, bytes });
+                let status = format!("Loading {name}…");
+                let opening = self.source.open_bytes(name, bytes);
+                self.start_opening(opening, status);
             }
-            Dialog::Lut => {
-                let lut = String::from_utf8(bytes)
-                    .map_err(anyhow::Error::from)
-                    .and_then(|text| crtsim_core::workflow::Lut::parse_cube(name, &text));
-                match lut {
-                    Ok(lut) => {
-                        let mut c = self.config.clone();
-                        c.set_lut(Some(Arc::new(lut)));
-                        self.replace_config(c);
-                        self.status = "LUT imported".into();
-                    }
-                    Err(e) => self.error = Some(format!("Cannot import LUT: {e:#}")),
-                }
-            }
-            Dialog::LoadPreset | Dialog::ImportPreset => {
-                let preset = match kind {
-                    Dialog::LoadPreset => files::preset_from_json(&bytes, input),
-                    _ => files::preset_from_png(&bytes, input),
+            Dialog::Lut | Dialog::LoadPreset | Dialog::ImportPreset => {
+                let purpose = match kind {
+                    Dialog::Lut => incoming::Purpose::Lut,
+                    Dialog::LoadPreset => incoming::Purpose::LoadPreset,
+                    _ => incoming::Purpose::ImportPreset,
                 };
-                match preset {
-                    Ok(c) => {
-                        self.presets.name = file_stem(Path::new(&name));
-                        self.replace_config(c);
-                        self.status = format!("Loaded preset {name}");
-                        self.error = None;
-                    }
-                    Err(e) => self.error = Some(format!("Cannot load preset: {e:#}")),
-                }
+                self.bring_file(purpose, incoming::File::Bytes { name, bytes });
             }
             _ => {}
         }
@@ -413,5 +364,32 @@ impl App {
     /// Says that something the desktop app does is not in the web app yet.
     fn not_yet(&mut self, what: &str) {
         self.status = format!("{what} arrives in the web app in a later version");
+    }
+}
+
+impl App {
+    /// Brings in `file` for `purpose`, whichever way it came.
+    fn bring_file(&mut self, purpose: incoming::Purpose, file: incoming::File) {
+        let input = self.source.input().dimensions();
+        let brought = incoming::bring(purpose, &file, &self.config, input);
+        self.bring_in(brought);
+    }
+
+    /// Applies what a file brought, or says why it brought nothing.
+    pub(crate) fn bring_in(&mut self, brought: Result<incoming::Brought, String>) {
+        match brought {
+            Ok(brought) => {
+                if let Some(name) = brought.preset_name {
+                    self.presets.name = name;
+                }
+                self.replace_config(brought.config);
+                if let Some(options) = brought.options {
+                    self.video_options = options;
+                }
+                self.status = brought.status;
+                self.error = None;
+            }
+            Err(error) => self.error = Some(error),
+        }
     }
 }

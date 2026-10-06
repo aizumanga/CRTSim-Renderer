@@ -16,35 +16,27 @@ fn entry(name: &str, description: &str, config: Config) -> Entry {
         user: false,
     }
 }
+/// The preset the app starts with, and Reset and each setting's own reset return to.
+pub fn default_preset() -> Entry {
+    entry(
+        "Super Win the Game",
+        "The game's own CRT options: the public reference with a 30° field of view, NTSC \
+         blending at 0.35 and its NTSC palette (Tint 5.18, I 1.75, Q 1.00), made as the game \
+         makes it, with the artifact pattern as its Windows build draws it and the bezel \
+         reflecting the picture as the screen shows it. The palette recolours art in the NES \
+         palette the game's is drawn in.",
+        Config::super_win_the_game(),
+    )
+}
+
 pub fn builtins() -> Vec<Entry> {
     let general = Config::general();
     vec![
+        default_preset(),
         entry(
             "General image",
             "Square pixels, smooth resizing, balanced CRT effects.",
             general.clone(),
-        ),
-        entry(
-            "Original CRTSim",
-            "Public-reference defaults, 256×224 signal, original mask sampling.",
-            Config::default(),
-        ),
-        entry(
-            "Super Win the Game",
-            "The game's own CRT options: the public reference with a 30° field of view, NTSC \
-             blending at 0.35 and its NTSC palette (Tint 5.18, I 1.75, Q 1.00), made as the \
-             game makes it, with the artifact pattern as its Windows build draws it and the \
-             bezel reflecting the picture as the screen shows it. The palette recolours art \
-             in the NES palette the game's is drawn in.",
-            Config {
-                fov: 30.,
-                phase: Phase::Alternating,
-                ntsc_blending: 0.35,
-                reflection_as_screen: true,
-                backdrop_color: [0.0625; 3],
-                palette: Some(Default::default()),
-                ..Config::default()
-            },
         ),
         entry(
             "Soft television",
@@ -135,7 +127,7 @@ pub fn builtins() -> Vec<Entry> {
         ),
         entry(
             "Warm analog",
-            "An optional hue/chroma grade, not the game's NES palette.",
+            "An optional hue/chroma grade, not Super Win the Game's NES palette.",
             Config {
                 hue: -8.,
                 chroma: 0.85,
@@ -260,6 +252,7 @@ mod tests {
             .find(|e| e.name == "Super Win the Game")
             .unwrap()
             .config;
+        assert_eq!(game, default_preset().config);
         // As the game's CRT options show them.
         assert_eq!(game.fov, 30.);
         assert_eq!(game.ntsc_blending, 0.35);
@@ -306,8 +299,7 @@ mod tests {
         for entry in builtins() {
             let follows = matches!(
                 entry.name.as_str(),
-                "Original CRTSim"
-                    | "Super Win the Game"
+                "Super Win the Game"
                     | "Pixel art 240p"
                     | "NTSC 240p"
                     | "NTSC 480i"

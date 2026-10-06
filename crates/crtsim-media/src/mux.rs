@@ -46,11 +46,13 @@ pub fn takes_audio(container: crate::Container, codec: &str) -> bool {
     }
 }
 
-/// The file `container` holds these tracks in.
+/// The file `container` holds these tracks in, with `comment`, where an export keeps its
+/// preset, written where FFmpeg writes and reads one.
 pub fn write(
     container: crate::Container,
     video: &EncodedVideo,
     audio: Option<&EncodedAudio>,
+    comment: Option<&str>,
 ) -> Result<Vec<u8>> {
     ensure!(!video.packets.is_empty(), "No frames to write");
     ensure!(
@@ -66,8 +68,8 @@ pub fn write(
         );
     }
     match container {
-        crate::Container::Mp4 => mp4(video, audio),
-        crate::Container::Webm => webm(video, audio),
+        crate::Container::Mp4 => mp4(video, audio, comment),
+        crate::Container::Webm => webm(video, audio, comment),
         crate::Container::Mkv => bail!("MKV is written by FFmpeg"),
     }
 }
@@ -429,7 +431,11 @@ fn audio_entry(audio: &EncodedAudio) -> Result<Vec<u8>> {
     Ok(entry)
 }
 
-fn mp4(video: &EncodedVideo, audio: Option<&EncodedAudio>) -> Result<Vec<u8>> {
+fn mp4(
+    video: &EncodedVideo,
+    audio: Option<&EncodedAudio>,
+    comment: Option<&str>,
+) -> Result<Vec<u8>> {
     let mut tracks = vec![Mp4Track::new(
         1,
         true,
@@ -517,6 +523,9 @@ fn mp4(video: &EncodedVideo, audio: Option<&EncodedAudio>) -> Result<Vec<u8>> {
             for (track, chunks) in tracks.iter().zip(&placed) {
                 track.trak(out, chunks, wide);
             }
+            if let Some(comment) = comment {
+                mp4_comment(out, comment);
+            }
         });
         out
     };
@@ -541,6 +550,30 @@ fn mp4(video: &EncodedVideo, audio: Option<&EncodedAudio>) -> Result<Vec<u8>> {
         }
     }
     Ok(file)
+}
+
+/// `comment` as iTunes metadata, as FFmpeg writes one: user data holding a metadata box,
+/// which says how its entries are kept, and the comment entry with its text.
+fn mp4_comment(out: &mut Vec<u8>, comment: &str) {
+    mp4_box(out, b"udta", |out| {
+        full_box(out, b"meta", 0, 0, |out| {
+            full_box(out, b"hdlr", 0, 0, |out| {
+                be32(out, 0);
+                out.extend_from_slice(b"mdirappl");
+                out.extend_from_slice(&[0; 9]);
+            });
+            mp4_box(out, b"ilst", |out| {
+                mp4_box(out, b"\xa9cmt", |out| {
+                    // Text, in UTF-8, for any language.
+                    mp4_box(out, b"data", |out| {
+                        be32(out, 1);
+                        be32(out, 0);
+                        out.extend_from_slice(comment.as_bytes());
+                    });
+                });
+            });
+        });
+    });
 }
 
 /// A Matroska element: its id, as written, its size and its contents.
@@ -569,7 +602,11 @@ fn nested(parts: &[(u32, Vec<u8>)]) -> Vec<u8> {
     out
 }
 
-fn webm(video: &EncodedVideo, audio: Option<&EncodedAudio>) -> Result<Vec<u8>> {
+fn webm(
+    video: &EncodedVideo,
+    audio: Option<&EncodedAudio>,
+    comment: Option<&str>,
+) -> Result<Vec<u8>> {
     let codec = if video.codec.starts_with("vp09") {
         "V_VP9"
     } else if video.codec == "vp8" {
@@ -685,20 +722,39 @@ fn webm(video: &EncodedVideo, audio: Option<&EncodedAudio>) -> Result<Vec<u8>> {
             ]),
         )
     };
-    let seek_head = |cues_at: u64| {
+    // The comment as a tag of the whole file, before the frames, so a reader finds it without
+    // reading to the end.
+    let tags = comment.map_or(vec![], |comment| {
         nested(&[(
-            0x114D_9B74,
-            nested(&[
-                seek(0x1549_A966, 0),
-                seek(0x1654_AE6B, 0),
-                seek(0x1C53_BB6B, cues_at),
-            ]),
+            0x1254_C367,
+            nested(&[(
+                0x7373,
+                nested(&[
+                    (0x63C0, vec![]),
+                    (
+                        0x67C8,
+                        nested(&[
+                            (0x45A3, b"COMMENT".to_vec()),
+                            (0x4487, comment.as_bytes().to_vec()),
+                        ]),
+                    ),
+                ]),
+            )]),
         )])
+    });
+    let seek_head = |info_at, tracks_at, tags_at, cues_at| {
+        let mut entries = vec![seek(0x1549_A966, info_at), seek(0x1654_AE6B, tracks_at)];
+        if !tags.is_empty() {
+            entries.push(seek(0x1254_C367, tags_at));
+        }
+        entries.push(seek(0x1C53_BB6B, cues_at));
+        nested(&[(0x114D_9B74, nested(&entries))])
     };
-    let head = seek_head(0).len() as u64;
+    let head = seek_head(0, 0, 0, 0).len() as u64;
     let info_at = head;
     let tracks_at = info_at + info.len() as u64;
-    let clusters_at = tracks_at + tracks.len() as u64;
+    let tags_at = tracks_at + tracks.len() as u64;
+    let clusters_at = tags_at + tags.len() as u64;
     let cues_at = clusters_at + clusters.len() as u64;
     let cue_points: Vec<(u32, Vec<u8>)> = cues
         .iter()
@@ -716,19 +772,12 @@ fn webm(video: &EncodedVideo, audio: Option<&EncodedAudio>) -> Result<Vec<u8>> {
         })
         .collect();
     let cues = nested(&[(0x1C53_BB6B, nested(&cue_points))]);
-    let seek_head = nested(&[(
-        0x114D_9B74,
-        nested(&[
-            seek(0x1549_A966, info_at),
-            seek(0x1654_AE6B, tracks_at),
-            seek(0x1C53_BB6B, cues_at),
-        ]),
-    )]);
+    let seek_head = seek_head(info_at, tracks_at, tags_at, cues_at);
     ensure!(
         seek_head.len() as u64 == head,
         "The WebM seek head changed size"
     );
-    let segment = [seek_head, info, tracks, clusters, cues].concat();
+    let segment = [seek_head, info, tracks, tags, clusters, cues].concat();
     let mut file = nested(&[(
         0x1A45_DFA3,
         nested(&[
@@ -791,13 +840,18 @@ mod tests {
         (video, audio)
     }
 
-    /// Writes the tracks, reads them back, and checks every packet came back as it went in.
+    /// A comment that is not plain ASCII, as a preset with a LUT's name may be.
+    const COMMENT: &str = "CRTSim-Renderer-Preset:{\"name\":\"Ünïcode ✓\"}";
+
+    /// Writes the tracks with a comment, reads them back, and checks every packet and the
+    /// comment came back as they went in.
     fn round_trip(
         container: Container,
         video: &EncodedVideo,
         audio: Option<&EncodedAudio>,
     ) -> Vec<u8> {
-        let file = write(container, video, audio).unwrap();
+        let file = write(container, video, audio, Some(COMMENT)).unwrap();
+        assert_eq!(demux::comment(&file).unwrap().as_deref(), Some(COMMENT));
         let name = format!("out.{}", container.extension());
         let back = demux::demux(Path::new(&name), &file).unwrap();
         assert_eq!(back.video.codec, video.codec);
@@ -847,10 +901,19 @@ mod tests {
     }
 
     #[test]
+    fn a_file_written_without_a_comment_has_none() {
+        let (video, _) = tracks("vp9-opus.webm");
+        for container in [Container::Webm, Container::Mp4] {
+            let file = write(container, &video, None, None).unwrap();
+            assert_eq!(demux::comment(&file).unwrap(), None);
+        }
+    }
+
+    #[test]
     fn sound_a_container_cannot_hold_is_refused() {
         let (video, audio) = tracks("h264-aac.mp4");
         assert!(!takes_audio(Container::Webm, "mp4a.40.2"));
-        assert!(write(Container::Webm, &video, audio.as_ref()).is_err());
+        assert!(write(Container::Webm, &video, audio.as_ref(), None).is_err());
         assert!(takes_audio(Container::Mp4, "opus"));
     }
 
@@ -868,7 +931,37 @@ mod tests {
             let path = dir
                 .path()
                 .join(format!("{fixture_name}.{}", container.extension()));
-            std::fs::write(&path, write(container, &video, audio.as_ref()).unwrap()).unwrap();
+            let config = crtsim_core::config::Config::general();
+            let preset = crate::Preset::comment(&config, &crate::Options::default()).unwrap();
+            let file = write(container, &video, audio.as_ref(), Some(&preset)).unwrap();
+            std::fs::write(&path, file).unwrap();
+            // The desktop's import, through ffprobe, reads the preset written here.
+            let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let imported = crate::import_preset(&path, (256, 224), &cancel).unwrap();
+            assert_eq!(imported.config, config, "{fixture_name}");
+            // And what FFmpeg writes as a comment is read here.
+            let copied = dir.path().join(format!("copied.{}", container.extension()));
+            let copy = std::process::Command::new("ffmpeg")
+                .args(["-v", "error", "-y", "-i"])
+                .arg(&path)
+                .args([
+                    "-map",
+                    "0",
+                    "-c",
+                    "copy",
+                    "-metadata",
+                    "comment=Written by FFmpeg",
+                ])
+                .arg(&copied)
+                .status()
+                .unwrap();
+            assert!(copy.success(), "{fixture_name}");
+            let comment = demux::comment(&std::fs::read(&copied).unwrap()).unwrap();
+            assert_eq!(
+                comment.as_deref(),
+                Some("Written by FFmpeg"),
+                "{fixture_name}"
+            );
             let output = std::process::Command::new("ffmpeg")
                 .args(["-v", "error", "-i"])
                 .arg(&path)

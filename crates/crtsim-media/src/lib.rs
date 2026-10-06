@@ -5,8 +5,9 @@ mod decode;
 pub mod demux;
 mod export;
 mod gif_writer;
+pub mod jobs;
+mod made_here;
 pub mod mux;
-pub mod page;
 mod plan;
 mod probe;
 mod process;
@@ -17,8 +18,7 @@ pub use animated::{detect_bytes, probe_bytes, test_clip, AnimationFormat};
 pub use animation::{AnimationOptions, AnimationSummary, Dither};
 pub use crtsim_core::Timing;
 pub use decode::{playback, preview, preview_frame};
-pub(crate) use export::Rate;
-pub use export::{export, export_animation, export_animation_with, export_with, Progress};
+pub use export::{export, export_animation, export_animation_with, export_with, Progress, Rate};
 pub use probe::{frame_count, probe, probe_demuxed, Contents, Source, Track, TrackKind, Video};
 pub use tools::{Found, Tool, ToolCheck};
 
@@ -287,6 +287,30 @@ struct PresetWire {
     video_options: Options,
 }
 
+/// Largest preset a video's comment holds, in bytes: an embedded LUT can be large.
+const PRESET_LIMIT: usize = 16 * 1024 * 1024;
+
+impl Preset {
+    /// The settings an export used, as the container comment an import reads back, whoever
+    /// writes the file. The person's own controls and timing are kept, not the settings the
+    /// timing adjusts: importing those would adjust them a second time.
+    pub(crate) fn comment(config: &Config, options: &Options) -> Result<String> {
+        let comment = format!(
+            "{PRESET_PREFIX}{}",
+            serde_json::to_string(&Preset {
+                version: 1,
+                config: config.clone(),
+                video_options: options.clone(),
+            })?
+        );
+        ensure!(
+            comment.len() <= PRESET_LIMIT,
+            "Video preset metadata exceeds 16 MB"
+        );
+        Ok(comment)
+    }
+}
+
 /// Container comments survive MP4, Matroska and WebM muxing, unlike arbitrary MP4 keys.
 pub fn import_preset(path: &Path, input: (u32, u32), cancel: &Arc<AtomicBool>) -> Result<Preset> {
     let mut cmd = Tool::Ffprobe.command();
@@ -301,6 +325,15 @@ pub fn import_preset(path: &Path, input: (u32, u32), cancel: &Arc<AtomicBool>) -
     parse_preset(&serde_json::from_slice(&bytes)?, input)
 }
 
+/// The preset in the video file `name`, read from its `bytes` without FFmpeg, as a browser
+/// page reads it.
+pub fn import_preset_from_bytes(name: &Path, bytes: &[u8], input: (u32, u32)) -> Result<Preset> {
+    let comment = demux::comment(bytes)
+        .with_context(|| format!("Cannot read {}", name.display()))?
+        .unwrap_or_default();
+    preset_from_comment(&comment, input)
+}
+
 fn parse_preset(root: &Value, input: (u32, u32)) -> Result<Preset> {
     let comment = root["format"]["tags"]
         .as_object()
@@ -309,7 +342,14 @@ fn parse_preset(root: &Value, input: (u32, u32)) -> Result<Preset> {
                 .find(|(key, _)| key.eq_ignore_ascii_case("comment"))
         })
         .and_then(|(_, value)| value.as_str())
-        .and_then(|text| text.strip_prefix(PRESET_PREFIX))
+        .unwrap_or_default();
+    preset_from_comment(comment, input)
+}
+
+/// The preset a video's comment holds, checked against an image of `input`'s size.
+fn preset_from_comment(comment: &str, input: (u32, u32)) -> Result<Preset> {
+    let comment = comment
+        .strip_prefix(PRESET_PREFIX)
         .context("This video does not contain a CRTSim-Renderer preset")?;
     let wire: PresetWire =
         serde_json::from_str(comment).context("Invalid video preset metadata")?;

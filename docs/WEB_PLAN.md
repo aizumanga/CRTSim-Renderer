@@ -96,7 +96,7 @@ on its own.
 1. **Animations out (done).** GIF and animated WebP are written in Rust (`crtsim-media`'s
    `gif_writer` and `webp_writer`), from sources the browser can already open: animated GIF
    and WebP are decoded in Rust, from the bytes the page was handed (`Video::contents`).
-   - `crtsim_media::page` runs a video the way a page must: one frame at a time, each step
+   - `crtsim_media::jobs` (once `page`) runs a video the way a page must: one frame at a time, each step
      awaited, the file made in memory and downloaded. Its frames come through `FrameSource`,
      which animations fill now and WebCodecs will fill next. Playback and the timeline's
      frames use it too. The worker takes this path for any video that came as bytes, so the
@@ -128,7 +128,7 @@ on its own.
      feeds WebCodecs' `VideoDecoder` from the keyframe before the wanted time, a few samples
      ahead, and draws each frame upright into an `OffscreenCanvas` to read it as RGBA.
      WebCodecs is bound by hand, since web-sys has it only behind an unstable flag.
-   - `page::Ticks` picks, from frames in showing order, the one each tick of a constant rate
+   - `jobs::Ticks` picks, from frames in showing order, the one each tick of a constant rate
      takes, by the same rule as the animation schedule and FFmpeg's `fps` filter.
    - A codec the browser cannot decode is refused by name, pointing to the desktop app.
    - Checked in headless Chromium, with clips whose frames each code their number in full
@@ -144,7 +144,7 @@ on its own.
      Vorbis) with a cluster per keyframe, cues and a seek head, so both play and seek as they
      load. Decoding times are the showing times in order, with signed offsets if an encoder
      reorders frames.
-   - `page::export_video` renders at the export's rate into the host's `VideoEncoding`, with a
+   - `jobs::export_video` renders at the export's rate into the host's `VideoEncoding`, with a
      keyframe every two seconds and a bit rate from the quality, then adds the sound: copied
      when the container holds its codec, and otherwise, or when asked, converted to Opus by
      the host. A browser that cannot convert it says so and suggests No audio or another

@@ -6,46 +6,37 @@ impl App {
         self.receive_dialogs();
         while let Ok(event) = self.events.try_recv() {
             match event {
-                Event::Progress(progress) => {
-                    if let Work::Exporting {
-                        progress: shown, ..
-                    } = &mut self.work
-                    {
-                        *shown = Some(progress);
-                    }
-                }
+                Event::Progress(progress) => self.lane.progress(progress),
                 Event::PresetImported(result) => {
-                    self.work = Work::Idle;
+                    self.lane.finished();
                     match result {
                         Ok(imported) => {
-                            self.presets.name = file_stem(&imported.path);
-                            self.replace_config(imported.config);
-                            if let Some(options) = imported.options {
-                                self.video_options = options;
-                            }
-                            self.status =
-                                format!("Imported preset from {}", imported.path.display());
-                            self.error = None;
+                            let name = file_name(&imported.path);
+                            let brought = incoming::Brought::imported(
+                                imported.config,
+                                imported.options,
+                                &name,
+                            );
+                            self.bring_in(Ok(brought));
                         }
                         Err(Failure::Cancelled) => {
                             self.status = "Preset import cancelled".into();
                         }
                         Err(Failure::Failed(e)) => {
-                            self.error = Some(format!("Cannot import preset: {e:#}"))
+                            self.bring_in(Err(format!("Cannot import preset: {e:#}")))
                         }
                     }
                 }
                 Event::Loaded(result) => {
-                    self.work = Work::Idle;
-                    // Opening a project loads its source first, then restores the rest.
-                    let project = self.session.source_loaded();
-                    match result {
-                        Ok(loaded) => {
-                            self.show_loaded(loaded);
+                    self.lane.finished();
+                    let arrived = self.source.loaded(result);
+                    if arrived.changed {
+                        self.source_changed();
+                    }
+                    match arrived.opened {
+                        Ok(status) => {
+                            self.status = status.into();
                             self.error = None;
-                            if let Some(project) = project {
-                                self.apply_project(project);
-                            }
                         }
                         // Only a video frame can be cancelled.
                         Err(Failure::Cancelled) => {
@@ -54,26 +45,16 @@ impl App {
                         }
                         Err(Failure::Failed(e)) => self.error = Some(format!("{e:#}")),
                     }
+                    // A project waiting for its source applies whether that opened or not.
+                    if let Some(project) = arrived.project {
+                        self.apply_project(project);
+                    }
                 }
                 Event::Preview { revision, result } => {
-                    if !self.schedule.returned(revision) {
-                        continue;
-                    }
-                    match result {
-                        Ok(previewed) => {
-                            let (width, height) = previewed.image.dimensions();
-                            let shown = self.displayed(ctx, previewed.image);
-                            self.show_preview(shown);
-                            self.schedule.show(revision);
-                            if !self.work.is_exporting() {
-                                self.status = format!(
-                                    "Preview {width} × {height} · {:.2}s",
-                                    previewed.seconds
-                                );
-                            }
-                            self.preview_error = None;
-                        }
-                        Err(e) => self.preview_error = Some(format!("{e:#}")),
+                    let shown = self.preview.returned(ctx, revision, result);
+                    // An export's progress keeps the status line while it runs.
+                    if let Some(shown) = shown.filter(|_| !self.lane.is_exporting()) {
+                        self.status = shown;
                     }
                 }
                 Event::Thumbnail {
@@ -82,8 +63,8 @@ impl App {
                     result,
                 } => self.thumbnail_ready(ctx, generation, key, result),
                 Event::Exported(result) => {
-                    self.queue_finished(&result);
-                    self.work = Work::Idle;
+                    let finished = self.lane.finished();
+                    self.queue_finished(&result, finished.cancelled);
                     match result {
                         Ok(path) => {
                             self.status = format!("Saved {}", path.display());
@@ -98,25 +79,5 @@ impl App {
                 }
             }
         }
-    }
-
-    /// Makes a loaded image, or frame of a video, the source being edited.
-    fn show_loaded(&mut self, loaded: worker::Loaded) {
-        let status = match &loaded.timeline {
-            Some(_) => "Video frame loaded",
-            None => "Image loaded",
-        };
-        let drawn = loaded
-            .timeline
-            .as_ref()
-            .is_some_and(timeline::Timeline::is_video_test_card);
-        self.set_source(
-            (!drawn).then_some(loaded.path),
-            loaded.name,
-            loaded.timeline,
-            loaded.image,
-            &loaded.thumbnail,
-        );
-        self.status = status.into();
     }
 }

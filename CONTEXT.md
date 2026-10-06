@@ -4,7 +4,10 @@ Terms the desktop's code and its reviews use, so a module is named after the con
 
 **Preview**: the CRT picture on screen while editing, rendered at the preview quality's size
 unless that is Export resolution. It never stands in for an export, which renders again at full
-resolution from the settings captured when it was asked for.
+resolution from the settings captured when it was asked for. The preview module
+(`crates/crtsim-app/src/preview/`) takes an edit to the picture on screen: its schedule, the
+audition, the picture and its quality. The settings, their undo history and the source stay
+the app's; the preview only says when a change has settled.
 
 **Interactive preview**: a preview of an edit under way, such as a slider being dragged, asked
 for at once rather than once the edit settles. It runs the CRT already on screen on for a couple
@@ -18,6 +21,11 @@ preview** renders it exactly, as a still.
 one frame persists into the next. A video is a sequence with a timing and a frame rate. An
 editing sequence is the one interactive previews run on; it starts again by itself when its
 sizes or colour mode change.
+
+**Sequence shape**: what a sequence is made for: its signal size, output size and colour mode
+(`crtsim_core::Shape`, from `Config::sequence_shape`). Settings of one shape can follow each
+other in one sequence; another shape needs a new one, which an editing sequence starts by
+itself. Playback asks it whether an edit can reach the video playing.
 
 **Still**: a sequence of one frame, rendered after warm-up.
 
@@ -41,7 +49,8 @@ on every frame of its picture, rather than this renderer running inside the host
 _Avoid_: frame, which already means a picture in a sequence.
 
 **Preview schedule**: decides whether the preview on screen is out of date and when to render
-the next one (`crates/crtsim-app/src/schedule.rs`). One preview renders at a time.
+the next one (`crates/crtsim-app/src/preview/schedule.rs`), inside the preview module. One
+preview renders at a time.
 
 **Revision**: counts the changes to what the preview should show. A preview is of the revision
 it was asked for, and a settled one that comes back after a newer change is not shown.
@@ -82,9 +91,24 @@ has one at most; choosing either replaces the other (`Config::set_lut`, `Config:
 (`gallery.rs` and `lut_gallery.rs`). The preset gallery also saves the settings in use as a
 personal preset; the LUT gallery decodes each included LUT once and shares it.
 
+**Work lane**: the worker's thread for loading, importing presets, exporting and playing, one
+job at a time (`crates/crtsim-app/src/lane.rs`). Every job starts and finishes there, with its
+cancel flag and an export's progress. Playing holds it but gives way: any other job stops the
+video first. The batch queue waits for it to be free, playback included.
+
 **Batch queue**: exports that each render one file with the settings in use when they were
 added, one at a time and in order (`crates/crtsim-app/src/batch.rs`). Each output is named
 after its source and never replaces a file; cancelling a job pauses the queue.
+
+**Source**: what is open to edit, and the picture it gives (`crates/crtsim-app/src/source.rs`):
+the test card, the video test card, a file on disk, a file a browser handed over, or a
+project's source that is missing or could not be opened, with the test card in its place. A
+video's comes with its timeline. A project opens its source first and is held until that has
+loaded; then its settings and queue apply, whether the source opened or not.
+
+**Incoming file**: a file picked or dropped for a LUT or a preset, read the same way whether it
+came as a path on the desktop or as a browser's name and bytes, with one size limit for each
+kind, and applied in one place (`crates/crtsim-app/src/incoming.rs`).
 
 **Project**: a source, its settings and the batch queue, saved as a `.crtsim` file to pick up
 later (`crates/crtsim-app/src/project.rs`).
@@ -102,6 +126,13 @@ session (`crates/crtsim-app/src/app_data.rs`). Only that module knows the files 
 they can write, and how to install them (`crates/crtsim-app/src/ffmpeg_setup.rs`). The
 programs are found, never downloaded (`crates/crtsim-media/src/tools.rs`); see
 [the decision](docs/adr/0001-find-ffmpeg-never-download-it.md).
+
+**Video job**: playing a video, or exporting it as a video or an animation
+(`crates/crtsim-media/src/jobs.rs`). Each is one loop whatever the host: frames are read from
+a frame source (FFmpeg, the browser's decoder, or an animation decoded here), rendered, and
+handed on, to the preview or to an **output** that makes the file (FFmpeg on the desktop,
+the browser's encoders or the GIF and WebP writers on a page). The desktop drives the same
+loops from its worker thread.
 
 **Web app**: the whole app, with editing, the galleries, playback and exports, running in a
 browser from the author's Neocities site. It is not a cut-down demo: what the desktop app does

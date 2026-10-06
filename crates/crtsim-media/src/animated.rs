@@ -745,7 +745,7 @@ mod tests {
 
     #[test]
     fn the_video_test_card_is_drawn_without_a_file_or_ffmpeg() {
-        use crate::page::{self, FrameSource};
+        use crate::jobs::{self, FrameSource};
         let video = test_clip();
         assert_eq!(
             (video.size, video.frames, video.rate.as_str()),
@@ -758,18 +758,21 @@ mod tests {
         let frame = crate::preview_frame(&video, 400, &cancel).unwrap();
         assert_eq!(frame, test_clip::frame(400));
         // Frames at half the rate from a second in, as a page reads them.
-        let span = page::Span {
+        let span = jobs::Span {
             start: 1.,
-            fps: Some(30.),
+            rate: Some(crate::Rate::per_second(30.)),
             limit: Some(0.1),
         };
-        let mut frames = page::decoded(&video, &span).unwrap();
+        let mut frames = jobs::decoded(&video, &span).unwrap();
         let mut read = vec![];
         while let Some(frame) = pollster::block_on(frames.next()).unwrap() {
             read.push(frame);
         }
         assert_eq!(read, [60, 62, 64].map(test_clip::frame));
-        assert!(page::frame(&video, 600).is_err(), "there are 600 frames");
+        assert!(
+            jobs::decoded_frame(&video, 600).is_err(),
+            "there are 600 frames"
+        );
     }
 
     #[test]
