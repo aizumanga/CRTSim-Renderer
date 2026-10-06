@@ -174,14 +174,18 @@ impl App {
 
     fn restore_project(&mut self, p: Project) {
         self.stop_playback();
+        let status = p.source.as_ref().map_or_else(String::new, |source| {
+            format!("Loading {}…", source.display())
+        });
         match self.source.restore(p) {
-            source::Restoring::Open(opening) => {
-                self.start_opening(opening, "Opening the project's source…".into());
-            }
+            source::Restoring::Open(opening) => self.start_opening(opening, status),
             source::Restoring::Apply { project, error } => {
                 self.source_changed();
                 self.apply_project(project);
-                self.error = error;
+                // Any error already showing stays, unless this one replaces it.
+                if error.is_some() {
+                    self.error = error;
+                }
             }
         }
     }
