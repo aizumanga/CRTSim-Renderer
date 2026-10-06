@@ -87,8 +87,9 @@ captured (`import -window root` under Xvfb). No gameplay capture or GL trace has
 | Upsampled Buffer | window size | bloom blur 2 |
 | NTSC_LUT_Texture | 1024×32 | 32³ LUT, 32 blue slices side by side |
 
-Texture formats are an engine enum (1 for the targets, 2 for the LUT); not yet mapped to GL
-formats.
+Texture formats are an engine enum (1 for the targets, 2 for the LUT), which
+`NRenderer::CreateTexture` and `GetGLFormat` map to unsized `GL_RGB` and `GL_RGBA`: 8 bits a
+channel, no sRGB (session 10).
 
 ### Passes
 
@@ -171,7 +172,7 @@ composite writes Frame 1 and reads Frame 2 as the previous frame, with `p` = 1 t
 screen and monitor sample the frame just written. The composite material computes
 
 ```
-NTSCLerp = 0.5                         if VSync is off, or NBaseGame+0x50 is set (unidentified)
+NTSCLerp = 0.5                         if VSync is off, or a screenshot is being taken (NBaseGame+0x50)
 NTSCLerp = p + (0.5 − p) · NTSCBlend   otherwise
 ```
 
@@ -179,8 +180,8 @@ so the default 0.35 alternates **0.175 and 0.825**, and NTSCBlend 1 gives a cons
 Persistence is applied once per update with no frame-time correction, as the menu text says
 ("framerate-dependent").
 
-*Hypothesis:* one engine update per presented frame at 60 Hz with VSync on. Needs a capture of
-consecutive frames.
+One engine update per drawn frame, confirmed in session 10: see *Timing, screenshots and wide
+windows*.
 
 ### The NTSC palette (static + runtime; fully decoded in session 2)
 
@@ -488,23 +489,61 @@ At the default overscan the difference is faint: the reflection is weak (0.3) an
 density the mask there is filtered nearly flat. With the overscan changed, the reflection was
 scaled the wrong way round and is now the game's.
 
+## Timing, screenshots and wide windows (session 10)
+
+**Texture formats (static).** `NRenderer::CreateTexture` (and `GetGLFormat`, which render
+targets go through via `NTexMgr::makeTexture`) maps the engine's `NTextureFormat`: 1 →
+`GL_RGB`, 2 → `GL_RGBA`, 3 → `GL_RGBA16F`, 4 → `GL_RGBA32F`, 5 → `GL_R16F`, 0x1001–0x1003 →
+DXT1/3/5, with pixels uploaded as `GL_BGRA` bytes. The CRT targets (1) are 8-bit RGB and the
+palette table (2) 8-bit RGBA, neither sRGB, as the exact NTSC match (session 4) implied.
+
+**`NBaseGame+0x50` (static).** The byte is a staged screenshot: `NBaseGame::StageScreenshot`
+sets it, `UnstageScreenshot` clears it, and `NBaseGame::render` checks it after drawing to save
+the frame before presenting it. So the game draws its screenshots with `NTSCLerp` 0.5, the two
+artifact patterns averaged: this renderer's **Stable** phase, not one alternating tick.
+
+**Dropped and repeated frames (static, runtime agrees).** `NBaseGame::run`, per pass of its
+loop (slots of `ValkyrieGame`'s vtable): `upkeep`; `shouldUpdate`, always true; `update_game`
+as many fixed steps as time owes it, none or several; then **once** `update_engine` (which
+flips the parity and applies persistence), `update_render`, `prerender`, `render`,
+`postrender`; events; `SDL_Delay(0)`. The artifact phase and the glow's decay therefore step
+once per **drawn frame**, whatever the game logic did: a slow frame still alternates, catching
+up in game logic only, and on a display faster than 60 Hz with VSync the phase alternates and
+the glow decays at the display's rate while the picture repeats. Under Wine at a few frames a
+second (session 8), and on Linux at 60, consecutive frames alternated phase. This renderer steps
+per 60 Hz tick of the signal, the same as the game on a 60 Hz display.
+
+**Wide windows (runtime).** The Linux build in a 1280×720 window draws every CRT pass at the
+window's size (bloom at 80×45, `BloomScale` = (720/1280·0.025, 0.025)), with the camera
+unchanged: the vertical field of view stays 30° and the view widens, as in this renderer. Its
+frame, against this renderer's at 1280×720 from the same NTSC frame: where both draw the glass
+or the bezel, mean 1.0 step, none past 8. Past the bezel's left and right edges the game draws
+its engine's **Depth Backdrop** (`NBaseGame::LoadEngineAssets`), which
+`ValkyrieGame::PostIntro` colours (1/16, 1/16, 1/16): grey 16. This renderer drew black there.
+**Backdrop color** (`backdrop_color`; `CRTSIM_BACKDROP_*` in RetroArch) sets it, black by
+default; the Super Win the Game preset uses 1/16. Whole frame against the game's: 1.76 steps
+(5.7% past 8) before, **0.85** (0.04%) with it.
+
 ## Unresolved
 
 1. ~~How the LUT fills between palette entries~~: nearest source colour (session 2).
-2. Texture formats behind the engine's enums 1 and 2. The exact NTSC match (session 4) says
-   8-bit RGBA without sRGB conversion, at least for the NTSC Frame.
-3. What `NBaseGame+0x50` is (it forces `NTSCLerp` to 0.5).
+2. ~~Texture formats behind the engine's enums 1 and 2~~: `GL_RGB` and `GL_RGBA`, 8-bit, no
+   sRGB (session 10).
+3. ~~What `NBaseGame+0x50` is~~: a staged screenshot; screenshots average the two artifact
+   patterns (session 10).
 4. ~~Whether parity flips once per presented frame~~: it does, frame to frame (session 4).
-   Behaviour on dropped or repeated frames is still unchecked.
+   ~~Behaviour on dropped or repeated frames~~: once per drawn frame, whatever the game logic
+   did (session 10).
 5. ~~`MonitorColor` and the Brightness default~~: (0.06, 0.06, 0.06, 0) and 0 (session 4).
    The vertex colours `Tuning_Dimming` reads from `screen.m3d`: 15 greys, which the renderer
    reads baked since session 7.
-8. ~~Whether the Windows build flips the artifact pattern~~: it does not (session 8). The
-   macOS build, on OpenGL, is not checked at runtime; it most likely flips, as Linux does.
 6. ~~How large the glass and bezel approximations are~~: measured (session 6), 0.46 steps
    on average over the probe; 0.30 since the glass's shade and outline are baked (session 7),
    most of what is left the mesh's faceted UVs and the bezel's rim.
-7. Viewport handling of the 4:3 target aspect in non-4:3 windows.
+7. ~~Viewport handling of the 4:3 target aspect in non-4:3 windows~~: the view widens at a fixed
+   vertical field of view, as in this renderer, over a grey backdrop (session 10).
+8. ~~Whether the Windows build flips the artifact pattern~~: it does not (session 8). The
+   macOS build, on OpenGL, is not checked at runtime; it most likely flips, as Linux does.
 
 ## Proposals
 

@@ -48,6 +48,7 @@ struct Params {
     camera: [f32; 4],
     bloom: [f32; 4],
     processing: [f32; 4],
+    backdrop: [f32; 4],
 }
 
 /// The size of `Params`, which each settings slot holds.
@@ -109,6 +110,12 @@ impl Params {
                 flag(c.interlace),
                 0.,
                 flag(c.screen_only),
+            ],
+            backdrop: [
+                c.backdrop_color[0],
+                c.backdrop_color[1],
+                c.backdrop_color[2],
+                0.,
             ],
         }
     }

@@ -39,6 +39,9 @@ layout(std140, set = 0, binding = 0) uniform UBO {
     float CRTSIM_BEZEL_G;
     float CRTSIM_BEZEL_B;
     float CRTSIM_REFLECTION_AS_SCREEN;
+    float CRTSIM_BACKDROP_R;
+    float CRTSIM_BACKDROP_G;
+    float CRTSIM_BACKDROP_B;
 } global;
 
 #pragma stage vertex
@@ -327,6 +330,7 @@ void main() {
     } else if (glass_depth < NOTHING) {
         FragColor = lit(glass, glass_across, glass_down, false);
     } else {
-        FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+        vec3 backdrop = vec3(global.CRTSIM_BACKDROP_R, global.CRTSIM_BACKDROP_G, global.CRTSIM_BACKDROP_B);
+        FragColor = vec4(linear_light() ? srgb_decode(backdrop) : backdrop, 1.0);
     }
 }

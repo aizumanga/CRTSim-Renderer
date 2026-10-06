@@ -41,6 +41,7 @@ pub fn builtins() -> Vec<Entry> {
                 phase: Phase::Alternating,
                 ntsc_blending: 0.35,
                 reflection_as_screen: true,
+                backdrop_color: [0.0625; 3],
                 palette: Some(Default::default()),
                 ..Config::default()
             },
@@ -260,6 +261,8 @@ mod tests {
         assert!(!game.flip_artifacts);
         // Its monitor pass reflects the picture with the screen's overscan and mask density.
         assert!(game.reflection_as_screen);
+        // Its engine draws a backdrop at 1/16 grey, seen past the bezel in wide windows.
+        assert_eq!(game.backdrop_color, [0.0625; 3]);
         let palette = game.palette.unwrap();
         assert_eq!(
             (palette.tint, palette.tint_i, palette.tint_q, palette.model),

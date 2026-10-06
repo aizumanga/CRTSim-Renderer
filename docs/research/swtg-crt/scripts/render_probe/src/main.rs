@@ -3,7 +3,7 @@
 //! picture. ARTIFACTS, BLOOM and MASK_OPACITY override those settings; FLIP_ARTIFACTS=1 flips the pattern;
 //! PALETTE=0 takes the probe as already through the palette, such as the game's own NTSC frame;
 //! OVERSCAN sets the overscan, and REFLECTION_AS_SCREEN=1 reflects the picture in the bezel as
-//! the screen shows it.
+//! the screen shows it; BACKDROP sets the backdrop's grey.
 //! usage: render_probe PROBE.rgba OUTDIR FRAMES KEEP_FROM [WIDTHxHEIGHT]
 use anyhow::Result;
 use crtsim_core::{config::{Config, Phase}, Renderer, Sequence, Timing};
@@ -29,6 +29,7 @@ fn main() -> Result<()> {
         mask_opacity: std::env::var("MASK_OPACITY").map_or(1., |v| v.parse().unwrap()),
         overscan: std::env::var("OVERSCAN").map_or(1., |v| v.parse().unwrap()),
         reflection_as_screen: std::env::var("REFLECTION_AS_SCREEN").is_ok_and(|v| v == "1"),
+        backdrop_color: [std::env::var("BACKDROP").map_or(0., |v| v.parse().unwrap()); 3],
         ..Config::default()
     };
     let renderer = pollster::block_on(Renderer::new(wgpu::Backends::VULKAN))?;

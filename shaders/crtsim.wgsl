@@ -14,6 +14,7 @@ struct Params {
     camera: vec4<f32>,
     bloom: vec4<f32>, // amount, power, spread, unused
     processing: vec4<f32>, // linear-light surface/bloom path, interlaced, field scanned this tick, screen only
+    backdrop: vec4<f32>, // colour where neither the glass nor the bezel is
 };
 @group(0) @binding(0) var<uniform> p: Params;
 @group(0) @binding(1) var source: texture_2d<f32>;
@@ -279,7 +280,7 @@ fn may_meet_bezel(ray: vec3<f32>) -> bool {
         return shade(bezel,bezel_across,bezel_down,true);
     }
     if glass_depth<NOTHING { return shade(glass,glass_across,glass_down,false); }
-    return vec4(0.,0.,0.,1.);
+    return vec4(select(p.backdrop.rgb,srgb_decode(p.backdrop.rgb),p.processing.x>0.5),1.);
 }
 
 fn blur(uv: vec2<f32>, swap: bool) -> vec4<f32> {

@@ -151,6 +151,9 @@ pub struct Config {
     pub rim: f32,
     pub light_position: [f32; 3],
     pub frame_color: [f32; 3],
+    /// What shows where neither the glass nor the bezel is, past the bezel's edges in an output
+    /// wider than 4:3. Super Win the Game draws a backdrop there, grey at 1/16.
+    pub backdrop_color: [f32; 3],
     pub fov: f32,
     pub bloom: f32,
     pub bloom_power: f32,
@@ -206,6 +209,7 @@ impl Default for Config {
             rim: 1.,
             light_position: [-10., -5., 10.],
             frame_color: [0.06; 3],
+            backdrop_color: [0.; 3],
             fov: 15.,
             bloom: 0.25,
             bloom_power: 2.,

@@ -201,6 +201,14 @@ const NUMBERS: &[(&str, &[&str])] = &[
         &["CRTSIM_BEZEL_R", "CRTSIM_BEZEL_G", "CRTSIM_BEZEL_B"],
     ),
     (
+        "backdrop_color",
+        &[
+            "CRTSIM_BACKDROP_R",
+            "CRTSIM_BACKDROP_G",
+            "CRTSIM_BACKDROP_B",
+        ],
+    ),
+    (
         "light_position",
         &["CRTSIM_LIGHT_X", "CRTSIM_LIGHT_Y", "CRTSIM_LIGHT_Z"],
     ),

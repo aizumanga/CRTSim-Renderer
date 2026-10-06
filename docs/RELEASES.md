@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Backdrop color** (Frame & lighting) fills the sides of an output wider than 4:3, past the bezel, where the
+  renderer drew black. Black by default; the **Super Win the Game** preset uses the game's grey backdrop, 1/16,
+  which brings a 16:9 frame from 1.76 steps off the game's on average to 0.85. RetroArch presets carry it.
 - **Reflection as on the screen** (Bloom & reflections) has the bezel reflect the picture with the screen's overscan
   and mask density, as Super Win the Game does, where the public source reverses the overscan and halves the mask's
   rows there. The **Super Win the Game** preset turns it on; with the overscan changed, the bezel's reflection now

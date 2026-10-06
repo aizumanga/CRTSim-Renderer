@@ -148,6 +148,14 @@ fn cases() -> Vec<Case> {
                 ..base()
             },
         ),
+        // A backdrop past the bezel's edges, at the sides of the 16:9 frame.
+        still(
+            "backdrop",
+            Config {
+                backdrop_color: [0.0625, 0.25, 0.5],
+                ..base()
+            },
+        ),
         still(
             "linear-light",
             Config {

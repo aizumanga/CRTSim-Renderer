@@ -339,6 +339,15 @@ pub static SETTINGS: &[Setting] = &[
         ]),
     ),
     Setting::numbers(
+        "backdrop_color",
+        "Backdrop color",
+        Numbers::color(Lighting, access!(backdrop_color)).named(&[
+            "Backdrop red",
+            "Backdrop green",
+            "Backdrop blue",
+        ]),
+    ),
+    Setting::numbers(
         "diffuse",
         "Diffuse light",
         Numbers::slider(Lighting, access!(diffuse), 0.0..=2.),

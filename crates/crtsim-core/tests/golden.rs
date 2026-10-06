@@ -235,6 +235,16 @@ fn cases(renderer: &Renderer) -> Vec<(&'static str, RgbaImage)> {
         .crt,
     ));
 
+    // A backdrop past the bezel's edges, which the goldens' 16:9 frame shows at its sides.
+    cases.push((
+        "backdrop",
+        render(&Config {
+            backdrop_color: [0.0625, 0.25, 0.5],
+            ..base()
+        })
+        .crt,
+    ));
+
     // Interlaced scanning: a 480-row signal whose last tick scanned one field, the other left
     // to decay, as a still of an interlaced set shows it.
     cases.push((
