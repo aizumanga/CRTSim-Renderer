@@ -1,4 +1,4 @@
-use crate::{file_name, files, timeline::Timeline};
+use crate::{file_name, files, schedule::Kind, timeline::Timeline};
 use anyhow::{ensure, Result};
 use crtsim_core::{config::Config, nes_luts, RenderProgress, Renderer, Sequence, Stage};
 use crtsim_media::{Options, Progress, Video};
@@ -253,6 +253,7 @@ pub struct Worker {
 pub enum PreviewJob {
     Preview {
         revision: u64,
+        kind: Kind,
         input: Arc<RgbaImage>,
         config: Box<Config>,
     },
@@ -557,6 +558,8 @@ async fn preview_lane(
     events: mpsc::Sender<Event>,
 ) {
     let mut graphics = Graphics::new(gpu);
+    // The CRT on screen, which interactive previews run on and a settled one starts afresh.
+    let mut editing = None;
     let mut backlog = VecDeque::new();
     loop {
         // Collect everything waiting, waiting only when there is nothing to do.
@@ -574,16 +577,25 @@ async fn preview_lane(
             PreviewJob::Shutdown => return,
             PreviewJob::Preview {
                 revision,
+                kind,
                 input,
                 config,
             } => {
                 let started = Instant::now();
-                let result = preview(&mut graphics, &input, &config)
+                if kind == Kind::Settled {
+                    editing = None;
+                }
+                let sequence = editing.get_or_insert_with(Sequence::editing);
+                let result = preview(&mut graphics, sequence, &input, &config)
                     .await
                     .map(|image| Previewed {
                         image,
                         seconds: started.elapsed().as_secs_f32(),
                     });
+                // A failed render may have lost its renderer, which the sequence belongs to.
+                if result.is_err() {
+                    editing = None;
+                }
                 Event::Preview { revision, result }
             }
             PreviewJob::Thumbnail {
@@ -867,22 +879,26 @@ async fn still(
         .await
 }
 
-/// A frame for the screen. On the interface's own device it is left there; otherwise it is
-/// read back, which is what the interface then has to upload again.
-async fn preview(graphics: &mut Graphics, input: &RgbaImage, c: &Config) -> Result<Preview> {
+/// `sequence`'s next frame, for the screen. On the interface's own device it is left there;
+/// otherwise it is read back, which is what the interface then has to upload again.
+async fn preview(
+    graphics: &mut Graphics,
+    sequence: &mut Sequence,
+    input: &RgbaImage,
+    c: &Config,
+) -> Result<Preview> {
     graphics
         .guard(
             "Graphics device failed while rendering the preview",
             async |g| {
-                if g.gpu.render_state().is_none() {
-                    return still(g, input, c, None, |_| {}).await.map(Preview::Pixels);
-                }
+                let shared = g.gpu.render_state().is_some();
                 let renderer = g.renderer(|| {}).await?;
-                let mut sequence = Sequence::still();
-                renderer
-                    .frame(&mut sequence, input, c, None, |_| {})
-                    .await?;
-                renderer.show(&sequence).map(Preview::Frame)
+                renderer.frame(sequence, input, c, None, |_| {}).await?;
+                if shared {
+                    renderer.show(sequence).map(Preview::Frame)
+                } else {
+                    renderer.read(sequence).await.map(Preview::Pixels)
+                }
             },
         )
         .await
@@ -1172,6 +1188,7 @@ mod tests {
             thumbnail(1, 1),
             PreviewJob::Preview {
                 revision: 3,
+                kind: Kind::Settled,
                 input: Arc::new(RgbaImage::new(1, 1)),
                 config: Box::default(),
             },
@@ -1544,6 +1561,74 @@ mod tests {
         stop(worker);
     }
 
+    /// Interactive previews run the CRT on screen on, through a change of output size; a
+    /// settled preview is the still an export of the same settings renders.
+    #[test]
+    #[ignore = "requires a Vulkan adapter"]
+    fn interactive_previews_run_on_and_a_settled_one_is_a_still() {
+        let renderer = pollster::block_on(Renderer::new(wgpu::Backends::VULKAN)).unwrap();
+        let input = Arc::new(crtsim_core::config::test_card());
+        let config = Config {
+            output: "320x240".into(),
+            ..Config::default()
+        };
+        let grey = Config {
+            chroma: 0.,
+            ..config.clone()
+        };
+        let wide = Config {
+            output: "400x240".into(),
+            ..grey.clone()
+        };
+        let still =
+            |c: &Config| pollster::block_on(renderer.still(&input, c, None, |_| {})).unwrap();
+        for (runtime, worker, next) in workers() {
+            let preview = |revision, kind, config: &Config| {
+                worker
+                    .jobs
+                    .preview(PreviewJob::Preview {
+                        revision,
+                        kind,
+                        input: input.clone(),
+                        config: Box::new(config.clone()),
+                    })
+                    .unwrap();
+                match next(&worker) {
+                    Event::Preview {
+                        revision: back,
+                        result:
+                            Ok(Previewed {
+                                image: Preview::Pixels(image),
+                                ..
+                            }),
+                    } if back == revision => image,
+                    _ => panic!("{runtime}: expected preview {revision}"),
+                }
+            };
+            assert_eq!(
+                preview(1, Kind::Interactive, &config),
+                still(&config),
+                "{runtime}: the first is a still"
+            );
+            assert_ne!(
+                preview(2, Kind::Interactive, &grey),
+                still(&grey),
+                "{runtime}: an edit runs on over the glow before it"
+            );
+            assert_eq!(
+                preview(3, Kind::Interactive, &wide).dimensions(),
+                (400, 240),
+                "{runtime}: a new size starts again"
+            );
+            assert_eq!(
+                preview(4, Kind::Settled, &wide),
+                still(&wide),
+                "{runtime}: settled"
+            );
+            stop(worker);
+        }
+    }
+
     /// The point of the second lane: a preview finishes while an export is still running,
     /// where it used to wait in the queue behind all of it. On threads the lanes run at once;
     /// as tasks on one thread they take turns between the export's batches.
@@ -1575,6 +1660,7 @@ mod tests {
                 .jobs
                 .preview(PreviewJob::Preview {
                     revision: 7,
+                    kind: Kind::Settled,
                     input,
                     config: Box::new(Config {
                         output: "320x180".into(),

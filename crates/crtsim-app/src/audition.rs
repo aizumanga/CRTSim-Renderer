@@ -43,7 +43,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schedule::Due;
+    use crate::schedule::{Due, Kind};
 
     /// Late enough for any change to have settled.
     fn settled() -> Instant {
@@ -78,10 +78,10 @@ mod tests {
         app.settle_audition();
         assert_eq!(
             app.schedule.due(settled(), false),
-            Due::Preview,
+            Due::Preview(Kind::Settled),
             "previewed even without live preview"
         );
-        app.request_preview();
+        app.request_preview(Kind::Settled);
         match previews.try_recv() {
             Ok(PreviewJob::Preview { config, .. }) => assert_eq!(config.bloom, 1.5),
             _ => panic!("expected a preview of the auditioned look"),
@@ -112,7 +112,7 @@ mod tests {
         };
         app.offer_audition("LUT “Gray”", candidate.clone());
         app.settle_audition();
-        app.request_preview();
+        app.request_preview(Kind::Settled);
         let Ok(PreviewJob::Preview { revision, .. }) = previews.try_recv() else {
             panic!("expected a preview of the auditioned look");
         };
@@ -125,8 +125,11 @@ mod tests {
         app.settle_audition();
         app.schedule.live = false;
         assert!(app.audition.is_none());
-        assert_eq!(app.schedule.due(settled(), false), Due::Preview);
-        app.request_preview();
+        assert_eq!(
+            app.schedule.due(settled(), false),
+            Due::Preview(Kind::Settled)
+        );
+        app.request_preview(Kind::Settled);
         match previews.try_recv() {
             Ok(PreviewJob::Preview { config, .. }) => assert_eq!(config.chroma, app.config.chroma),
             _ => panic!("ending an audition redraws the settings in use"),

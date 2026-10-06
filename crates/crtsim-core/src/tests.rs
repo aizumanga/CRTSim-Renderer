@@ -58,6 +58,49 @@ fn video_history_survives_between_frames_and_resets_for_new_sequence() {
 }
 #[test]
 #[ignore = "requires a Vulkan adapter"]
+fn an_editing_sequence_follows_edits_on_its_history_and_restarts_for_new_sizes() {
+    let r = pollster::block_on(Renderer::new(wgpu::Backends::VULKAN)).unwrap();
+    let c = Config {
+        output: "160x120".into(),
+        signal: "32x32".into(),
+        persistence: [0.9; 3],
+        ..Config::default()
+    };
+    let card = config::test_card();
+    let mut editing = Sequence::editing();
+    assert_eq!(
+        next(&r, &mut editing, &card, &c),
+        render(&r, &card, &c).unwrap().crt,
+        "the first frame is a still"
+    );
+    // Turning the colour down shows at once, over the glow of the colour before.
+    let edited = Config {
+        chroma: 0.,
+        ..c.clone()
+    };
+    assert_ne!(
+        next(&r, &mut editing, &card, &edited),
+        render(&r, &card, &edited).unwrap().crt,
+        "an edit runs on from the glow before it"
+    );
+    let resized = Config {
+        output: "200x150".into(),
+        ..edited
+    };
+    assert_eq!(
+        next(&r, &mut editing, &card, &resized),
+        render(&r, &card, &resized).unwrap().crt,
+        "a new output size starts again from a still"
+    );
+    let mut video = Sequence::video(crate::Timing::Stable, 60.);
+    next(&r, &mut video, &card, &c);
+    assert!(
+        pollster::block_on(r.frame(&mut video, &card, &resized, None, |_| {})).is_err(),
+        "a video's sequence never restarts by itself"
+    );
+}
+#[test]
+#[ignore = "requires a Vulkan adapter"]
 fn preview_frame_matches_the_pixels_a_read_back_render_produces() {
     let r = pollster::block_on(Renderer::new(wgpu::Backends::VULKAN)).unwrap();
     let c = Config {

@@ -71,17 +71,18 @@ impl Request {
                 path.map_or(Answer::Cancelled, |path| Answer::File(kind, path))
             }
             Self::Batch(settings) => {
-                let chosen = rfd::FileDialog::new()
+                let Some(sources) = rfd::FileDialog::new()
                     .add_filter("Images and videos", &files::media_extensions())
                     .pick_files()
-                    .and_then(|sources| {
-                        rfd::FileDialog::new()
-                            .set_title("Batch export destination")
-                            .pick_folder()
-                            .map(|folder| (sources, folder))
-                    });
-                match chosen {
-                    Some((sources, folder)) => Answer::Batch {
+                else {
+                    return Answer::Cancelled;
+                };
+                // The destination is asked for only once there are files to send to it.
+                match rfd::FileDialog::new()
+                    .set_title("Batch export destination")
+                    .pick_folder()
+                {
+                    Some(folder) => Answer::Batch {
                         settings,
                         sources,
                         folder,
