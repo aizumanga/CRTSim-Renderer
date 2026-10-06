@@ -16,13 +16,16 @@ use image::RgbaImage;
 use std::sync::Arc;
 use web_time::Instant;
 
-/// What a frame's tick found.
+/// What a frame's tick, or Refresh, found. The two are independent: a change settles whether or
+/// not its preview could be sent.
 #[must_use]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Tick {
-    Nothing,
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Tick {
     /// The change under way has settled, so it becomes an undo step.
-    Settled,
+    pub settled: bool,
+    /// The preview lane could not take the preview due: the renderer has stopped, and nothing
+    /// more will be rendered.
+    pub stopped: bool,
 }
 
 /// A look previewed from a gallery without being applied.
@@ -94,8 +97,7 @@ impl Preview {
 
     /// Called once per frame, after the galleries have drawn: starts, switches or ends the
     /// audition, and asks the lane for the preview due, of `config` and `input`, when
-    /// `may_render`. Whether the change under way has settled, which it does whether or not it
-    /// could be rendered.
+    /// `may_render`. A change settles whether or not it could be rendered.
     pub fn tick(
         &mut self,
         now: Instant,
@@ -103,30 +105,37 @@ impl Preview {
         config: &Config,
         input: &Arc<RgbaImage>,
         may_render: bool,
-    ) -> Result<Tick, Stopped> {
+    ) -> Tick {
         self.settle_audition(config, now);
         let kind = match self.schedule.due(now, pointer_down) {
-            Due::Nothing => return Ok(Tick::Nothing),
-            Due::Commit => return Ok(Tick::Settled),
+            Due::Nothing => return Tick::default(),
+            Due::Commit => {
+                return Tick {
+                    settled: true,
+                    stopped: false,
+                }
+            }
             Due::Preview(kind) => kind,
         };
-        if may_render {
-            self.request(kind, config, input)?;
+        let asked = if may_render {
+            self.request(kind, config, input)
+        } else {
+            Ok(false)
+        };
+        Tick {
+            settled: kind == Kind::Settled,
+            stopped: asked.is_err(),
         }
-        Ok(match kind {
-            Kind::Settled => Tick::Settled,
-            Kind::Interactive => Tick::Nothing,
-        })
     }
 
     /// Refresh: renders the settings exactly now, live preview or not. Settled if it was asked
     /// for, which it is unless a preview is still rendering.
-    pub fn refresh(&mut self, config: &Config, input: &Arc<RgbaImage>) -> Result<Tick, Stopped> {
-        Ok(if self.request(Kind::Settled, config, input)? {
-            Tick::Settled
-        } else {
-            Tick::Nothing
-        })
+    pub fn refresh(&mut self, config: &Config, input: &Arc<RgbaImage>) -> Tick {
+        let asked = self.request(Kind::Settled, config, input);
+        Tick {
+            settled: asked != Ok(false),
+            stopped: asked.is_err(),
+        }
     }
 
     /// A preview the lane rendered, or could not, came back. It is shown unless settings since
@@ -236,7 +245,8 @@ impl Preview {
     }
 
     /// Asks the lane for a preview of this kind, of the auditioned look or else `config`.
-    /// Whether it was asked for: not while another preview is rendering.
+    /// Whether it was asked for: not while another preview is rendering. An error once it was,
+    /// if the lane could not take it.
     fn request(
         &mut self,
         kind: Kind,
@@ -321,6 +331,15 @@ mod tests {
     use std::sync::mpsc;
     use std::time::Duration;
 
+    const QUIET: Tick = Tick {
+        settled: false,
+        stopped: false,
+    };
+    const SETTLES: Tick = Tick {
+        settled: true,
+        stopped: false,
+    };
+
     /// Long enough for any change to settle.
     const SETTLED: Duration = Duration::from_secs(1);
 
@@ -363,7 +382,7 @@ mod tests {
     fn a_settled_preview_of_replaced_settings_is_not_shown() {
         let ctx = egui::Context::default();
         let (mut preview, previews, mut config, input) = preview();
-        assert_eq!(preview.refresh(&config, &input), Ok(Tick::Settled));
+        assert!(preview.refresh(&config, &input).settled);
         let (asked, ..) = sent(&previews);
         config.bloom = 0.;
         preview.changed(Instant::now());
@@ -371,7 +390,7 @@ mod tests {
         assert!(preview.picture().is_none() && !preview.rendering());
         // The change is still to be previewed.
         let tick = preview.tick(settled(), false, &config, &input, true);
-        assert_eq!(tick, Ok(Tick::Settled));
+        assert_eq!(tick, SETTLES);
         let (revision, kind, shown) = sent(&previews);
         assert_eq!((kind, shown.bloom), (Kind::Settled, 0.));
         let summary = preview.returned(&ctx, revision, rendered(0.1));
@@ -388,7 +407,7 @@ mod tests {
             config.bloom = bloom;
             preview.changed(Instant::now());
             let tick = preview.tick(Instant::now(), true, config, &input, true);
-            assert_eq!(tick, Ok(Tick::Nothing), "nothing settles mid-drag");
+            assert_eq!(tick, QUIET, "nothing settles mid-drag");
             let (revision, kind, shown) = sent(&previews);
             assert_eq!((kind, shown.bloom), (Kind::Interactive, bloom));
             revision
@@ -403,7 +422,7 @@ mod tests {
         drag(&mut preview, &mut config, 0.);
         // Let go: the next preview to be asked for settles the drag, once.
         let tick = preview.tick(settled(), false, &config, &input, true);
-        assert_eq!(tick, Ok(Tick::Settled));
+        assert_eq!(tick, SETTLES);
     }
 
     #[test]
@@ -411,14 +430,10 @@ mod tests {
         let (mut preview, previews, config, input) = preview();
         preview.changed(Instant::now());
         let tick = preview.tick(settled(), false, &config, &input, false);
-        assert_eq!(tick, Ok(Tick::Settled));
+        assert_eq!(tick, SETTLES);
         assert!(previews.try_recv().is_err(), "nothing rendered");
         let tick = preview.tick(settled(), false, &config, &input, true);
-        assert_eq!(
-            tick,
-            Ok(Tick::Settled),
-            "still to be previewed once allowed"
-        );
+        assert_eq!(tick, SETTLES, "still to be previewed once allowed");
         sent(&previews);
     }
 
@@ -432,10 +447,10 @@ mod tests {
         };
         // A gallery offers the look under the pointer on every frame.
         let start = Instant::now();
-        for (at, ticked) in [(start, Tick::Nothing), (start + SETTLED, Tick::Settled)] {
+        for (at, ticked) in [(start, QUIET), (start + SETTLED, SETTLES)] {
             preview.offer("preset “Bright”", candidate.clone());
             let tick = preview.tick(at, false, &config, &input, true);
-            assert_eq!(tick, Ok(ticked));
+            assert_eq!(tick, ticked);
             assert_eq!(preview.audition(), Some("preset “Bright”"));
         }
         assert_eq!(sent(&previews).2.bloom, 1.5);
@@ -486,12 +501,16 @@ mod tests {
             Config::general(),
             Arc::new(crtsim_core::config::test_card()),
         );
+        // The change still settles, so it becomes an undo step all the same.
         let tick = preview.tick(settled(), false, &config, &input, true);
-        assert!(tick.is_err());
-        assert!(!preview.rendering());
         assert_eq!(
-            preview.tick(settled(), false, &config, &input, true),
-            Ok(Tick::Nothing)
+            tick,
+            Tick {
+                settled: true,
+                stopped: true
+            }
         );
+        assert!(!preview.rendering());
+        assert_eq!(preview.tick(settled(), false, &config, &input, true), QUIET);
     }
 }

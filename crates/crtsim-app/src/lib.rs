@@ -491,12 +491,14 @@ impl App {
             self.ticked(refreshed);
         }
     }
-    /// Acts on what the preview found: a change that settled becomes an undo step.
-    fn ticked(&mut self, tick: Result<preview::Tick, worker::Stopped>) {
-        match tick {
-            Ok(preview::Tick::Settled) => self.history.commit(&self.config),
-            Ok(preview::Tick::Nothing) => {}
-            Err(worker::Stopped) => self.worker_stopped(),
+    /// Acts on what the preview found: a change that settled becomes an undo step, and a
+    /// stopped renderer is reported.
+    fn ticked(&mut self, tick: preview::Tick) {
+        if tick.settled {
+            self.history.commit(&self.config);
+        }
+        if tick.stopped {
+            self.worker_stopped();
         }
     }
     /// The keyboard shortcuts, with Ctrl or, on macOS, Command: Z undoes and Shift+Z redoes;
