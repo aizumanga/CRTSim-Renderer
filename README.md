@@ -63,7 +63,7 @@ original did, so a finer signal gets a finer mask. Original CRTSim and the line-
 use it; the general-image presets keep a fixed 128 × 224 mask. Presets saved with fixed columns and rows keep them.
 
 **Super Win the Game** uses the game's own CRT options on top of the public reference: a 30° field of view, **NTSC blending**
-at 0.35 and its **NTSC palette**. NTSC blending moves the two composite artifact patterns towards each other in the game's
+at 0.35, its **NTSC palette** and the artifact pattern flipped as its Linux build draws it (**Flip artifact pattern**). NTSC blending moves the two composite artifact patterns towards each other in the game's
 units, so alternating ticks mix them 17.5/82.5 and 82.5/17.5 instead of switching cleanly; 0, the default, is the public
 source's switch, and 1 shows their average on every tick. **NES palette** (Color & LUT) makes the palette from the game's
 **Tint**, **Tint I** and **Tint Q**, one of two ways. **The game's** makes it exactly as Super Win the Game does, matching
@@ -280,7 +280,7 @@ Export directories must be new. Sixteen warm-up ticks means 17 total ticks; it i
 `alternating` advances phase once per tick; the final phase depends on warm-up parity. Stable mode is recommended for still images.
 
 **Interlaced fields** (`"interlace": true`) makes each tick scan every other signal row, alternating fields, while the rows it skips only fade by persistence, as on an interlaced set. Use it with a 480- or 576-row signal. On a still, the last tick's field is the bright one, so warm-up parity picks which; in a video each frame is one field.
-**Flip artifact pattern** (`"flip_artifacts": true`) turns the composite artifact pattern upside down against the picture, each tick blending in the row above rather than the one below, as Super Win the Game's Linux build draws it; compared with that build's own frames, the composite signal then matches within 2 steps. Off, the default, is the public CRTSim source's orientation, which the game's Windows build may also use. RetroArch presets carry it.
+**Flip artifact pattern** (`"flip_artifacts": true`) turns the composite artifact pattern upside down against the picture, each tick blending in the row above rather than the one below, as Super Win the Game's Linux build draws it; compared with that build's own frames, the composite signal then matches within 2 steps. Off, the default, is the public CRTSim source's orientation, which the game's Windows build may also use; the **Super Win the Game** preset turns it on. RetroArch presets carry it.
 
 ### GPU troubleshooting
 

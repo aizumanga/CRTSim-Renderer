@@ -4,7 +4,7 @@
 
 - **Flip artifact pattern** (Signal) draws the composite artifact pattern upside down, each tick blending the row above,
   as Super Win the Game's Linux build does; with it, the composite signal matches that build's frames within 2 steps.
-  Off by default, as in the public source. RetroArch presets carry it.
+  Off by default, as in the public source; the **Super Win the Game** preset turns it on. RetroArch presets carry it.
 - **NES palette** can be made **the game's** way, exactly as Super Win the Game makes it: every colour its Tint, Tint I and
   Tint Q give matches the game's own output, as does its 32-step table, which takes the NES palette the game's art is
   drawn in (beginning `7C7C7C 0000FC 0000BC`) onto them. The **Super Win the Game** preset uses it. **From the composite

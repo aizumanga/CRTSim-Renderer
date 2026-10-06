@@ -335,7 +335,7 @@ None of these are made yet. In order of how much they would close the gap:
    (`CRTSIM_FLIP_ARTIFACTS`), off by default. Against the session-4 capture at default
    settings with it on: composite worst 2, mean 0.26 (from worst 152, mean 1.6), the same
    residual as with artifacts off; final mean 0.72 (from 1.4). A RetroArch parity case covers
-   it.
+   it. The Super Win the Game preset turns it on, matching the Linux build.
 
 Frame-by-frame comparison is set up (session 4); more probes, motion and other settings can go
 through it.
