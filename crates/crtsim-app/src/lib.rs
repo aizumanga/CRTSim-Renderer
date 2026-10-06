@@ -238,7 +238,7 @@ impl App {
     ) -> Self {
         let input = Arc::new(config::test_card());
         let original = texture(ctx, "original", &input, 2048);
-        let config = Config::general();
+        let config = gallery::default_config();
         let render_state = gpu.render_state().cloned();
         let worker::Worker {
             jobs,
@@ -684,6 +684,7 @@ impl eframe::App for App {
                     self.error.is_some() || self.preview_error.is_some(),
                 );
                 ui.label(&self.status);
+                chrome::version(ui);
             });
             if let Work::Exporting {
                 progress: Some(p), ..

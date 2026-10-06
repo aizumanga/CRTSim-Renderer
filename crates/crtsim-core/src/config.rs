@@ -281,6 +281,23 @@ impl Config {
         }
     }
 
+    /// Super Win the Game's own CRT options: the public reference with a 30° field of view,
+    /// NTSC blending at 0.35 and its NTSC palette made as the game makes it, with the artifact
+    /// pattern as its Windows build draws it and the bezel reflecting the picture as the screen
+    /// shows it.
+    pub fn super_win_the_game() -> Self {
+        Self {
+            fov: 30.,
+            phase: Phase::Alternating,
+            ntsc_blending: 0.35,
+            reflection_as_screen: true,
+            // The game's engine draws a backdrop at 1/16 grey, seen past the bezel.
+            backdrop_color: [0.0625; 3],
+            palette: Some(Default::default()),
+            ..Self::default()
+        }
+    }
+
     /// The colour table prepare applies: the NES palette's when one is set, else the LUT.
     pub fn lut_in_use(&self) -> Option<std::sync::Arc<crate::workflow::Lut>> {
         match &self.palette {

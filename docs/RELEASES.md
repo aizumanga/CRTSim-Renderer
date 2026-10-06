@@ -1,5 +1,14 @@
 # Portable releases (Phase 4)
 
+## Unreleased
+
+- **Super Win the Game** is the preset the app starts with, and the one **Reset** and each setting's own reset return
+  to. It takes the place of Original CRTSim, which was the same public reference without the game's options.
+- Sliders move finely: dragging moves one a quarter as far as the pointer (**Shift** as far, **Alt** a tenth as far
+  again), and the arrow keys step it by 0.1% of its range (**Shift** 1%, **Alt** 0.01%).
+- The NES palette made as the game makes it is called **Super Win the Game's** rather than "the game's".
+- The status bar shows the app's version in its lower right corner.
+
 ## v1.0.1
 
 The preview now follows the controls as Super Win the Game's picture follows its options menu: with **Live preview** on,

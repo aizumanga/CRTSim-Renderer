@@ -133,7 +133,7 @@ impl NesPalette {
         let name = format!(
             "NES palette, {} (tint {:.2}, I {:.2}, Q {:.2})",
             match self.model {
-                Model::Game => "the game's",
+                Model::Game => "Super Win the Game's",
                 Model::Signal => "from the signal",
             },
             self.tint,

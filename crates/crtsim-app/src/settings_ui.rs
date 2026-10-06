@@ -48,23 +48,26 @@ impl App {
             }
             if ui
                 .button("Reset")
-                .on_hover_text("Reset to the general image preset; Undo restores your settings")
+                .on_hover_text(format!(
+                    "Reset to the {} preset; Undo restores your settings",
+                    gallery::DEFAULT
+                ))
                 .clicked()
             {
-                self.replace_config(Config::general());
+                self.replace_config(gallery::default_config());
             }
         });
         ui.horizontal(|ui| {
+            if ui.button(gallery::DEFAULT).clicked() {
+                self.replace_config(gallery::default_config());
+            }
             if ui.button("General image").clicked() {
                 self.replace_config(Config::general());
-            }
-            if ui.button("Original CRTSim").clicked() {
-                self.replace_config(Config::default());
             }
         });
         let before = self.config.clone();
         // What each slider's reset returns to: the same baseline as Reset above.
-        let defaults = Config::general();
+        let defaults = gallery::default_config();
         chrome::Section::new("Image & output").show(ui, |ui| {
             resolution(
                 ui,
@@ -152,8 +155,8 @@ impl App {
             chrome::Section::new("Optional color grade").show(ui, |ui| {
                 numbers(ui, &mut self.config, &defaults, settings::Section::Grade);
                 ui.small(
-                    "YIQ hue/chroma adjustment. This is an optional grade, not the game's \
-                     NES palette or a complete NTSC decoder.",
+                    "YIQ hue/chroma adjustment. This is an optional grade, not Super Win the \
+                     Game's NES palette or a complete NTSC decoder.",
                 );
             });
             ui.checkbox(
@@ -347,7 +350,7 @@ impl App {
         crate::chrome::Section::new("Color & LUT").show(ui, |ui| {
             ui.label(match (&self.config.palette, &self.config.lut) {
                 (Some(palette), _) => match palette.model {
-                    Model::Game => "NES palette, the game's",
+                    Model::Game => "NES palette, Super Win the Game's",
                     Model::Signal => "NES palette from the composite signal",
                 },
                 (None, Some(lut)) => lut.name.as_str(),
@@ -375,7 +378,7 @@ impl App {
                 self.config.set_palette(generated.then(Default::default));
             }
             if let Some(palette) = &mut self.config.palette {
-                ui.radio_value(&mut palette.model, Model::Game, "The game's")
+                ui.radio_value(&mut palette.model, Model::Game, "Super Win the Game's")
                     .on_hover_text(
                         "Exactly as Super Win the Game makes it, for art in the NES palette \
                          its own is drawn in, which begins 7C7C7C 0000FC 0000BC. Tint I and Q \
@@ -393,10 +396,7 @@ impl App {
                 );
             }
             if self.config.lut.is_some() || self.config.palette.is_some() {
-                let defaults = Config {
-                    palette: Some(Default::default()),
-                    ..Config::general()
-                };
+                let defaults = gallery::default_config();
                 numbers(ui, &mut self.config, &defaults, settings::Section::Color);
             }
             ui.small(
