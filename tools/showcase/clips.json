@@ -1,0 +1,124 @@
+{
+ "intro": [
+  "ONE CRT",
+  "SIX ERAS"
+ ],
+ "intro_sub": "Six original animations, one CRT simulator",
+ "outro": [
+  "FREE &",
+  "OPEN SOURCE"
+ ],
+ "clips": [
+  {
+   "name": "arcade",
+   "start": 110,
+   "headline": [
+    "INSERT",
+    "COIN"
+   ],
+   "look": "Original CRTSim · long glow",
+   "era": "Arcade, 1980s",
+   "base": "default",
+   "config": {
+    "persistence": [
+     0.85,
+     0.75,
+     0.65
+    ],
+    "bloom": 0.4,
+    "fit": "contain"
+   }
+  },
+  {
+   "name": "terminal",
+   "start": 100,
+   "headline": [
+    "GREEN",
+    "PHOSPHOR"
+   ],
+   "look": "Mono terminal",
+   "era": "Home computer, 1982",
+   "base": "general",
+   "config": {
+    "signal": "480p",
+    "artifacts": 0,
+    "sharpness": 0.3,
+    "mask_opacity": 0.6,
+    "persistence": [
+     0.9,
+     0.85,
+     0.8
+    ],
+    "bloom": 0.35
+   }
+  },
+  {
+   "name": "demoscene",
+   "start": 60,
+   "headline": [
+    "DEMOSCENE",
+    "ON PAL"
+   ],
+   "look": "PAL 288p",
+   "era": "Demoscene, 1990",
+   "base": "general",
+   "config": {
+    "signal": "288p",
+    "filter": "nearest",
+    "artifacts": 0.25,
+    "mask_opacity": 0.7
+   },
+   "mask_signal": true
+  },
+  {
+   "name": "rpg",
+   "start": 100,
+   "headline": [
+    "16-BIT",
+    "ADVENTURES"
+   ],
+   "look": "Super Win the Game",
+   "era": "Console RPG, 1990s",
+   "base": "default",
+   "config": {
+    "fov": 30,
+    "ntsc_blending": 0.35,
+    "reflection_as_screen": true,
+    "fit": "contain"
+   }
+  },
+  {
+   "name": "racer",
+   "start": 60,
+   "headline": [
+    "CRUISE",
+    "AT DUSK"
+   ],
+   "look": "NTSC 240p",
+   "era": "Arcade racer, 1980s",
+   "base": "general",
+   "config": {
+    "signal": "240p",
+    "filter": "nearest",
+    "mask_opacity": 0.7
+   },
+   "mask_signal": true
+  },
+  {
+   "name": "broadcast",
+   "start": 40,
+   "headline": [
+    "LATE-NIGHT",
+    "TV"
+   ],
+   "look": "NTSC 480i",
+   "era": "Broadcast, late 1980s",
+   "base": "general",
+   "config": {
+    "signal": "480p",
+    "interlace": true
+   },
+   "mask_signal": true
+  }
+ ]
+}

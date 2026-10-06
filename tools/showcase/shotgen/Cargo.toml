@@ -1,0 +1,16 @@
+[package]
+name = "shotgen"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Not a workspace member: a tool for making the showcase video, built on its own.
+[workspace]
+
+[dependencies]
+crtsim-core = { path = "../../../crates/crtsim-core" }
+anyhow = "1"
+image = { version = "0.24.9", default-features = false, features = ["png"] }
+serde_json = "1"
+wgpu = "30.0.1"
+pollster = "0.3"
