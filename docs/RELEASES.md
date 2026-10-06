@@ -1,6 +1,13 @@
 # Portable releases (Phase 4)
 
-## Unreleased
+## v1.0.0
+
+The **Super Win the Game** preset now draws the CRT as the shipped game does, checked against the game's own frames:
+its palette and colour table, its NTSC blending, the screen mesh's outline and shading, the bezel's reflection and the
+backdrop around it. All but the screen mesh are settings of their own, off in the other looks; the
+screen's outline and shading move every look by a fraction of a step. Presets and projects saved before open as they
+looked. The research behind it, and how to reproduce it from a copy of the game, is in
+`docs/research/swtg-crt/README.md`.
 
 - **Backdrop color** (Frame & lighting) fills the sides of an output wider than 4:3, past the bezel, where the
   renderer drew black. Black by default; the **Super Win the Game** preset uses the game's grey backdrop, 1/16,
