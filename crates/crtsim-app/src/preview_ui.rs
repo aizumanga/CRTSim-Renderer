@@ -180,8 +180,8 @@ impl App {
             });
             ui.scope(|ui| {
                 ui.spacing_mut().slider_width = (ui.available_width() - 20.).max(100.);
-                let response =
-                    ui.add(egui::Slider::new(&mut timeline.picked, 0..=last).show_value(false));
+                let response = Keyed::new(0..=last)
+                    .show(ui, &mut timeline.picked, |slider| slider.show_value(false));
                 seek |= response.drag_stopped()
                     || (response.changed() && !ui.input(|i| i.pointer.any_down()));
             });

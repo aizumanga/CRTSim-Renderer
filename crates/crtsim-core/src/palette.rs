@@ -52,6 +52,14 @@ impl Model {
     fn saved_without_one() -> Self {
         Self::Signal
     }
+
+    /// The palette's name after "NES palette", as the app and a generated LUT show it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Model::Game => "Super Win the Game's",
+            Model::Signal => "from the composite signal",
+        }
+    }
 }
 
 impl Default for NesPalette {
@@ -132,10 +140,7 @@ impl NesPalette {
     fn build_lut(&self) -> Lut {
         let name = format!(
             "NES palette, {} (tint {:.2}, I {:.2}, Q {:.2})",
-            match self.model {
-                Model::Game => "Super Win the Game's",
-                Model::Signal => "from the signal",
-            },
+            self.model.name(),
             self.tint,
             self.tint_i,
             self.tint_q

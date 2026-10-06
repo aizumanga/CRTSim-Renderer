@@ -39,6 +39,8 @@ impl App {
             self.input.width(),
             self.input.height()
         ));
+        // What Reset, and each setting's own reset, return to.
+        let default = gallery::default_preset();
         ui.horizontal(|ui| {
             if ui.button("Undo").on_hover_text("Ctrl+Z").clicked() {
                 self.undo();
@@ -50,24 +52,18 @@ impl App {
                 .button("Reset")
                 .on_hover_text(format!(
                     "Reset to the {} preset; Undo restores your settings",
-                    gallery::DEFAULT
+                    default.name
                 ))
                 .clicked()
             {
-                self.replace_config(gallery::default_config());
+                self.replace_config(default.config.clone());
             }
         });
-        ui.horizontal(|ui| {
-            if ui.button(gallery::DEFAULT).clicked() {
-                self.replace_config(gallery::default_config());
-            }
-            if ui.button("General image").clicked() {
-                self.replace_config(Config::general());
-            }
-        });
+        if ui.button("General image").clicked() {
+            self.replace_config(Config::general());
+        }
         let before = self.config.clone();
-        // What each slider's reset returns to: the same baseline as Reset above.
-        let defaults = gallery::default_config();
+        let defaults = &default.config;
         chrome::Section::new("Image & output").show(ui, |ui| {
             resolution(
                 ui,
@@ -103,7 +99,7 @@ impl App {
                     (Filter::Nearest, "Nearest (pixel art)"),
                 ],
             );
-            numbers(ui, &mut self.config, &defaults, settings::Section::Image);
+            numbers(ui, &mut self.config, defaults, settings::Section::Image);
             if let (Ok(signal), Ok(output)) = (
                 self.config.signal_size(self.input.dimensions()),
                 self.config.output_size(self.input.dimensions()),
@@ -135,7 +131,7 @@ impl App {
                  selected background. SDR output; no ICC color management.",
             );
         });
-        self.framing_and_color(ui);
+        self.framing_and_color(ui, defaults);
         chrome::Section::new("Color processing").show(ui, |ui| {
             choice(
                 ui,
@@ -153,7 +149,7 @@ impl App {
                 );
             }
             chrome::Section::new("Optional color grade").show(ui, |ui| {
-                numbers(ui, &mut self.config, &defaults, settings::Section::Grade);
+                numbers(ui, &mut self.config, defaults, settings::Section::Grade);
                 ui.small(
                     "YIQ hue/chroma adjustment. This is an optional grade, not Super Win the \
                      Game's NES palette or a complete NTSC decoder.",
@@ -173,16 +169,16 @@ impl App {
         chrome::Section::new("CRT signal")
             .default_open(true)
             .show(ui, |ui| {
-                numbers(ui, &mut self.config, &defaults, settings::Section::Signal)
+                numbers(ui, &mut self.config, defaults, settings::Section::Signal)
             });
         chrome::Section::new("Glass & mask").show(ui, |ui| {
-            numbers(ui, &mut self.config, &defaults, settings::Section::Glass);
+            numbers(ui, &mut self.config, defaults, settings::Section::Glass);
             ui.separator();
             self.mask_density(ui);
-            numbers(ui, &mut self.config, &defaults, settings::Section::Mask);
+            numbers(ui, &mut self.config, defaults, settings::Section::Mask);
         });
         chrome::Section::new("Bloom & reflections").show(ui, |ui| {
-            numbers(ui, &mut self.config, &defaults, settings::Section::Bloom);
+            numbers(ui, &mut self.config, defaults, settings::Section::Bloom);
             ui.checkbox(
                 &mut self.config.reflection_as_screen,
                 "Reflection as on the screen",
@@ -194,13 +190,13 @@ impl App {
             );
         });
         chrome::Section::new("Frame & lighting").show(ui, |ui| {
-            numbers(ui, &mut self.config, &defaults, settings::Section::Lighting)
+            numbers(ui, &mut self.config, defaults, settings::Section::Lighting)
         });
         chrome::Section::new("Persistence & artifact phase").show(ui, |ui| {
             numbers(
                 ui,
                 &mut self.config,
-                &defaults,
+                defaults,
                 settings::Section::Persistence,
             );
             ui.horizontal(|ui| {
@@ -278,7 +274,7 @@ impl App {
         }
     }
     /// The source's framing, and its colour mapping before the CRT.
-    fn framing_and_color(&mut self, ui: &mut egui::Ui) {
+    fn framing_and_color(&mut self, ui: &mut egui::Ui, defaults: &Config) {
         crate::chrome::Section::new("Source & framing")
             .default_open(true)
             .show(ui, |ui| {
@@ -349,12 +345,9 @@ impl App {
             });
         crate::chrome::Section::new("Color & LUT").show(ui, |ui| {
             ui.label(match (&self.config.palette, &self.config.lut) {
-                (Some(palette), _) => match palette.model {
-                    Model::Game => "NES palette, Super Win the Game's",
-                    Model::Signal => "NES palette from the composite signal",
-                },
-                (None, Some(lut)) => lut.name.as_str(),
-                (None, None) => "No LUT",
+                (Some(palette), _) => format!("NES palette, {}", palette.model.name()),
+                (None, Some(lut)) => lut.name.clone(),
+                (None, None) => "No LUT".into(),
             });
             if ui.button("LUT gallery…").clicked() {
                 self.stop_playback();
@@ -378,7 +371,7 @@ impl App {
                 self.config.set_palette(generated.then(Default::default));
             }
             if let Some(palette) = &mut self.config.palette {
-                ui.radio_value(&mut palette.model, Model::Game, "Super Win the Game's")
+                ui.radio_value(&mut palette.model, Model::Game, Model::Game.name())
                     .on_hover_text(
                         "Exactly as Super Win the Game makes it, for art in the NES palette \
                          its own is drawn in, which begins 7C7C7C 0000FC 0000BC. Tint I and Q \
@@ -396,8 +389,7 @@ impl App {
                 );
             }
             if self.config.lut.is_some() || self.config.palette.is_some() {
-                let defaults = gallery::default_config();
-                numbers(ui, &mut self.config, &defaults, settings::Section::Color);
+                numbers(ui, &mut self.config, defaults, settings::Section::Color);
             }
             ui.small(
                 "Applied before CRT simulation. The table is embedded in presets and projects.",

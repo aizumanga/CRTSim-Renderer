@@ -107,20 +107,24 @@ const PACES: [Pace; 3] = [
     },
 ];
 
-/// Where the slider being dragged has got to: its value, before it is rounded to show, and the
-/// pointer's position along it then. Each frame moves on from it at the pace held then, so a
-/// whole-number slider gathers movements too small to show. Only one slider is dragged at a
-/// time, so one is kept for them all.
+impl Pace {
+    /// The pace for the modifiers held: a plain one matches any.
+    fn held(modifiers: egui::Modifiers) -> &'static Pace {
+        PACES
+            .iter()
+            .find(|pace| modifiers.contains(pace.modifiers))
+            .expect("the plain pace matches any modifiers")
+    }
+}
+
+/// Where a slider being dragged along its rail has got to: its value, before it is rounded to
+/// show, and the pointer's position along the rail then. Each frame moves on from it at the
+/// pace held then, so a whole-number slider gathers movements too small to show. Kept from the
+/// press until the slider is let go.
 #[derive(Clone, Copy)]
 struct Anchor {
     value: f64,
     x: f32,
-}
-
-impl Anchor {
-    fn id() -> egui::Id {
-        egui::Id::new("slider drag anchor")
-    }
 }
 
 impl<N: emath::Numeric> Keyed<N> {
@@ -159,22 +163,45 @@ impl<N: emath::Numeric> Keyed<N> {
         configure: impl for<'v> FnOnce(egui::Slider<'v>) -> egui::Slider<'v>,
     ) -> egui::Response {
         let before = *value;
-        let slider =
-            egui::Slider::new(&mut *value, self.range.clone()).logarithmic(self.logarithmic);
+        // The slider's own id, which its rail takes when added.
+        let anchor_id = ui.next_auto_id().with("drag anchor");
+        // The slider is drawn at the value as it stands. What it proposes, from the pointer,
+        // its number box or assistive technology, is decided on once it is added.
+        let mut proposed = None;
+        let (start, end) = self.span();
+        let slider = egui::Slider::from_get_set(start..=end, |set| {
+            proposed = set.or(proposed);
+            before.to_f64()
+        })
+        .logarithmic(self.logarithmic);
+        let slider = if N::INTEGRAL {
+            slider.integer()
+        } else {
+            slider
+        };
         let mut response = ui.add(configure(slider));
-        // The slider puts itself under the pointer on the frame it is let go too.
-        if response.dragged() || response.drag_stopped() {
-            if let Some(dragged) = self.dragged(ui, &response, *value) {
-                *value = dragged;
-            }
-        }
         if response.clicked() || response.drag_started() {
             response.request_focus();
         }
-        if !response.has_focus() {
-            return response;
+        let next = self
+            .keyed(ui, &response, before)
+            .or_else(|| self.rail_dragged(ui, &response, anchor_id, proposed))
+            .or(proposed.map(N::from_f64))
+            .filter(|next| *next != before);
+        if let Some(next) = next {
+            *value = next;
+            response.mark_changed();
         }
-        // The slider already moved a pixel's worth for each arrow press; the step replaces that.
+        response
+    }
+
+    /// What the keys pressed make the slider while it has the keyboard: ←/→ step it from
+    /// `before`, replacing the pixel's worth the slider itself moves for each, and Delete or
+    /// Backspace returns it to its default.
+    fn keyed(&self, ui: &egui::Ui, response: &egui::Response, before: N) -> Option<N> {
+        if !response.has_focus() {
+            return None;
+        }
         let mut fraction = 0.;
         let reset = ui.input_mut(|input| {
             for pace in &PACES {
@@ -185,7 +212,7 @@ impl<N: emath::Numeric> Keyed<N> {
             let delete = input.consume_key(egui::Modifiers::NONE, egui::Key::Delete);
             input.consume_key(egui::Modifiers::NONE, egui::Key::Backspace) || delete
         });
-        let next = match self.default {
+        match self.default {
             Some(default) if reset => Some(default),
             _ if fraction != 0. => Some(N::from_f64(stepped(
                 before.to_f64(),
@@ -195,37 +222,69 @@ impl<N: emath::Numeric> Keyed<N> {
                 N::INTEGRAL,
             ))),
             _ => None,
-        };
-        if let Some(next) = next {
-            *value = next;
-            response.mark_changed();
         }
-        response
     }
 
-    /// The value a drag under way gives in place of the slider's own, which follows the
-    /// pointer: `jumped` is where the slider put it this frame.
-    fn dragged(&self, ui: &egui::Ui, response: &egui::Response, jumped: N) -> Option<N> {
-        let (x, modifiers) =
-            ui.input(|input| Some((input.pointer.interact_pos()?.x, input.modifiers)))?;
-        // The press itself jumps to the pointer; the drag moves on from there.
-        let kept = ui.data(|data| data.get_temp::<Anchor>(Anchor::id()));
-        let anchor = match kept {
-            Some(anchor) if !response.drag_started() => anchor,
-            _ => Anchor {
-                value: jumped.to_f64(),
-                x,
-            },
+    /// What a drag along the rail makes the slider, in place of the value under the pointer
+    /// that the slider proposes. The press itself jumps to the pointer, as `proposed`; the drag
+    /// moves on from there at the pace held, for as long as the pointer moves, on or off the
+    /// rail. Dragging the number box beside it is the box's own.
+    fn rail_dragged(
+        &self,
+        ui: &egui::Ui,
+        response: &egui::Response,
+        anchor_id: egui::Id,
+        proposed: Option<f64>,
+    ) -> Option<N> {
+        // The slider also puts itself under the pointer on the frame it is let go.
+        if !response.dragged() && !response.drag_stopped() {
+            return None;
+        }
+        let (origin, pointer, modifiers) = ui.input(|input| {
+            let pointer = &input.pointer;
+            (
+                pointer.press_origin(),
+                pointer.interact_pos(),
+                input.modifiers,
+            )
+        });
+        let x = pointer?.x;
+        // A drag let go where the slider was not drawn leaves its anchor behind.
+        let kept = ui.data(|data| data.get_temp::<Anchor>(anchor_id));
+        let anchor = match kept.filter(|_| !response.drag_started()) {
+            Some(anchor) => anchor,
+            // A drag starting: along the rail, from where the press put the slider.
+            None => {
+                let left = response.rect.left();
+                if !(left..=left + ui.spacing().slider_width).contains(&origin?.x) {
+                    return None;
+                }
+                Anchor {
+                    value: proposed?,
+                    x,
+                }
+            }
         };
-        let drag = PACES
-            .iter()
-            .find(|pace| modifiers.contains(pace.modifiers))?
-            .drag;
-        let fraction = (x - anchor.x) as f64 / ui.spacing().slider_width as f64 * drag;
+        let fraction = f64::from(x - anchor.x) / travel(ui) * Pace::held(modifiers).drag;
         let value = moved(anchor.value, self.span(), fraction, self.logarithmic);
-        ui.data_mut(|data| data.insert_temp(Anchor::id(), Anchor { value, x }));
+        ui.data_mut(|data| {
+            if response.drag_stopped() {
+                data.remove::<Anchor>(anchor_id);
+            } else {
+                data.insert_temp(anchor_id, Anchor { value, x });
+            }
+        });
         Some(N::from_f64(tidy(value, N::INTEGRAL)))
     }
+}
+
+/// How far a slider's handle travels from one end to the other: its width, less the handle's
+/// radius at each end, as egui draws it.
+fn travel(ui: &egui::Ui) -> f64 {
+    let thickness = ui
+        .text_style_height(&egui::TextStyle::Body)
+        .max(ui.spacing().interact_size.y);
+    f64::from(ui.spacing().slider_width - 2. * thickness / 2.5)
 }
 
 /// `value` moved `fraction` of the way across `range`, down when negative: evenly, or evenly in
@@ -400,6 +459,7 @@ mod tests {
         let value = std::cell::Cell::new(0.5f32);
         let rect = std::cell::Cell::new(egui::Rect::NOTHING);
         let width = std::cell::Cell::new(0f32);
+        let travel_px = std::cell::Cell::new(0f32);
         let frame = |mut events: Vec<egui::Event>, modifiers| {
             events.insert(0, egui::Event::ModifiersChanged(modifiers));
             let input = egui::RawInput {
@@ -413,10 +473,20 @@ mod tests {
                     value.set(shown);
                     rect.set(response.rect);
                     width.set(ui.spacing().slider_width);
+                    travel_px.set(travel(ui) as f32);
                 });
             });
             // No renderer takes the font atlas in a test, so its upload is dropped deliberately.
             output.textures_delta.clear();
+            // The numbers drawn: the slider's number box.
+            output
+                .shapes
+                .iter()
+                .filter_map(|clipped| match &clipped.shape {
+                    egui::epaint::Shape::Text(text) => text.galley.text().parse::<f32>().ok(),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
         };
         let none = egui::Modifiers::NONE;
         let button = |pos, pressed, modifiers| egui::Event::PointerButton {
@@ -433,9 +503,17 @@ mod tests {
         let pressed = value.get();
         assert!((pressed - 0.5).abs() < 0.1, "{pressed}");
         let close = |a: f32, b: f32| (a - b).abs() < 1e-4;
-        let along = |fraction: f32| start + egui::vec2(width.get() * fraction, 0.);
+        let along = |fraction: f32| start + egui::vec2(travel_px.get() * fraction, 0.);
         frame(vec![egui::Event::PointerMoved(along(0.2))], none);
         assert!(close(value.get(), pressed + 0.05), "{}", value.get());
+        // The slider shows where it is, not where the pointer is.
+        let drawn = frame(vec![], none);
+        assert!(
+            drawn
+                .iter()
+                .any(|number| (number - value.get()).abs() < 0.01),
+            "{drawn:?}"
+        );
         // Shift moves as far as the pointer, from where the slider is.
         frame(
             vec![egui::Event::PointerMoved(along(0.3))],

@@ -238,7 +238,7 @@ impl App {
     ) -> Self {
         let input = Arc::new(config::test_card());
         let original = texture(ctx, "original", &input, 2048);
-        let config = gallery::default_config();
+        let config = gallery::default_preset().config;
         let render_state = gpu.render_state().cloned();
         let worker::Worker {
             jobs,
