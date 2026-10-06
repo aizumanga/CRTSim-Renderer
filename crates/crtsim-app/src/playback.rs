@@ -194,6 +194,11 @@ impl App {
         let Some(timeline) = &self.source.timeline else {
             return;
         };
+        // Not over a load or an export, which hold the lane; Space reaches here whatever the
+        // controls allow.
+        if !self.lane.may_start() {
+            return;
+        }
         let (video, time) = (timeline.video.clone(), timeline.time);
         self.stop_playback();
         let config = match self

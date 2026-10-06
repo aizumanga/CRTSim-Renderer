@@ -338,9 +338,11 @@ impl App {
         if !matches!(job, Job::Playback { .. }) {
             self.stop_playback();
         }
-        self.status = status;
-        if self.lane.start(job).is_err() {
-            self.worker_stopped();
+        match self.lane.start(job) {
+            Ok(()) => self.status = status,
+            // Only reachable by a slip: what starts work asks `can_start_work` first.
+            Err(lane::Refused::Busy) => {}
+            Err(lane::Refused::Stopped) => self.worker_stopped(),
         }
     }
     fn send_preview(&mut self, job: PreviewJob) {

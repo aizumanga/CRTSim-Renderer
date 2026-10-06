@@ -36,6 +36,21 @@ impl Task {
     }
 }
 
+/// Why a job did not start.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Refused {
+    /// Another job is running; one runs at a time.
+    Busy,
+    /// The worker has stopped.
+    Stopped,
+}
+
+impl From<Stopped> for Refused {
+    fn from(_: Stopped) -> Self {
+        Self::Stopped
+    }
+}
+
 /// A job that has finished: what it was for, and whether the person stopped it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Finished {
@@ -62,9 +77,13 @@ impl Lane {
         }
     }
 
-    /// Sends `job` to the worker, which runs it once the job before it is done. An error if
-    /// the worker has stopped, which leaves the lane free.
-    pub fn start(&mut self, job: Job) -> Result<(), Stopped> {
+    /// Sends `job` to the worker. Refused while another job runs, unless that is a video
+    /// playing, which the app stops first; and if the worker has stopped, which leaves the lane
+    /// free.
+    pub fn start(&mut self, job: Job) -> Result<(), Refused> {
+        if !self.may_start() {
+            return Err(Refused::Busy);
+        }
         self.running = Task::of(&job).map(|task| Running {
             task,
             cancel: job.cancel().cloned(),
@@ -74,7 +93,7 @@ impl Lane {
         if sent.is_err() {
             self.running = None;
         }
-        sent
+        Ok(sent?)
     }
 
     /// The job running has finished, or failed, and the lane is free.
@@ -214,6 +233,33 @@ mod tests {
     }
 
     #[test]
+    fn a_job_is_refused_while_another_runs_and_leaves_it_be() {
+        let (mut lane, work) = lane();
+        let (job, flag) = export();
+        lane.start(job).unwrap();
+        let (playback, feed) = crate::playback::Playback::new(
+            &crtsim_media::test_clip(),
+            0.,
+            (4, 4),
+            Default::default(),
+        );
+        let playing = Job::Playback {
+            video: crtsim_media::test_clip(),
+            options: Default::default(),
+            feed,
+        };
+        assert_eq!(lane.start(playing), Err(Refused::Busy));
+        assert_eq!(
+            lane.start(Job::Load("photo.png".into())),
+            Err(Refused::Busy)
+        );
+        assert!(lane.is_exporting(), "the export still runs");
+        assert!(Arc::ptr_eq(lane.cancel().unwrap(), &flag));
+        assert_eq!(work.try_iter().count(), 1, "only the export was sent");
+        drop(playback);
+    }
+
+    #[test]
     fn playing_holds_the_lane_but_gives_way_and_cannot_be_cancelled_as_a_job() {
         let (mut lane, _work) = lane();
         let (playback, feed) = crate::playback::Playback::new(
@@ -247,7 +293,7 @@ mod tests {
         let (mut lane, work) = lane();
         drop(work);
         let (job, _) = export();
-        assert_eq!(lane.start(job), Err(Stopped));
+        assert_eq!(lane.start(job), Err(Refused::Stopped));
         assert!(lane.is_idle());
         let (job, _) = export();
         let (mut running, _work) = self::lane();
