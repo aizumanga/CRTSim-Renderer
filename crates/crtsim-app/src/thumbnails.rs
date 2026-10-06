@@ -60,15 +60,19 @@ impl App {
         thumbnails.entries.clear();
     }
 
-    /// The thumbnail for a preset, asking for it if it is missing or out of date. `None` while
-    /// it is being made, or if it could not be.
+    /// The thumbnail for a preset, included or `personal`, asking for it if it is missing or
+    /// out of date. `None` while it is being made, or if it could not be.
     pub(crate) fn preset_thumbnail(
         &mut self,
         name: &str,
+        personal: bool,
         config: &Config,
     ) -> Option<TextureHandle> {
         self.thumbnails_current();
-        let key = ThumbnailKey::Preset(name.to_owned());
+        let key = ThumbnailKey::Preset {
+            name: name.to_owned(),
+            personal,
+        };
         if let Some(entry) = self.thumbnails.entries.get(&key) {
             if entry.config.as_ref() == Some(config) {
                 return entry.texture();
@@ -228,20 +232,29 @@ mod tests {
         app.jobs = captured;
         let preset = Config::general();
         assert!(app.lut_thumbnail(4).is_none());
-        assert!(app.preset_thumbnail("General image", &preset).is_none());
+        assert!(app
+            .preset_thumbnail("General image", false, &preset)
+            .is_none());
         let first = asked(&jobs);
         assert_eq!(first.len(), 2);
         // Asking again, as every frame does, sends nothing new.
         app.lut_thumbnail(4);
-        app.preset_thumbnail("General image", &preset);
+        app.preset_thumbnail("General image", false, &preset);
         assert!(asked(&jobs).is_empty());
         // A preset saved again under the same name is rendered again.
         let edited = Config {
             bloom: 0.,
             ..preset.clone()
         };
-        app.preset_thumbnail("General image", &edited);
+        app.preset_thumbnail("General image", false, &edited);
         assert_eq!(asked(&jobs).len(), 1);
+        // A personal preset saved under an included name before that was refused has its own
+        // picture, and the two do not take turns asking for theirs again.
+        app.preset_thumbnail("General image", true, &preset);
+        assert_eq!(asked(&jobs).len(), 1);
+        app.preset_thumbnail("General image", false, &edited);
+        app.preset_thumbnail("General image", true, &preset);
+        assert!(asked(&jobs).is_empty());
         // A new source asks for everything again, under a new generation...
         let generation = first[0].0;
         app.input = Arc::new(RgbaImage::new(32, 32));

@@ -403,7 +403,12 @@ impl Export {
 /// Which gallery entry a thumbnail belongs to.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ThumbnailKey {
-    Preset(String),
+    /// A preset by name, included or personal. Personal presets saved before included names
+    /// were refused can share one with an included preset, and each keeps its own picture.
+    Preset {
+        name: String,
+        personal: bool,
+    },
     Lut(usize),
 }
 /// What a thumbnail shows.

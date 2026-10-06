@@ -11,6 +11,9 @@ const STEAM: &str = "https://store.steampowered.com/developer/MinorKeyGames";
 const ARTICLE: &str =
     "https://www.gamedeveloper.com/programming/crt-simulation-in-super-win-the-game";
 
+/// A preset's name, and whether it is a personal one.
+type PresetKey = (String, bool);
+
 impl App {
     pub(crate) fn gallery_window(&mut self, ctx: &egui::Context) {
         if !self.presets.open || self.show_welcome {
@@ -20,17 +23,17 @@ impl App {
         let mut hovered = None;
         let mut edit = None;
         let mut confirm = None;
-        let wanted: Vec<(String, Config)> = self
+        let wanted: Vec<(PresetKey, Config)> = self
             .presets
             .entries
             .iter()
-            .map(|e| (e.name.clone(), e.config.clone()))
+            .map(|e| ((e.name.clone(), e.user), e.config.clone()))
             .collect();
-        let pictures: std::collections::HashMap<String, TextureHandle> = wanted
+        let pictures: std::collections::HashMap<PresetKey, TextureHandle> = wanted
             .into_iter()
-            .filter_map(|(name, config)| {
-                let picture = self.preset_thumbnail(&name, &config)?;
-                Some((name, picture))
+            .filter_map(|(key, config)| {
+                let picture = self.preset_thumbnail(&key.0, key.1, &config)?;
+                Some((key, picture))
             })
             .collect();
         let mut window = self.window_state("Preset gallery");
@@ -121,7 +124,7 @@ impl App {
                                 let response = preset_entry(
                                     ui,
                                     entry,
-                                    pictures.get(&entry.name),
+                                    pictures.get(&(entry.name.clone(), entry.user)),
                                     &self.config,
                                     deleting,
                                 );
@@ -185,6 +188,13 @@ impl App {
         };
         self.presets.confirming = None;
         let name = self.presets.name.clone();
+        // Asked before anything else, so no replacement is ever offered for one.
+        if gallery::is_included(&name) {
+            self.error = Some(format!(
+                "“{name}” is an included preset, which cannot be replaced. Choose another name."
+            ));
+            return;
+        }
         if !replace {
             match store.saved_preset(&name) {
                 Ok(Some(taken)) => {
@@ -462,4 +472,71 @@ fn preset_differences(ui: &mut egui::Ui, entry: &gallery::Entry, current: &Confi
                 }
             });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_data;
+
+    fn app() -> App {
+        let ctx = egui::Context::default();
+        App::new(
+            &ctx,
+            crate::worker::Gpu::Own(wgpu::Backends::PRIMARY),
+            Ok(app_data::Store::temporary()),
+            None,
+            None,
+        )
+    }
+
+    #[test]
+    fn saving_under_an_included_name_is_refused_without_offering_to_replace() {
+        let mut app = app();
+        let store = app.store.clone().unwrap();
+        // One saved under that name before included names were refused.
+        let folder = std::path::PathBuf::from(store.presets_location());
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(
+            folder.join("Super Win the Game.json"),
+            crate::files::preset_json(&Config::general()).unwrap(),
+        )
+        .unwrap();
+        app.refresh_gallery();
+        for replace in [false, true] {
+            app.presets.name = "super win the game".into();
+            app.save_to_gallery(replace);
+            assert_eq!(app.presets.confirming, None, "no replacement is offered");
+            assert!(app
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("included preset")));
+        }
+        let included = gallery::builtins()
+            .into_iter()
+            .find(|e| e.name == "Super Win the Game")
+            .unwrap();
+        let listed: Vec<_> = app
+            .presets
+            .entries
+            .iter()
+            .filter(|e| e.name == "Super Win the Game")
+            .collect();
+        assert_eq!(listed.len(), 2, "the included one and the person's own");
+        assert!(!listed[0].user && listed[0].config == included.config);
+        assert_eq!(
+            store.presets().unwrap().0[0].config,
+            Config::general(),
+            "the person's own is untouched"
+        );
+        // Another name saves as before.
+        app.presets.name = "My take on it".into();
+        app.save_to_gallery(false);
+        assert_eq!(app.error, None);
+        assert!(app
+            .presets
+            .entries
+            .iter()
+            .any(|e| e.user && e.name == "My take on it"));
+    }
 }

@@ -302,28 +302,41 @@ impl Store {
             description.len() as u64 <= DESCRIPTION_BYTES,
             "Description exceeds {DESCRIPTION_BYTES} bytes"
         );
-        ensure!(
-            self.names(PRESETS)?.contains(&format!("{name}.json")),
-            "Preset no longer exists"
-        );
+        let saved = self
+            .saved_preset(name)?
+            .context("Preset no longer exists")?;
         // Kept beside the preset, so its JSON stays readable by older versions and the CLI.
-        self.write(&format!("{PRESETS}/{name}.txt"), description.as_bytes())
+        self.write(&format!("{PRESETS}/{saved}.txt"), description.as_bytes())
+    }
+
+    /// The files under personal preset name `name`, in any letter case. Names that differ only
+    /// in case are one name on every OS, so galleries stay portable.
+    fn preset_files(&self, name: &str) -> Result<PresetFiles> {
+        let (json, txt) = (
+            format!("{name}.json").to_lowercase(),
+            format!("{name}.txt").to_lowercase(),
+        );
+        let mut files = PresetFiles::default();
+        for file in self.names(PRESETS)? {
+            let lower = file.to_lowercase();
+            if lower == json {
+                files.settings = Some(file);
+            } else if lower == txt {
+                files.descriptions.push(file);
+            }
+        }
+        Ok(files)
     }
 
     /// The personal preset `name` names, in any letter case, as it is saved, if there is one.
-    /// Names that differ only in case are one name on every OS, so galleries stay portable.
     pub fn saved_preset(&self, name: &str) -> Result<Option<String>> {
-        let file = format!("{name}.json").to_lowercase();
-        Ok(self
-            .names(PRESETS)?
-            .into_iter()
-            .find(|taken| taken.to_lowercase() == file)
-            .and_then(|taken| taken.strip_suffix(".json").map(str::to_owned)))
+        Ok(self.preset_files(name)?.saved())
     }
 
     /// Saves `config` as personal preset `name`, and returns the name it is saved under. A
     /// preset with that name already, in any letter case, is refused unless `replace` is set;
-    /// then it keeps its name and description and takes the new settings.
+    /// then it keeps its name and description and takes the new settings. An included
+    /// preset's name is always refused, so a personal preset never stands in for one.
     pub fn save_preset(
         &self,
         name: &str,
@@ -332,33 +345,64 @@ impl Store {
         replace: bool,
     ) -> Result<String> {
         validate_name(name)?;
+        ensure!(
+            !crate::gallery::is_included(name),
+            "“{name}” is an included preset, which cannot be replaced. Choose another name."
+        );
         config.validate_for(input)?;
-        let name = match self.saved_preset(name)? {
-            Some(taken) => {
+        let files = self.preset_files(name)?;
+        let (saved, file) = match (files.saved(), files.settings) {
+            (Some(saved), Some(file)) => {
                 ensure!(
                     replace,
                     "A preset with this name already exists. Choose another name."
                 );
-                taken
+                (saved, file)
             }
-            None => name.to_owned(),
+            _ => {
+                // A description left behind by a preset no longer here is not this one's.
+                for orphan in &files.descriptions {
+                    self.remove(&format!("{PRESETS}/{orphan}"))?;
+                }
+                (name.to_owned(), format!("{name}.json"))
+            }
         };
         self.write(
-            &format!("{PRESETS}/{name}.json"),
+            &format!("{PRESETS}/{file}"),
             &crate::files::preset_json(config)?,
         )?;
-        Ok(name)
+        Ok(saved)
     }
 
-    /// Deletes personal preset `name` and its description.
+    /// Deletes personal preset `name`, in any letter case, and its description. The
+    /// description goes first: should the settings then fail to go, the preset is still there
+    /// without it, where the other way round would leave its description behind for the next
+    /// preset saved under the name.
     pub fn delete_preset(&self, name: &str) -> Result<()> {
         validate_name(name)?;
-        ensure!(
-            self.names(PRESETS)?.contains(&format!("{name}.json")),
-            "Preset no longer exists"
-        );
-        self.remove(&format!("{PRESETS}/{name}.json"))?;
-        self.remove(&format!("{PRESETS}/{name}.txt"))
+        let files = self.preset_files(name)?;
+        let settings = files.settings.context("Preset no longer exists")?;
+        for description in &files.descriptions {
+            self.remove(&format!("{PRESETS}/{description}"))?;
+        }
+        self.remove(&format!("{PRESETS}/{settings}"))
+    }
+}
+
+/// The files under one personal preset name.
+#[derive(Default)]
+struct PresetFiles {
+    /// The settings, if a preset of that name is saved.
+    settings: Option<String>,
+    /// Its description, or ones left behind by a preset of that name since gone.
+    descriptions: Vec<String>,
+}
+
+impl PresetFiles {
+    /// The preset's name, as it is saved.
+    fn saved(&self) -> Option<String> {
+        let file = self.settings.as_ref()?;
+        file.get(..file.len() - ".json".len()).map(str::to_owned)
     }
 }
 
@@ -489,6 +533,93 @@ mod tests {
         assert!(s.delete_preset("../oops").is_err());
         // Deleted, the name is free again.
         s.save_preset("my crt", &first, (256, 224), false).unwrap();
+    }
+
+    #[test]
+    fn included_presets_cannot_be_saved_over_in_any_letter_case() {
+        let temp = tempfile::tempdir().unwrap();
+        let s = store(temp.path());
+        let c = Config::general();
+        for included in crate::gallery::builtins() {
+            for name in [
+                included.name.clone(),
+                included.name.to_lowercase(),
+                included.name.to_uppercase(),
+            ] {
+                for replace in [false, true] {
+                    let refused = s.save_preset(&name, &c, (256, 224), replace);
+                    assert!(refused.is_err(), "{name} was saved");
+                }
+            }
+        }
+        assert!(s.presets().unwrap().0.is_empty(), "nothing was written");
+        // Even over a personal preset saved under one before they were refused.
+        std::fs::create_dir_all(temp.path().join("presets")).unwrap();
+        std::fs::write(
+            temp.path().join("presets/General image.json"),
+            crate::files::preset_json(&c).unwrap(),
+        )
+        .unwrap();
+        assert!(s
+            .save_preset("General image", &c, (256, 224), true)
+            .is_err());
+        // It is still the person's own to delete.
+        s.delete_preset("general image").unwrap();
+        assert!(s.presets().unwrap().0.is_empty());
+    }
+
+    #[test]
+    fn a_description_left_behind_never_reaches_a_new_preset() {
+        let temp = tempfile::tempdir().unwrap();
+        let s = store(temp.path());
+        let c = Config::general();
+        // As a deletion that stopped after the settings, before this one: only the
+        // description is left, under another letter case.
+        s.save_preset("Gone", &c, (256, 224), false).unwrap();
+        s.set_description("Gone", "Not yours").unwrap();
+        std::fs::remove_file(temp.path().join("presets/Gone.json")).unwrap();
+        assert!(
+            s.set_description("Gone", "x").is_err(),
+            "no preset to describe"
+        );
+        s.save_preset("gone", &c, (256, 224), false).unwrap();
+        let presets = s.presets().unwrap().0;
+        assert_eq!(presets[0].name, "gone");
+        assert_eq!(presets[0].description, "");
+        assert!(!temp.path().join("presets/Gone.txt").exists());
+    }
+
+    #[test]
+    fn a_preset_is_deleted_by_any_letter_case_with_its_description() {
+        let temp = tempfile::tempdir().unwrap();
+        let s = store(temp.path());
+        let c = Config::general();
+        s.save_preset("My CRT", &c, (256, 224), false).unwrap();
+        s.set_description("my crt", "Mine").unwrap();
+        assert!(temp.path().join("presets/My CRT.txt").exists());
+        s.delete_preset("MY CRT").unwrap();
+        let left: Vec<_> = std::fs::read_dir(temp.path().join("presets"))
+            .unwrap()
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
+        // A preset put there by hand, with its extension in capitals, is listed, found,
+        // replaced in place and deleted like any other.
+        std::fs::write(
+            temp.path().join("presets/Shouty.JSON"),
+            crate::files::preset_json(&c).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(s.saved_preset("shouty").unwrap().as_deref(), Some("Shouty"));
+        assert_eq!(
+            s.save_preset("shouty", &Config::default(), (256, 224), true)
+                .unwrap(),
+            "Shouty"
+        );
+        let presets = s.presets().unwrap().0;
+        assert_eq!(presets.len(), 1, "replaced, not saved beside it");
+        assert_eq!(presets[0].config, Config::default());
+        s.delete_preset("Shouty").unwrap();
+        assert!(s.presets().unwrap().0.is_empty());
     }
 
     #[test]

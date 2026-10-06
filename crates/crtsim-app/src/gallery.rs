@@ -160,8 +160,15 @@ pub fn builtins() -> Vec<Entry> {
     ]
 }
 
-/// Every preset the gallery lists: the included ones, then the personal ones in `store`, with a
-/// warning for each personal preset that could not be read.
+/// Whether `name` is an included preset's, in any letter case. No personal preset is saved
+/// under one, so the gallery never shows two presets by the same name, nor one that seems to
+/// replace an included preset.
+pub fn is_included(name: &str) -> bool {
+    builtins()
+        .iter()
+        .any(|entry| entry.name.to_lowercase() == name.to_lowercase())
+}
+
 /// The preset gallery: the presets it offers, the files skipped while reading them, the name
 /// the next saved preset takes and a description being edited.
 #[derive(Default)]
