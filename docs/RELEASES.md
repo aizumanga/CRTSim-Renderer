@@ -1,6 +1,10 @@
 # Portable releases (Phase 4)
 
-## Unreleased
+## v1.1.0
+
+Super Win the Game is the default look, sliders move finely, the web app's videos carry their preset, and
+the app's preview, video, source, work and file handling were each rebuilt as one module, with the bugs that
+turned up fixed.
 
 - **Super Win the Game** is the preset the app starts with, and the one **Reset** and each setting's own reset return
   to. It takes the place of Original CRTSim, which was the same public reference without the game's options.
