@@ -245,6 +245,8 @@ fn probe_in(
             kind: TrackKind::Video,
             codec: format.extension().into(),
             offset: 0.,
+            language: None,
+            title: None,
         }],
         start: 0.,
         path,
@@ -265,6 +267,7 @@ fn probe_in(
             Origin::Bytes(contents) => Some(contents),
             Origin::Path(_) => None,
         },
+        subtitle: None,
     })
 }
 
@@ -279,6 +282,8 @@ pub fn test_clip() -> Video {
             kind: TrackKind::Video,
             codec: "drawn".into(),
             offset: 0.,
+            language: None,
+            title: None,
         }],
         start: 0.,
         // Not a file: what the app calls it.
@@ -294,6 +299,7 @@ pub fn test_clip() -> Video {
         frames: Some(test_clip::FRAMES),
         source: Source::TestClip,
         contents: None,
+        subtitle: None,
     }
 }
 

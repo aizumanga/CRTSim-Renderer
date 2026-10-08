@@ -370,6 +370,8 @@ mod tests {
                 kind: TrackKind::Video,
                 codec: "h264".into(),
                 offset: 0.,
+                language: None,
+                title: None,
             }],
             start: 0.,
             path: "source.mkv".into(),
@@ -384,6 +386,7 @@ mod tests {
             frames: None,
             source: Source::Ffmpeg,
             contents: None,
+            subtitle: None,
         }
     }
 

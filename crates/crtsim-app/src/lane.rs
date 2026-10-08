@@ -242,6 +242,7 @@ mod tests {
             0.,
             (4, 4),
             Default::default(),
+            false,
         );
         let playing = Job::Playback {
             video: crtsim_media::test_clip(),
@@ -267,6 +268,7 @@ mod tests {
             0.,
             (4, 4),
             Default::default(),
+            false,
         );
         lane.start(Job::Playback {
             video: crtsim_media::test_clip(),

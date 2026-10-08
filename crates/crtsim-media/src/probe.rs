@@ -27,6 +27,10 @@ pub struct Video {
     pub source: Source,
     /// The file's bytes, when a browser handed them over rather than a path to read.
     pub contents: Option<Contents>,
+    /// The subtitle track drawn into every frame decoded, counting the file's subtitle tracks
+    /// from 0, so the CRT filters it with the picture. Only FFmpeg draws it; see
+    /// [`Video::with_subtitle`].
+    pub subtitle: Option<usize>,
 }
 
 /// A file's bytes, shared rather than copied.
@@ -70,6 +74,25 @@ impl Video {
         self.tracks.iter().filter(move |track| track.kind == kind)
     }
 
+    /// The subtitle tracks, in the file's order. A subtitle track is called by its place here,
+    /// counting from 0, wherever this crate takes one: a file's stream indices count its other
+    /// tracks too.
+    pub fn subtitles(&self) -> impl Iterator<Item = &Track> {
+        self.tracks_of(TrackKind::Subtitle)
+    }
+
+    /// This video with subtitle track `subtitle` drawn into its frames, or none. A track that
+    /// is not there, or whose kind cannot be drawn, leaves the frames as they are, as does a
+    /// source FFmpeg does not decode.
+    pub fn with_subtitle(&self, subtitle: Option<usize>) -> Self {
+        let drawable = matches!(self.source, Source::Ffmpeg)
+            && subtitle.is_some_and(|n| self.subtitles().nth(n).is_some_and(Track::drawable));
+        Self {
+            subtitle: subtitle.filter(|_| drawable),
+            ..self.clone()
+        }
+    }
+
     /// When decoded frame `frame`, counting from 0, starts, in seconds: exactly for an
     /// animation, whose frame times are known, and at the average rate for a video.
     pub fn frame_time(&self, frame: u64) -> f64 {
@@ -97,7 +120,70 @@ pub struct Track {
     pub kind: TrackKind,
     pub codec: String,
     pub offset: f64,
+    /// The track's language, as the file tags it: usually a three-letter code.
+    pub language: Option<String>,
+    /// The track's title, such as "Commentary" or "Signs & songs".
+    pub title: Option<String>,
 }
+
+impl Track {
+    /// How the track is named to choose it: its language and title when the file gives them,
+    /// then its codec.
+    pub fn label(&self) -> String {
+        let named: Vec<&str> = [&self.language, &self.title]
+            .into_iter()
+            .flatten()
+            .map(String::as_str)
+            .filter(|text| !text.is_empty())
+            .collect();
+        let codec = if self.codec.is_empty() {
+            "unknown"
+        } else {
+            &self.codec
+        };
+        if named.is_empty() {
+            codec.to_owned()
+        } else {
+            format!("{} ({codec})", named.join(" · "))
+        }
+    }
+
+    /// How a subtitle track is drawn into a picture, if it can be.
+    pub(crate) fn drawing(&self) -> Option<Drawing> {
+        if self.kind != TrackKind::Subtitle {
+            None
+        } else if is_text_subtitle(&self.codec) {
+            Some(Drawing::Text)
+        } else if BITMAP_SUBTITLES.contains(&self.codec.as_str()) {
+            Some(Drawing::Bitmap)
+        } else {
+            None
+        }
+    }
+
+    /// Whether the track is a subtitle that can be drawn into a picture.
+    pub fn drawable(&self) -> bool {
+        self.drawing().is_some()
+    }
+}
+
+/// How subtitles are drawn into a picture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Drawing {
+    /// Typeset from text, which FFmpeg's libass does.
+    Text,
+    /// Pictures with their own places and times, laid over the frames.
+    Bitmap,
+}
+
+/// Whether a subtitle codec holds text: what a container can convert to its own format, and
+/// what is typeset into a picture.
+pub(crate) fn is_text_subtitle(codec: &str) -> bool {
+    ["subrip", "ass", "ssa", "webvtt", "mov_text", "text"].contains(&codec)
+}
+
+/// The subtitle codecs that hold pictures, which FFmpeg can lay over a frame.
+const BITMAP_SUBTITLES: [&str; 3] = ["hdmv_pgs_subtitle", "dvd_subtitle", "dvb_subtitle"];
 
 /// What a track holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -261,6 +347,8 @@ fn parse_probe(path: PathBuf, root: &Value) -> Result<Video> {
                     kind: TrackKind::parse(s["codec_type"].as_str()?),
                     codec: s["codec_name"].as_str().unwrap_or("").into(),
                     offset: number(&s["start_time"]).unwrap_or(video_start) - video_start,
+                    language: tag(s, "language"),
+                    title: tag(s, "title"),
                 })
             })
             .collect(),
@@ -280,7 +368,19 @@ fn parse_probe(path: PathBuf, root: &Value) -> Result<Video> {
         frames: positive_integer(&v["nb_frames"]),
         source: Source::Ffmpeg,
         contents: None,
+        subtitle: None,
     })
+}
+
+/// A stream's tag `name`, whatever its letter case, when it has one that says something.
+fn tag(stream: &Value, name: &str) -> Option<String> {
+    let tags = stream["tags"].as_object()?;
+    let (_, value) = tags
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(name))?;
+    let text = value.as_str()?.trim();
+    // Files that do not know the language say so.
+    (!text.is_empty() && !text.eq_ignore_ascii_case("und")).then(|| text.to_owned())
 }
 
 /// The video called `name`, from the `contents` a browser handed over: its container read
@@ -298,6 +398,8 @@ pub fn probe_demuxed(name: PathBuf, contents: Contents) -> Result<Video> {
         kind: TrackKind::Video,
         codec: demuxed.video.codec.clone(),
         offset: 0.,
+        language: None,
+        title: None,
     }];
     if let Some(audio) = &demuxed.audio {
         tracks.push(Track {
@@ -305,6 +407,8 @@ pub fn probe_demuxed(name: PathBuf, contents: Contents) -> Result<Video> {
             kind: TrackKind::Audio,
             codec: audio.codec.clone(),
             offset: 0.,
+            language: None,
+            title: None,
         });
     }
     Ok(Video {
@@ -323,6 +427,7 @@ pub fn probe_demuxed(name: PathBuf, contents: Contents) -> Result<Video> {
         frames: Some(frames),
         source: Source::Demuxed(Arc::new(demuxed)),
         contents: Some(contents),
+        subtitle: None,
     })
 }
 

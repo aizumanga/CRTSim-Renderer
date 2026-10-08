@@ -103,8 +103,12 @@ struct App {
     export_dialog: Option<export_ui::ExportDialog>,
     /// What the last video export was saved as, which the next one starts from.
     export_format: export_ui::ExportFormat,
+    /// What the video export under way is to do with the subtitle tracks of the video open.
+    export_subtitles: export_ui::SubtitleChoice,
     zoom: f32,
     fit_preview: bool,
+    /// Whether a video plays again from the start when it ends.
+    loop_playback: bool,
     dialog_open: bool,
     jobs: worker::Jobs,
     events: mpsc::Receiver<Event>,
@@ -236,8 +240,10 @@ impl App {
             comparison: 0.5,
             export_dialog: None,
             export_format: Default::default(),
+            export_subtitles: Default::default(),
             zoom: 1.,
             fit_preview: true,
+            loop_playback: false,
             dialog_open: false,
             jobs,
             events,

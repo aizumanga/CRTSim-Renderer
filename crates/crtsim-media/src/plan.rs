@@ -252,8 +252,10 @@ impl<'a> ExportPlan<'a> {
         }
         if options.preserve_streams && source {
             let subtitles = video
-                .tracks_of(TrackKind::Subtitle)
-                .filter_map(|track| Some((track, container.subtitle_codec(&track.codec)?)));
+                .subtitles()
+                .enumerate()
+                .filter(|&(n, _)| options.keep_subtitles.keeps(n))
+                .filter_map(|(_, track)| Some((track, container.subtitle_codec(&track.codec)?)));
             for (index, (track, codec)) in subtitles.enumerate() {
                 cmd.args([
                     "-map",
@@ -370,7 +372,7 @@ fn escape(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Timing, Track};
+    use crate::{Subtitles, Timing, Track};
 
     /// A 64×48 source at NTSC's rate holding these tracks, each a kind, a codec and how far it
     /// starts after the video, numbered from 1 after the video's own.
@@ -385,6 +387,8 @@ mod tests {
                     kind,
                     codec: codec.into(),
                     offset,
+                    language: None,
+                    title: None,
                 })
                 .collect(),
             start: 0.,
@@ -400,6 +404,7 @@ mod tests {
             frames: None,
             source: Source::Ffmpeg,
             contents: None,
+            subtitle: None,
         }
     }
 
@@ -474,7 +479,7 @@ mod tests {
         assert_eq!(values(&webm, "-c:a"), ["libopus"]);
         assert_eq!(values(&webm, "-c:s:0"), ["webvtt"]);
 
-        let notes = |container| crate::preservation_notes(&source, container);
+        let notes = |container| crate::preservation_notes(&source, container, &options);
         assert_eq!(notes(Container::Mkv), ["Data track 6 is not copied."]);
         assert_eq!(
             notes(Container::Mp4),
@@ -484,6 +489,45 @@ mod tests {
                 "Data track 6 is not copied.",
             ]
         );
+    }
+
+    #[test]
+    fn only_the_subtitle_tracks_asked_for_are_kept() {
+        let source = video(TRACKS);
+        let config = config();
+        let with = |keep| Options {
+            keep_subtitles: keep,
+            ..Options::default()
+        };
+        let maps = |name: &str, options: &Options| {
+            let plan = ExportPlan::new(&source, Path::new(name), &config, options).unwrap();
+            values(&mux(&plan, false), "-map")
+        };
+        // The second subtitle track is stream 4, the first stream 3.
+        assert_eq!(
+            maps("out.mkv", &with(Subtitles::Only(vec![1]))),
+            ["0:v:0", "1:a?", "1:4", "1:t?"]
+        );
+        assert_eq!(
+            maps("out.mkv", &with(Subtitles::Only(vec![0]))),
+            ["0:v:0", "1:a?", "1:3", "1:t?"]
+        );
+        assert_eq!(
+            maps("out.mkv", &with(Subtitles::none())),
+            ["0:v:0", "1:a?", "1:t?"]
+        );
+        // The track MP4 cannot hold is dropped, and said not to be only when it is kept.
+        assert_eq!(
+            maps("out.mp4", &with(Subtitles::Only(vec![0, 1]))),
+            ["0:v:0", "1:a?", "1:3"]
+        );
+        let notes = |options: &Options| crate::preservation_notes(&source, Container::Mp4, options);
+        assert!(notes(&with(Subtitles::All))
+            .iter()
+            .any(|note| note.contains("Subtitle 4")));
+        assert!(!notes(&with(Subtitles::Only(vec![0])))
+            .iter()
+            .any(|note| note.contains("Subtitle")));
     }
 
     #[test]

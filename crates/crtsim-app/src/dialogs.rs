@@ -249,11 +249,16 @@ impl App {
             return;
         };
         let config = self.config.clone();
+        // The subtitle drawn into the picture is the video's to draw as it is decoded.
+        let video = video.with_subtitle(self.export_subtitles.burn);
         let (export, status) = match format {
             ExportFormat::Video(_) => (
                 Export::Video {
                     video,
-                    options: self.video_options.clone(),
+                    options: crtsim_media::Options {
+                        keep_subtitles: self.export_subtitles.keep.clone(),
+                        ..self.video_options.clone()
+                    },
                     config,
                 },
                 "Exporting video…".into(),

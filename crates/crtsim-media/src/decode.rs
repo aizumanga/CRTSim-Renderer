@@ -7,7 +7,7 @@ use crate::{
     animated,
     export::QUEUED_FRAMES,
     jobs::{self, FrameSource, Span},
-    probe::Source,
+    probe::{Drawing, Source},
     process::Process,
     Options, Rate, Tool, Video,
 };
@@ -16,6 +16,7 @@ use crtsim_core::{config::Config, Renderer};
 use image::RgbaImage;
 use std::{
     io::Read,
+    path::Path,
     process::Command,
     sync::{atomic::AtomicBool, mpsc, Arc},
 };
@@ -102,40 +103,79 @@ impl Decoder {
     }
 }
 
+/// How much footage before a frame is decoded and dropped when a bitmap subtitle is laid over
+/// it, in seconds. A bitmap subtitle is one packet at the time it appears, and FFmpeg's seek
+/// skips the packets before the frame it seeks to, so a subtitle already showing there would be
+/// missing; the longest one on screen at once is rarely longer than this.
+const BITMAP_LEAD: f64 = 10.;
+
 fn decode_command(video: &Video, request: &Request) -> Command {
+    let drawing = video
+        .subtitle
+        .and_then(|n| video.subtitles().nth(n).map(|track| (n, track)))
+        .and_then(|(n, track)| Some((n, track.drawing()?)));
+    let lead = match drawing {
+        Some((_, Drawing::Bitmap)) => request.start.min(BITMAP_LEAD),
+        _ => 0.,
+    };
     let mut cmd = Tool::Ffmpeg.command();
     // Seeking is input-relative and preview-only; full exports always start at zero.
-    if request.start > 0. {
-        cmd.args(["-ss", &request.start.to_string()]);
+    if request.start - lead > 0. {
+        cmd.args(["-ss", &(request.start - lead).to_string()]);
     }
-    cmd.arg("-i").arg(&video.path).args([
-        "-map",
-        &format!("0:{}", video.stream),
-        "-an",
-        "-sn",
-        "-dn",
-    ]);
+    cmd.arg("-i").arg(&video.path);
+    // What the frames pass through before a bitmap subtitle is laid over them, and after.
     let mut filters = vec!["setpts=PTS-STARTPTS".to_string()];
+    let mut after = vec![];
     if let Some(frame) = request.frame {
         // Select by decoded frame ordinal, including VFR sources. Decode from the start
         // to avoid timestamp rounding and keyframe seeks skipping or repeating frames.
         filters.push(format!("select=eq(n\\,{frame})"));
     }
+    if lead > 0. {
+        after.push(format!("trim=start={lead}"));
+        after.push("setpts=PTS-STARTPTS".to_string());
+    }
     if let Some(rate) = request.rate {
-        filters.push(format!("fps={}:start_time=0:round=near", rate.text));
+        after.push(format!("fps={}:start_time=0:round=near", rate.text));
     }
     if video.hdr {
-        filters.push(
+        after.push(
             "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,\
              tonemap=tonemap=mobius:desat=0,zscale=t=bt709:m=bt709:r=full"
                 .into(),
         );
     }
-    filters.push(format!(
+    if let Some((n, Drawing::Text)) = drawing {
+        // The filter reads the file's own times, which the frames no longer have: they start
+        // at 0 where decoding did, and the file may start later.
+        after.push(format!("setpts=PTS+{}/TB", request.start + video.start));
+        after.push(format!(
+            "subtitles=filename={}:si={n}",
+            filter_path(&video.path)
+        ));
+        after.push("setpts=PTS-STARTPTS".to_string());
+    }
+    after.push(format!(
         "scale={}:{}:flags=lanczos,setsar=1",
         video.size.0, video.size.1
     ));
-    cmd.args(["-vf", &filters.join(",")]);
+    if let Some((n, Drawing::Bitmap)) = drawing {
+        // The video and the subtitle are two outputs of one input, so they are joined in one
+        // graph. Once the subtitle ends, the video goes on without it.
+        let graph = format!(
+            "[0:{}]{}[video];[video][0:s:{n}]overlay=eof_action=pass[shown];[shown]{}[out]",
+            video.stream,
+            filters.join(","),
+            after.join(",")
+        );
+        cmd.args(["-filter_complex", &graph, "-map", "[out]"]);
+    } else {
+        filters.extend(after);
+        cmd.args(["-map", &format!("0:{}", video.stream)]);
+        cmd.args(["-vf", &filters.join(",")]);
+    }
+    cmd.args(["-an", "-sn", "-dn"]);
     if request.rate.is_none() {
         cmd.args(["-frames:v", "1"]);
     }
@@ -144,6 +184,23 @@ fn decode_command(video: &Video, request: &Request) -> Command {
     }
     cmd.args(["-pix_fmt", "rgba", "-f", "rawvideo", "pipe:1"]);
     cmd
+}
+
+/// A file's path as a filter's option takes it: FFmpeg reads the argument as a filter graph, in
+/// which `[],;'\` mean something, and then each filter's options, in which `:'\` do, so it
+/// escapes twice.
+fn filter_path(path: &Path) -> String {
+    let option = |text: &str, special: &[char]| -> String {
+        text.chars().fold(String::new(), |mut escaped, c| {
+            if special.contains(&c) {
+                escaped.push('\\');
+            }
+            escaped.push(c);
+            escaped
+        })
+    };
+    let once = option(&path.to_string_lossy(), &['\\', '\'', ':']);
+    option(&once, &['\\', '\'', '[', ']', ',', ';'])
 }
 
 /// The frame shown at `time` seconds.
@@ -274,32 +331,156 @@ impl Prefetched {
 /// Plays `video` on this thread, as `jobs::playback` does, from frames FFmpeg decodes.
 /// `frame_ready` sets the pace by blocking until there is room for the frame; cancelling also
 /// stops the decode.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each is one part the host supplies"
+)]
 pub fn playback(
     video: &Video,
     start: f64,
     config: impl Fn() -> Arc<Config>,
     options: &Options,
+    looping: impl Fn() -> bool,
     renderer: &Renderer,
     cancel: &Arc<AtomicBool>,
-    mut frame_ready: impl FnMut(f64, RgbaImage, RgbaImage) -> Result<()>,
+    mut frame_ready: impl FnMut(f64, f64, RgbaImage, RgbaImage) -> Result<()>,
 ) -> Result<()> {
     pollster::block_on(jobs::playback(
         video,
         start,
         config,
         options,
+        looping,
         async |span| jobs::frames(video, span, cancel),
         async |sequence, frame, config| {
             jobs::render(renderer, sequence, frame, config, cancel).await
         },
         cancel,
-        async |time, source, crt| frame_ready(time, source, crt),
+        async |time, elapsed, source, crt| frame_ready(time, elapsed, source, crt),
     ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A video of 64 by 48 starting at `start`, with a text subtitle track, a bitmap one and
+    /// one that cannot be drawn.
+    fn subtitled(subtitle: Option<usize>) -> Video {
+        let track = |index, kind, codec: &str| crate::Track {
+            index,
+            kind,
+            codec: codec.into(),
+            offset: 0.,
+            language: None,
+            title: None,
+        };
+        Video {
+            metadata: Default::default(),
+            tracks: vec![
+                track(0, crate::TrackKind::Video, "h264"),
+                track(1, crate::TrackKind::Subtitle, "subrip"),
+                track(2, crate::TrackKind::Subtitle, "hdmv_pgs_subtitle"),
+                track(3, crate::TrackKind::Subtitle, "eia_608"),
+            ],
+            start: 1.5,
+            path: "clip [1].mkv".into(),
+            size: (64, 48),
+            fps: 25.,
+            rate: "25/1".into(),
+            duration: 60.,
+            audio: false,
+            audio_offset: 0.,
+            hdr: false,
+            stream: 0,
+            frames: None,
+            source: Source::Ffmpeg,
+            contents: None,
+            subtitle,
+        }
+    }
+
+    fn args(video: &Video, request: &Request) -> Vec<String> {
+        decode_command(video, request)
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    /// The value given after `flag`.
+    fn value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+        let at = args.iter().position(|arg| arg == flag)?;
+        args.get(at + 1).map(String::as_str)
+    }
+
+    #[test]
+    fn a_text_subtitle_is_drawn_at_the_files_times_and_a_bitmap_one_laid_over_with_a_lead_in() {
+        let rate = Rate::per_second(25.);
+        let request = Request {
+            rate: Some(&rate),
+            start: 30.,
+            frame: None,
+            limit: Some(2.),
+        };
+        let plain = args(&subtitled(None), &request);
+        assert_eq!(value(&plain, "-ss"), Some("30"));
+        assert_eq!(value(&plain, "-map"), Some("0:0"));
+        assert!(!value(&plain, "-vf").unwrap().contains("subtitles"));
+
+        // Text: its times are the file's, which start 1.5 s late and 30 s into the video.
+        let text = args(&subtitled(Some(0)), &request);
+        assert_eq!(value(&text, "-ss"), Some("30"));
+        let filters = value(&text, "-vf").unwrap();
+        assert!(
+            filters
+                .contains("fps=25:start_time=0:round=near,setpts=PTS+31.5/TB,subtitles=filename="),
+            "{filters}"
+        );
+        assert!(
+            filters.contains(r"clip \[1\].mkv:si=0,setpts=PTS-STARTPTS,scale="),
+            "{filters}"
+        );
+        assert!(filters.find("subtitles").unwrap() < filters.find("scale=").unwrap());
+
+        // Bitmap: laid over before anything else is done to the frames, after seeking
+        // early enough that one already showing at the start is read.
+        let bitmap = args(&subtitled(Some(1)), &request);
+        assert_eq!(value(&bitmap, "-ss"), Some("20"));
+        assert_eq!(value(&bitmap, "-map"), Some("[out]"));
+        assert!(value(&bitmap, "-vf").is_none());
+        let graph = value(&bitmap, "-filter_complex").unwrap();
+        assert!(graph.starts_with("[0:0]setpts=PTS-STARTPTS[video];[video][0:s:1]overlay"));
+        assert!(
+            graph.contains("[shown]trim=start=10,setpts=PTS-STARTPTS,fps=25"),
+            "{graph}"
+        );
+        assert!(graph.ends_with("setsar=1[out]"));
+        // Near the start there is less to look back over.
+        let early = Request {
+            start: 4.,
+            ..request
+        };
+        let bitmap = args(&subtitled(Some(1)), &early);
+        assert_eq!(value(&bitmap, "-ss"), None);
+        assert!(value(&bitmap, "-filter_complex")
+            .unwrap()
+            .contains("trim=start=4,"));
+
+        // One that cannot be drawn, or is not there, leaves the picture as it was.
+        assert_eq!(args(&subtitled(Some(2)), &request), plain);
+        assert_eq!(args(&subtitled(Some(9)), &request), plain);
+    }
+
+    #[test]
+    fn a_path_is_escaped_for_the_graph_and_then_the_filter() {
+        let escaped = |path: &str| filter_path(Path::new(path));
+        assert_eq!(escaped("movie.mkv"), "movie.mkv");
+        assert_eq!(escaped("a b, [c]; d.mkv"), r"a b\, \[c\]\; d.mkv");
+        // A colon and a backslash are the filter options' own, so C:\Videos is C\:\\Videos
+        // there, and the graph then escapes each backslash it was given again.
+        assert_eq!(escaped(r"C:\Videos"), r"C\\:\\\\Videos");
+        assert_eq!(escaped("it's"), r"it\\\'s");
+    }
 
     #[test]
     fn prefetched_frames_come_in_order_and_a_truncated_one_fails() {

@@ -86,10 +86,11 @@ impl App {
         if self.preview.stale() {
             ui.colored_label(ui.visuals().warn_fg_color, "Preview is out of date.");
         }
-        let controls_height = if self.source.timeline.is_some() {
-            136.
-        } else {
-            0.
+        let controls_height = match &self.source.timeline {
+            // A row more for the subtitles of a video that has any.
+            Some(timeline) if timeline.video.subtitles().next().is_some() => 168.,
+            Some(_) => 136.,
+            None => 0.,
         };
         let available = egui::vec2(
             ui.available_width(),
@@ -143,6 +144,8 @@ impl App {
         let last = timeline.last();
         let mut toggle = false;
         let mut seek = false;
+        let mut looped = false;
+        let mut subtitle = None;
         ui.separator();
         ui.add_enabled_ui(enabled, |ui| {
             ui.horizontal_wrapped(|ui| {
@@ -150,6 +153,13 @@ impl App {
                     .button(if playing { "Ⅱ Pause" } else { "▶ Play" })
                     .clicked();
                 ui.small("Silent preview");
+                looped = ui
+                    .checkbox(&mut self.loop_playback, "Loop")
+                    .on_hover_text(
+                        "Play again from the start when the video ends, with the CRT's glow \
+                         carrying over. Useful for short clips and GIFs.",
+                    )
+                    .changed();
                 ui.monospace(format!(
                     "{} / {}",
                     minutes_and_seconds(timeline.time),
@@ -183,6 +193,7 @@ impl App {
                     seek = true;
                 }
             });
+            subtitle = subtitle_choice(ui, &timeline.video);
             ui.scope(|ui| {
                 ui.spacing_mut().slider_width = (ui.available_width() - 20.).max(100.);
                 let response = Keyed::new(0..=last)
@@ -212,6 +223,13 @@ impl App {
             timeline.shown + 1
         ));
         let pick = (seek && enabled && timeline.seeking()).then_some(timeline.picked);
+        if looped {
+            self.set_loop_playback(self.loop_playback);
+        }
+        if let Some(track) = subtitle {
+            self.show_subtitle(track);
+            return;
+        }
         if toggle {
             self.toggle_playback();
         }
@@ -219,6 +237,36 @@ impl App {
             self.start_opening(opening, String::new());
         }
     }
+}
+
+/// The subtitles drop-down of a video that has subtitle tracks, and the choice made in it, if
+/// one was: off, or a track's place among them. Tracks that cannot be drawn into a picture are
+/// not offered.
+fn subtitle_choice(ui: &mut egui::Ui, video: &crtsim_media::Video) -> Option<Option<usize>> {
+    video.subtitles().next()?;
+    let names: Vec<(Option<usize>, String)> = std::iter::once((None, "Off".to_owned()))
+        .chain(
+            video
+                .subtitles()
+                .enumerate()
+                .filter(|(_, track)| track.drawable())
+                .map(|(n, track)| (Some(n), format!("{} · {}", n + 1, track.label()))),
+        )
+        .collect();
+    let options: Vec<(Option<usize>, &str)> = names
+        .iter()
+        .map(|(track, name)| (*track, name.as_str()))
+        .collect();
+    let mut chosen = video.subtitle;
+    let mut changed = false;
+    ui.horizontal_wrapped(|ui| {
+        changed = choice(ui, "Subtitles", &mut chosen, &options);
+        ui.small(
+            "Drawn into the picture, so the CRT filters them. Exporting asks again, and \
+             can keep them as tracks of their own too.",
+        );
+    });
+    changed.then_some(chosen)
 }
 
 /// `seconds` as minutes and seconds, as a player shows them.

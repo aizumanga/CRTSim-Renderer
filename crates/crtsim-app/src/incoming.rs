@@ -150,7 +150,12 @@ pub fn imported(
         _ => None,
     };
     if let Some(preset) = preset {
-        return Ok((preset.config, Some(preset.video_options)));
+        // Which subtitle tracks that export kept were of its file, not the settings to keep.
+        let options = crtsim_media::Options {
+            keep_subtitles: crtsim_media::Subtitles::All,
+            ..preset.video_options
+        };
+        return Ok((preset.config, Some(options)));
     }
     let bytes = file.read(IMAGE_LIMIT, "Image file")?;
     Ok((files::preset_from_png(&bytes, input)?, None))
@@ -267,6 +272,7 @@ mod tests {
         };
         let options = crtsim_media::Options {
             audio: crtsim_media::Audio::Mute,
+            keep_subtitles: crtsim_media::Subtitles::Only(vec![1]),
             ..Default::default()
         };
         let preset = serde_json::json!({"version": 1, "config": config, "video_options": options});
@@ -292,7 +298,13 @@ mod tests {
         let current = Config::general();
         let brought = bring(Purpose::ImportPreset, &file, &current, (256, 224)).unwrap();
         assert_eq!(brought.config, config);
-        assert_eq!(brought.options.unwrap().audio, crtsim_media::Audio::Mute);
+        let options = brought.options.unwrap();
+        assert_eq!(options.audio, crtsim_media::Audio::Mute);
+        assert_eq!(
+            options.keep_subtitles,
+            crtsim_media::Subtitles::All,
+            "the tracks an export kept were its file's"
+        );
         assert_eq!(brought.preset_name.as_deref(), Some("made"));
         // A video without one says so.
         let plain = File::Bytes {
