@@ -81,6 +81,7 @@ mod tests {
             frames: None,
             source: crtsim_media::Source::Ffmpeg,
             contents: None,
+            subtitle: None,
         }
     }
 

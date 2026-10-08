@@ -176,11 +176,21 @@ pub async fn render(
     renderer.read(sequence).await
 }
 
+/// How far before the end of a lap, in seconds, the next one starts being read, so that it is
+/// ready when the lap ends and the picture goes on without a pause.
+const LOOP_LOOKAHEAD: f64 = 0.5;
+
 /// Plays `video` from `start` seconds: each frame rendered by `render` at the playback rate,
 /// with a short warm-up before `start` so the CRT's history is already running, and handed to
-/// `shown` with its time and source. `shown` sets the pace by awaiting room for the frame. Each
-/// frame renders with the settings `config` gives as it starts, so edits made while playing
-/// show on the frames rendered after them.
+/// `shown` with its time in the video, how long the playing has lasted when it shows, and its
+/// source. `shown` sets the pace by awaiting room for the frame. Each frame renders with the
+/// settings `config` gives as it starts, so edits made while playing show on the frames
+/// rendered after them.
+///
+/// When the video ends and `looping` says so, it plays again from its beginning, with no
+/// warm-up: the CRT goes on with the history it has, as a tape's last frame gives way to its
+/// first, and the time playing has lasted goes on from the lap before. Each lap's source is
+/// opened shortly before the lap before ends.
 #[expect(
     clippy::too_many_arguments,
     reason = "each is one part the host supplies"
@@ -190,32 +200,54 @@ pub async fn playback<S: FrameSource>(
     start: f64,
     config: impl Fn() -> std::sync::Arc<Config>,
     options: &Options,
+    looping: impl Fn() -> bool,
     mut open: impl AsyncFnMut(&Span) -> Result<S>,
     mut render: impl AsyncFnMut(&mut Sequence, &RgbaImage, &Config) -> Result<RgbaImage>,
     cancel: &AtomicBool,
-    mut shown: impl AsyncFnMut(f64, RgbaImage, RgbaImage) -> Result<()>,
+    mut shown: impl AsyncFnMut(f64, f64, RgbaImage, RgbaImage) -> Result<()>,
 ) -> Result<()> {
     let rate = Rate::of(video, options);
-    let preroll = (start - 0.2).max(0.);
-    let span = Span {
-        start: preroll,
+    let lap = |from: f64| Span {
+        start: from,
         rate: Some(rate.clone()),
         limit: None,
     };
-    let mut source = open(&span).await?;
+    let lookahead = (LOOP_LOOKAHEAD * rate.fps).ceil() as u64;
     let mut sequence = Sequence::video(options.timing, rate.fps);
+    // Where this lap's frames start, and from where they show.
+    let mut from = (start - 0.2).max(0.);
+    let mut shows = start;
+    // What the playing had lasted when this lap began, less where it began.
+    let mut before = 0.;
+    let mut source = open(&lap(from)).await?;
+    let mut next: Option<S> = None;
     let mut index = 0u64;
-    while let Some(input) = source.next().await? {
+    loop {
+        let Some(input) = source.next().await? else {
+            if index == 0 || !looping() {
+                return Ok(());
+            }
+            before += from + index as f64 / rate.fps;
+            (from, shows, index) = (0., 0., 0);
+            source = match next.take() {
+                Some(source) => source,
+                None => open(&lap(from)).await?,
+            };
+            continue;
+        };
         check_cancel(cancel)?;
         let crt = render(&mut sequence, &input, &config()).await?;
         check_cancel(cancel)?;
-        let time = preroll + index as f64 / rate.fps;
+        let time = from + index as f64 / rate.fps;
         index += 1;
-        if time + 0.00001 >= start {
-            shown(time, input, crt).await?;
+        if time + 0.00001 >= shows {
+            shown(time, before + time, input, crt).await?;
+        }
+        let left = ((video.duration - from) * rate.fps).ceil() as u64;
+        if next.is_none() && index + lookahead >= left && looping() {
+            next = Some(open(&lap(0.)).await?);
         }
     }
-    Ok(())
 }
 
 /// What a host encodes a video's frames with, such as a browser's WebCodecs.
@@ -528,14 +560,16 @@ mod tests {
             start,
             || std::sync::Arc::new(Config::general()),
             &Options::default(),
+            || false,
             async |span| {
                 assert_eq!(span.start, start - 0.2, "a warm-up before the start");
                 Ok(Grays(0, 4))
             },
             async |_, frame, _| Ok(frame.clone()),
             &cancel,
-            async |time, source, crt| {
+            async |time, elapsed, source, crt| {
                 assert_eq!(source, crt);
+                assert_eq!(time, elapsed, "one lap lasts as long as it is at");
                 shown.push((time, source.get_pixel(0, 0).0[0]));
                 Ok(())
             },
@@ -555,12 +589,113 @@ mod tests {
             0.,
             || std::sync::Arc::new(Config::general()),
             &Options::default(),
+            || false,
             async |_| Ok(Grays(0, 4)),
             async |_, frame, _| Ok(frame.clone()),
             &cancel,
-            async |_, _, _| panic!("nothing is shown once cancelled"),
+            async |_, _, _, _| panic!("nothing is shown once cancelled"),
         ));
         assert!(played.is_err());
+    }
+
+    #[test]
+    fn a_looping_playback_goes_on_from_the_end_to_the_start_without_stopping_its_time() {
+        let video = clip(3);
+        let cancel = AtomicBool::new(false);
+        let again = std::cell::Cell::new(true);
+        let opened = std::cell::RefCell::new(vec![]);
+        let mut shown = vec![];
+        pollster::block_on(playback(
+            &video,
+            0.,
+            || std::sync::Arc::new(Config::general()),
+            &Options::default(),
+            || again.get(),
+            async |span| {
+                opened.borrow_mut().push(span.start);
+                Ok(Grays(0, 3))
+            },
+            async |_, frame, _| Ok(frame.clone()),
+            &cancel,
+            async |time, elapsed, _, _| {
+                shown.push((time, elapsed));
+                // Turned off while the third lap's first frame shows: that lap is the last.
+                again.set(shown.len() < 7);
+                Ok(())
+            },
+        ))
+        .unwrap();
+        let at = |i: usize| i as f64 / video.fps;
+        let expected: Vec<_> = (0..9).map(|i| (at(i % 3), at(i))).collect();
+        assert_eq!(shown, expected);
+        // One source for each lap, each read from the start.
+        assert_eq!(*opened.borrow(), [0., 0., 0.]);
+    }
+
+    #[test]
+    fn a_playback_that_started_late_loops_from_the_start_with_the_time_it_has_played() {
+        let video = clip(3);
+        let cancel = AtomicBool::new(false);
+        let again = std::cell::Cell::new(true);
+        let opened = std::cell::RefCell::new(vec![]);
+        let mut shown = vec![];
+        pollster::block_on(playback(
+            &video,
+            0.25,
+            || std::sync::Arc::new(Config::general()),
+            &Options::default(),
+            || again.get(),
+            async |span| {
+                opened.borrow_mut().push(span.start);
+                Ok(Grays(0, 3))
+            },
+            async |_, frame, _| Ok(frame.clone()),
+            &cancel,
+            async |time, elapsed, _, _| {
+                shown.push((time, elapsed));
+                again.set(shown.len() < 2);
+                Ok(())
+            },
+        ))
+        .unwrap();
+        // From 0.25 s the first lap shows its last frame; it began 0.05 s in, so it lasted
+        // until 0.35 s, where the whole second lap goes on.
+        let expected = [(0.25, 0.25), (0., 0.35), (0.1, 0.45), (0.2, 0.55)];
+        assert_eq!(shown.len(), expected.len(), "{shown:?}");
+        for ((time, elapsed), (want_time, want_elapsed)) in shown.iter().zip(expected) {
+            assert!(
+                (time - want_time).abs() < 1e-9 && (elapsed - want_elapsed).abs() < 1e-9,
+                "{shown:?}"
+            );
+        }
+        let opened = opened.borrow();
+        assert!(
+            (opened[0] - 0.05).abs() < 1e-9 && opened[1] == 0.,
+            "{opened:?}"
+        );
+    }
+
+    #[test]
+    fn a_looping_playback_of_nothing_ends_rather_than_spinning() {
+        let video = clip(3);
+        let cancel = AtomicBool::new(false);
+        let opened = std::cell::Cell::new(0);
+        pollster::block_on(playback(
+            &video,
+            0.,
+            || std::sync::Arc::new(Config::general()),
+            &Options::default(),
+            || true,
+            async |_| {
+                opened.set(opened.get() + 1);
+                Ok(Grays(0, 0))
+            },
+            async |_, frame, _| Ok(frame.clone()),
+            &cancel,
+            async |_, _, _, _| panic!("there is nothing to show"),
+        ))
+        .unwrap();
+        assert_eq!(opened.get(), 1);
     }
 
     /// An output that keeps what it is handed: each frame's gray level, by pass.

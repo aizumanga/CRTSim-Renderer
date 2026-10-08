@@ -4,7 +4,7 @@ use crate::{
 };
 use crtsim_media::{
     AnimationFormat, AnimationOptions, AnimationSummary, Audio, Container, Dither, Encoder,
-    Options, Quality, Timing,
+    Options, Quality, Subtitles, Timing, Video,
 };
 use eframe::egui;
 
@@ -123,8 +123,19 @@ fn megabytes(bytes: u64) -> String {
     }
 }
 
+/// What an export does with the subtitle tracks of the video: which it keeps as tracks of
+/// their own, and which it draws into the picture, so the CRT filters it. Each is a track's
+/// place among the subtitle tracks, counting from 0. It belongs to the file open, so it is
+/// chosen for each export and is not one of the settings the app keeps.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SubtitleChoice {
+    pub keep: Subtitles,
+    pub burn: Option<usize>,
+}
+
 pub struct ExportDialog {
     options: Options,
+    subtitles: SubtitleChoice,
     animation: AnimationOptions,
     format: ExportFormat,
     batch: bool,
@@ -137,8 +148,18 @@ pub struct ExportDialog {
 impl App {
     pub fn open_video_export(&mut self, batch: bool) {
         self.stop_playback();
+        // The subtitle on screen in the preview is the one the file draws, unless the choice
+        // is changed here.
+        let burn = match &self.source.timeline {
+            Some(timeline) if !batch => timeline.video.subtitle,
+            _ => None,
+        };
         self.export_dialog = Some(ExportDialog {
             options: self.video_options.clone(),
+            subtitles: SubtitleChoice {
+                keep: Subtitles::All,
+                burn,
+            },
             animation: self.animation_options.clone(),
             format: if batch {
                 ExportFormat::Video(Container::Mkv)
@@ -218,11 +239,26 @@ impl App {
                         ExportFormat::Video(container) => {
                             let notes = match &self.source.timeline {
                                 Some(timeline) if !draft.batch => {
-                                    crtsim_media::preservation_notes(&timeline.video, container)
+                                    let kept = Options {
+                                        keep_subtitles: draft.subtitles.keep.clone(),
+                                        ..draft.options.clone()
+                                    };
+                                    crtsim_media::preservation_notes(
+                                        &timeline.video,
+                                        container,
+                                        &kept,
+                                    )
                                 }
                                 _ => vec![],
                             };
-                            video_settings(ui, &mut draft.options, container, &notes);
+                            // Batch jobs are of files not yet open, whose tracks are not known.
+                            let tracks = self
+                                .source
+                                .timeline
+                                .as_ref()
+                                .filter(|_| !draft.batch)
+                                .map(|timeline| (&timeline.video, &mut draft.subtitles));
+                            video_settings(ui, &mut draft.options, container, &notes, tracks);
                         }
                         ExportFormat::Animation(format) => {
                             let frame = self.source.timeline.as_ref().map_or(0, |t| t.shown);
@@ -235,6 +271,7 @@ impl App {
                             );
                             if let Some(timeline) = &self.source.timeline {
                                 let video = &timeline.video;
+                                subtitle_settings(ui, video, &mut draft.subtitles, None);
                                 draft.animation.start = if draft.from_current_frame {
                                     video.frame_time(frame)
                                 } else {
@@ -298,6 +335,7 @@ impl App {
             self.video_options = draft.options;
             self.animation_options = draft.animation;
             if !draft.batch {
+                self.export_subtitles = draft.subtitles;
                 self.export_format = draft.format;
                 self.dialog(Dialog::ExportVideo, ctx);
             }
@@ -307,12 +345,14 @@ impl App {
     }
 }
 
-/// A video's codec, quality, timing, audio and track settings.
+/// A video's codec, quality, timing, audio and track settings, with `subtitles` the video
+/// open and what is chosen of its subtitle tracks, if it is the one exported.
 fn video_settings(
     ui: &mut egui::Ui,
     options: &mut Options,
     container: Container,
     notes: &[String],
+    subtitles: Option<(&Video, &mut SubtitleChoice)>,
 ) {
     if container == Container::Webm {
         options.encoder = Encoder::Software;
@@ -359,14 +399,14 @@ fn video_settings(
     // picture and sound are written.
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = notes;
+        let _ = (notes, subtitles);
         ui.small(
             "Encoded by your browser. Sound is kept as it is when the format holds it, \
             and otherwise converted to Opus.",
         );
     }
     #[cfg(not(target_arch = "wasm32"))]
-    desktop_settings(ui, options, container, notes);
+    desktop_settings(ui, options, container, notes, subtitles);
 }
 
 /// What the desktop's FFmpeg adds: other tracks, and the encoder's own settings.
@@ -376,6 +416,7 @@ fn desktop_settings(
     options: &mut Options,
     container: Container,
     notes: &[String],
+    subtitles: Option<(&Video, &mut SubtitleChoice)>,
 ) {
     use crtsim_media::EncodingSpeed;
     ui.checkbox(
@@ -386,6 +427,9 @@ fn desktop_settings(
         for note in notes {
             ui.small(note);
         }
+    }
+    if let Some((video, choice)) = subtitles {
+        subtitle_settings(ui, video, choice, Some(options.preserve_streams));
     }
     crate::chrome::Section::new("Advanced encoding settings").show(ui, |ui| {
         if container == Container::Webm {
@@ -437,6 +481,55 @@ fn desktop_settings(
             );
         }
     });
+}
+
+/// Which of `video`'s subtitle tracks an export keeps as tracks and which it draws into the
+/// picture, when it has any. `keeping` is whether the export can keep tracks, and if it can,
+/// whether it does; an animation cannot.
+fn subtitle_settings(
+    ui: &mut egui::Ui,
+    video: &Video,
+    choice: &mut SubtitleChoice,
+    keeping: Option<bool>,
+) {
+    let count = video.subtitles().count();
+    if count == 0 {
+        return;
+    }
+    ui.separator();
+    ui.strong("Subtitles");
+    ui.small(
+        "A subtitle drawn into the picture goes through the CRT with the rest of it: \
+         scanlines, mask, glow and curve. One kept as a track stays crisp, for a player to \
+         show on top.",
+    );
+    ui.radio_value(&mut choice.burn, None, "Draw no subtitles into the picture");
+    for (n, track) in video.subtitles().enumerate() {
+        ui.horizontal_wrapped(|ui| {
+            if let Some(enabled) = keeping {
+                let mut kept = choice.keep.keeps(n);
+                let changed = ui
+                    .add_enabled(enabled, egui::Checkbox::new(&mut kept, "Keep"))
+                    .on_disabled_hover_text("Turned off with the additional tracks above")
+                    .changed();
+                if changed {
+                    choice.keep.set(n, count, kept);
+                }
+            }
+            let drawable = track.drawable();
+            let drawn = ui
+                .add_enabled_ui(drawable, |ui| {
+                    ui.radio_value(&mut choice.burn, Some(n), "Draw in picture")
+                })
+                .inner
+                .on_disabled_hover_text("This kind of subtitle cannot be drawn into a picture");
+            // Drawn in, a track is not also wanted as a track of its own.
+            if drawn.clicked() && keeping.is_some() {
+                choice.keep.set(n, count, false);
+            }
+            ui.label(format!("{} · {}", n + 1, track.label()));
+        });
+    }
 }
 
 /// An animation's size, rate, span and encoding. `frame` is the frame on screen, from 0.
@@ -700,5 +793,112 @@ mod tests {
             _ => panic!("expected an animation export"),
         }
         assert_eq!(app.status, "Exporting GIF…");
+    }
+
+    /// A video with two subtitle tracks, one of them a kind that cannot be drawn.
+    fn subtitled() -> Video {
+        let track = |index, kind, codec: &str| crtsim_media::Track {
+            index,
+            kind,
+            codec: codec.into(),
+            offset: 0.,
+            language: None,
+            title: None,
+        };
+        Video {
+            metadata: Default::default(),
+            tracks: vec![
+                track(0, crtsim_media::TrackKind::Video, "h264"),
+                track(1, crtsim_media::TrackKind::Subtitle, "subrip"),
+                track(2, crtsim_media::TrackKind::Subtitle, "eia_608"),
+            ],
+            start: 0.,
+            path: "clip.mkv".into(),
+            size: (64, 48),
+            fps: 25.,
+            rate: "25/1".into(),
+            duration: 10.,
+            audio: false,
+            audio_offset: 0.,
+            hdr: false,
+            stream: 0,
+            frames: None,
+            source: crtsim_media::Source::Ffmpeg,
+            contents: None,
+            subtitle: None,
+        }
+    }
+
+    #[test]
+    fn a_video_export_keeps_and_draws_the_subtitles_chosen_for_it() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(
+            &ctx,
+            worker::Gpu::Own(wgpu::Backends::PRIMARY),
+            Ok(crate::app_data::Store::temporary()),
+            None,
+            None,
+        );
+        let (receive, _previews) = app.capture_jobs();
+        let dir = tempfile::tempdir().unwrap();
+        app.source.timeline = Some(crate::timeline::Timeline::new(subtitled(), 0, 250));
+        // What is chosen for one export is not the next one's: the dialog starts from every
+        // track kept, and the subtitle on screen drawn.
+        app.show_subtitle(Some(0));
+        let _ = receive.try_iter().count();
+        app.lane.finished();
+        app.open_video_export(false);
+        let dialog = app.export_dialog.as_ref().unwrap();
+        assert_eq!(dialog.subtitles.keep, Subtitles::All);
+        assert_eq!(dialog.subtitles.burn, Some(0));
+        app.open_video_export(true);
+        assert_eq!(
+            app.export_dialog.as_ref().unwrap().subtitles,
+            SubtitleChoice::default(),
+            "a batch is of files not open, whose tracks are not known"
+        );
+
+        app.export_subtitles = SubtitleChoice {
+            keep: Subtitles::Only(vec![1]),
+            burn: Some(0),
+        };
+        app.export_format = ExportFormat::Video(Container::Mkv);
+        app.dialog_send
+            .send(crate::dialogs::Answer::File(
+                Dialog::ExportVideo,
+                dir.path().join("out.mkv"),
+            ))
+            .unwrap();
+        app.receive(&ctx);
+        match receive.try_recv() {
+            Ok(Job::Export {
+                export: worker::Export::Video { video, options, .. },
+                ..
+            }) => {
+                assert_eq!(video.subtitle, Some(0));
+                assert_eq!(options.keep_subtitles, Subtitles::Only(vec![1]));
+            }
+            _ => panic!("expected a video export"),
+        }
+        // The settings the app keeps are not changed by it.
+        assert_eq!(app.video_options.keep_subtitles, Subtitles::All);
+
+        // A track that cannot be drawn is not, whatever was asked.
+        app.lane.finished();
+        app.export_subtitles.burn = Some(1);
+        app.dialog_send
+            .send(crate::dialogs::Answer::File(
+                Dialog::ExportVideo,
+                dir.path().join("again.mkv"),
+            ))
+            .unwrap();
+        app.receive(&ctx);
+        match receive.try_recv() {
+            Ok(Job::Export {
+                export: worker::Export::Video { video, .. },
+                ..
+            }) => assert_eq!(video.subtitle, None),
+            _ => panic!("expected a video export"),
+        }
     }
 }

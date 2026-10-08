@@ -193,7 +193,8 @@ Nothing is downloaded automatically.
    A GIF or WebP with a single frame opens as a still image. Batches keep turning animated WebP into a PNG of its first frame, as before; animated GIFs batch as MKV video.
 2. Use **Previous frame / Next frame**, arrow keys (when no slider has the keyboard), the frame number field or the wide slider beneath the preview.
    Selection loads when you release the slider or choose **Go**. Frame numbers start at 1 and follow actual decoded frames, including VFR sources.
-   **Play / Pause** (Space) starts buffered playback with CRT history. **Export frame** saves the displayed source frame as a full-resolution, settled CRT PNG.
+   **Play / Pause** (Space) starts buffered playback with CRT history. **Loop** plays a short clip or GIF again from its start when it ends, with no pause, and the CRT's glow carries over from its last frame to its first.
+   **Subtitles**, shown for a video that has subtitle tracks, draws one of them into the picture so the CRT filters it with everything else, in the preview and in exports. **Export frame** saves the displayed source frame as a full-resolution, settled CRT PNG.
    When a valid container frame count exists it is used immediately. Other files require one decoded-frame count on open. Exact seeks decode by ordinal from the start and can take time on long videos; loading/seeking is cancellable.
 3. Choose output resolution and video timing: source-rate stable artifacts (default), 60 Hz alternating artifacts, or persistence off.
 4. Choose **Export → Video…**. A separate window explains MP4/H.264, MKV/H.264 and WebM/VP9, with quality/audio controls and optional advanced encoding settings,
@@ -212,7 +213,7 @@ Temporary encoded files require space on the destination drive, but decoded fram
 Settings and the source are captured for each export; edits during export apply to the next job, and the preview keeps up with them while the export runs.
 
 Output is opaque SDR with software or optional hardware H.264 encoding. Video is explicitly converted from full-range RGB to limited-range BT.709 and tagged accordingly. HDR input uses FFmpeg's `zscale`/`tonemap` filters when available; HDR output remains outside this version.
-Audio tracks, supported subtitles, chapters and source metadata are preserved by default; MKV also supports attachments. See the [workflow guide](docs/WORKFLOW.md) for container limits and quality profiles.
+Audio tracks, supported subtitles, chapters and source metadata are preserved by default; MKV also supports attachments. The export window lists the subtitle tracks, to keep each as a track of its own or not, and to draw one into the picture, through the CRT, instead of leaving it for the player to draw on top. See the [workflow guide](docs/WORKFLOW.md) for container limits and quality profiles.
 MP4/MKV/WebM exports embed an importable preset in a container comment, including the original controls and video timing/audio settings.
 PNG exports still embed importable presets. Full details and validation commands are in [VIDEO_PIPELINE.md](docs/VIDEO_PIPELINE.md).
 

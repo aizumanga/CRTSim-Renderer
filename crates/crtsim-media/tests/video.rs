@@ -385,9 +385,10 @@ fn video_gpu_sequence_export() {
             screen_config.clone()
         },
         &Options::default(),
+        || false,
         &renderer,
         &cancel,
-        |time, source, crt| {
+        |time, _, source, crt| {
             assert_eq!(source.dimensions(), info.size);
             assert_eq!(crt.dimensions(), (160, 120));
             times.push(time);
@@ -407,9 +408,10 @@ fn video_gpu_sequence_export() {
         0.,
         || screen_config.clone(),
         &Options::default(),
+        || false,
         &renderer,
         &cancel,
-        |_, _, _| {
+        |_, _, _, _| {
             cancel.store(true, Ordering::Relaxed);
             Ok(())
         }

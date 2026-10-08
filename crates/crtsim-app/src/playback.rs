@@ -20,10 +20,16 @@ pub struct Playback {
     clock: Option<(Instant, f64)>,
     /// The worker has sent its last frame, or stopped on an error.
     ended: bool,
+    /// The worker stopped on an error, so playing is not to start again by itself.
+    failed: bool,
+    /// Whether to play again from the start at the video's end; the worker reads it as it
+    /// goes.
+    looping: Arc<AtomicBool>,
     capacity: usize,
     /// How long one frame of the video shows, in seconds.
     frame_duration: f64,
-    /// The media time of the frame shown last.
+    /// How long the playing had lasted at the frame shown last. It is the video's own time
+    /// until a loop starts the video again, and goes on from there.
     shown: f64,
     /// What the worker renders with, which edits replace.
     settings: PlayingSettings,
@@ -58,13 +64,14 @@ pub struct Tick {
 
 impl Playback {
     /// Playback of `video` from `position` in seconds, or from the beginning when that is its
-    /// last frame, with frames rendered with `config` at its `output` size. Returns it with the
-    /// worker's end.
+    /// last frame, with frames rendered with `config` at its `output` size, going on from the
+    /// end to the start if `looping`. Returns it with the worker's end.
     pub fn new(
         video: &crtsim_media::Video,
         position: f64,
         output: (u32, u32),
         config: Config,
+        looping: bool,
     ) -> (Self, Feed) {
         let frame_duration = 1. / video.fps;
         let start = if position >= video.duration - frame_duration {
@@ -81,12 +88,15 @@ impl Playback {
         let cancel = Arc::new(AtomicBool::new(false));
         let shape = config.sequence_shape(video.size).ok();
         let settings = PlayingSettings::new(config);
+        let looping = Arc::new(AtomicBool::new(looping));
         let playback = Self {
             cancel: cancel.clone(),
             receive,
             buffered: VecDeque::new(),
             clock: None,
             ended: false,
+            failed: false,
+            looping: looping.clone(),
             capacity,
             frame_duration,
             shown: start,
@@ -99,10 +109,22 @@ impl Playback {
             Feed {
                 start,
                 settings,
+                looping,
                 frames,
                 cancel,
             },
         )
+    }
+
+    /// Plays again from the start at the video's end, or does not. A video that has already
+    /// ended for the worker plays out what it buffered and finishes.
+    pub fn set_looping(&self, looping: bool) {
+        self.looping.store(looping, Ordering::Relaxed);
+    }
+
+    /// Whether the worker stopped on an error, which a loop does not play through again.
+    pub fn failed(&self) -> bool {
+        self.failed
     }
 
     /// Renders the frames from the next one on with `config`, unless it needs a CRT of another
@@ -127,6 +149,7 @@ impl Playback {
                 Ok(Err(error)) => {
                     tick.error = Some(error);
                     self.ended = true;
+                    self.failed = true;
                 }
                 Err(mpsc::TryRecvError::Disconnected) => self.ended = true,
                 Err(mpsc::TryRecvError::Empty) => break,
@@ -135,7 +158,7 @@ impl Playback {
         let prerolled = self.buffered.len() >= self.capacity.min(PREROLL)
             || (self.ended && !self.buffered.is_empty());
         if self.clock.is_none() && prerolled {
-            self.clock = Some((now, self.buffered[0].time));
+            self.clock = Some((now, self.buffered[0].elapsed));
             tick.status = Some(Status::Playing);
         }
         if let Some((started, from)) = self.clock {
@@ -144,12 +167,12 @@ impl Playback {
             while self
                 .buffered
                 .front()
-                .is_some_and(|frame| frame.time <= target)
+                .is_some_and(|frame| frame.elapsed <= target)
             {
                 tick.frame = self.buffered.pop_front();
             }
             if let Some(frame) = &tick.frame {
-                self.shown = frame.time;
+                self.shown = frame.elapsed;
             }
             if self.buffered.is_empty() && !self.ended && target > self.shown + self.frame_duration
             {
@@ -171,6 +194,31 @@ impl Drop for Playback {
 }
 
 impl App {
+    /// Sets whether the video plays again from the start when it ends, for the one playing
+    /// now and the next.
+    pub fn set_loop_playback(&mut self, looping: bool) {
+        self.loop_playback = looping;
+        if let Some(playback) = &self.playback {
+            playback.set_looping(looping);
+        }
+    }
+
+    /// Draws subtitle track `track` of the video open into its frames, or none, and shows
+    /// what that does: the frame on screen is loaded again, or the video playing goes on from
+    /// where it is.
+    pub fn show_subtitle(&mut self, track: Option<usize>) {
+        let Some(timeline) = &mut self.source.timeline else {
+            return;
+        };
+        timeline.video = timeline.video.with_subtitle(track);
+        let frame = timeline.shown;
+        if self.playback.is_some() {
+            self.play_from(None);
+        } else if let Some(opening) = self.source.open_frame(frame) {
+            self.start_opening(opening, String::new());
+        }
+    }
+
     /// Stops the video playing, if one is, which frees the work lane.
     pub fn stop_playback(&mut self) {
         if self.playback.take().is_some() {
@@ -189,6 +237,11 @@ impl App {
     }
 
     pub fn start_playback(&mut self) {
+        self.play_from(None);
+    }
+
+    /// Plays the video from `from` seconds, or the frame on screen.
+    fn play_from(&mut self, from: Option<f64>) {
         let Some(timeline) = &self.source.timeline else {
             return;
         };
@@ -197,7 +250,7 @@ impl App {
         if !self.lane.may_start() {
             return;
         }
-        let (video, time) = (timeline.video.clone(), timeline.time);
+        let (video, time) = (timeline.video.clone(), from.unwrap_or(timeline.time));
         self.stop_playback();
         let config = match self
             .config
@@ -210,7 +263,7 @@ impl App {
             }
         };
         let output = config.output_size(video.size).unwrap_or(video.size);
-        let (playback, feed) = Playback::new(&video, time, output, config);
+        let (playback, feed) = Playback::new(&video, time, output, config, self.loop_playback);
         self.playback = Some(playback);
         self.preview.drop_pending();
         let job = Job::Playback {
@@ -246,6 +299,7 @@ impl App {
             return;
         };
         let tick = playback.tick(Instant::now());
+        let failed = playback.failed();
         if let Some(error) = tick.error {
             self.error = Some(error);
         }
@@ -258,8 +312,16 @@ impl App {
                 self.status = "Buffering · renderer is catching up…".into();
             }
             Some(Status::Finished) => {
+                // A loop the worker had already finished before it was asked for, or that it
+                // missed by a frame, goes on from here. A worker that failed would only fail
+                // again.
+                let again = self.loop_playback && !failed;
                 self.stop_playback();
-                self.status = "Playback finished".into();
+                if again {
+                    self.play_from(Some(0.));
+                } else {
+                    self.status = "Playback finished".into();
+                }
                 return;
             }
             None => {}
@@ -302,12 +364,14 @@ mod tests {
             frames: None,
             source: crtsim_media::Source::Ffmpeg,
             contents: None,
+            subtitle: None,
         }
     }
 
     fn frame(time: f64) -> Result<PlaybackFrame, String> {
         Ok(PlaybackFrame {
             time,
+            elapsed: time,
             source: RgbaImage::new(4, 4),
             crt: RgbaImage::new(4, 4),
         })
@@ -320,7 +384,7 @@ mod tests {
     #[test]
     fn it_buffers_before_it_starts_and_shows_each_frame_when_it_is_due() {
         let (mut playback, feed) =
-            Playback::new(&video(10., (4, 4)), 0., (4, 4), Config::default());
+            Playback::new(&video(10., (4, 4)), 0., (4, 4), Config::default(), false);
         let start = Instant::now();
         feed.frames.send(frame(0.)).unwrap();
         let tick = playback.tick(start);
@@ -348,7 +412,7 @@ mod tests {
     #[test]
     fn it_waits_when_the_renderer_falls_behind_and_resumes_from_the_next_frame() {
         let (mut playback, feed) =
-            Playback::new(&video(10., (4, 4)), 0., (4, 4), Config::default());
+            Playback::new(&video(10., (4, 4)), 0., (4, 4), Config::default(), false);
         let start = Instant::now();
         for time in [0., 0.04, 0.08] {
             feed.frames.send(frame(time)).unwrap();
@@ -372,7 +436,7 @@ mod tests {
     #[test]
     fn frames_before_an_error_still_play_and_then_it_finishes() {
         let (mut playback, feed) =
-            Playback::new(&video(10., (4, 4)), 0., (4, 4), Config::default());
+            Playback::new(&video(10., (4, 4)), 0., (4, 4), Config::default(), false);
         let start = Instant::now();
         feed.frames.send(frame(0.)).unwrap();
         feed.frames.send(frame(0.04)).unwrap();
@@ -394,11 +458,13 @@ mod tests {
     fn it_starts_over_from_the_last_frame_and_buffers_less_of_larger_frames() {
         let clip = video(2., (4, 4));
         assert_eq!(
-            Playback::new(&clip, 1., (4, 4), Config::default()).1.start,
+            Playback::new(&clip, 1., (4, 4), Config::default(), false)
+                .1
+                .start,
             1.
         );
         assert_eq!(
-            Playback::new(&clip, 2. - 1. / 25., (4, 4), Config::default())
+            Playback::new(&clip, 2. - 1. / 25., (4, 4), Config::default(), false)
                 .1
                 .start,
             0.
@@ -409,14 +475,157 @@ mod tests {
             0.,
             (3840, 2160),
             Config::default(),
+            false,
         );
         feed.frames.send(frame(0.)).unwrap();
         assert_eq!(playback.tick(Instant::now()).status, Some(Status::Playing));
     }
 
     #[test]
+    fn a_loop_keeps_one_clock_across_the_videos_end_and_can_be_turned_on_and_off() {
+        let (mut playback, feed) =
+            Playback::new(&video(10., (4, 4)), 0., (4, 4), Config::default(), true);
+        assert!(feed.looping.load(Ordering::Relaxed));
+        let start = Instant::now();
+        let lap = |time: f64, elapsed: f64| {
+            Ok(PlaybackFrame {
+                elapsed,
+                ..frame(time).unwrap()
+            })
+        };
+        // The video's three frames, then its first again.
+        for (time, elapsed) in [(0., 0.), (0.04, 0.04), (0.08, 0.08), (0., 0.12)] {
+            feed.frames.send(lap(time, elapsed)).unwrap();
+        }
+        playback.tick(start);
+        assert_eq!(shown(&playback.tick(start + 80 * MS)), Some(0.08));
+        assert_eq!(
+            shown(&playback.tick(start + 120 * MS)),
+            Some(0.),
+            "the first frame again, on time"
+        );
+        playback.set_looping(false);
+        assert!(!feed.looping.load(Ordering::Relaxed));
+        playback.set_looping(true);
+        assert!(feed.looping.load(Ordering::Relaxed));
+    }
+
+    /// An app with `video` open and playing, its worker's jobs for the test to read.
+    fn playing(
+        video: crtsim_media::Video,
+        looping: bool,
+    ) -> (App, worker::Feed, mpsc::Receiver<Job>) {
+        let ctx = egui::Context::default();
+        let mut app = App::new(
+            &ctx,
+            worker::Gpu::Own(wgpu::Backends::PRIMARY),
+            Ok(app_data::Store::temporary()),
+            None,
+            Some(Smoke::new("unused-smoke.png".into())),
+        );
+        let (jobs, _previews) = app.capture_jobs();
+        app.loop_playback = looping;
+        let (playback, feed) = Playback::new(&video, 0., (4, 4), Config::default(), looping);
+        app.source.timeline = Some(crate::timeline::Timeline::new(video, 0, 250));
+        app.playback = Some(playback);
+        // As starting playback does: the lane is held by the playing.
+        app.lane
+            .start(Job::Playback {
+                video: app.source.timeline.as_ref().unwrap().video.clone(),
+                options: Default::default(),
+                feed: worker::Feed {
+                    start: 0.,
+                    settings: worker::PlayingSettings::new(Config::default()),
+                    looping: Arc::new(AtomicBool::new(looping)),
+                    frames: mpsc::sync_channel(1).0,
+                    cancel: Arc::new(AtomicBool::new(false)),
+                },
+            })
+            .unwrap();
+        jobs.try_iter().for_each(drop);
+        (app, feed, jobs)
+    }
+
+    #[test]
+    fn a_video_that_ends_while_looping_plays_again_from_the_start_unless_it_failed() {
+        let ctx = egui::Context::default();
+        let (mut app, feed, jobs) = playing(video(10., (4, 4)), true);
+        feed.frames.send(frame(0.)).unwrap();
+        drop(feed);
+        app.tick_playback(&ctx);
+        assert!(app.playback.is_some(), "playing again");
+        let started = jobs.try_iter().find_map(|job| match job {
+            Job::Playback { feed, .. } => Some(feed),
+            _ => None,
+        });
+        let feed = started.expect("a new playback was started");
+        assert_eq!(feed.start, 0.);
+        assert!(feed.looping.load(Ordering::Relaxed));
+
+        // Without the loop it finishes, and with a failure it does not go round again.
+        let (mut app, feed, jobs) = playing(video(10., (4, 4)), false);
+        feed.frames.send(frame(0.)).unwrap();
+        drop(feed);
+        app.tick_playback(&ctx);
+        assert!(app.playback.is_none() && app.status == "Playback finished");
+        assert!(jobs.try_iter().next().is_none());
+        let (mut app, feed, jobs) = playing(video(10., (4, 4)), true);
+        feed.frames.send(Err("driver failed".into())).unwrap();
+        drop(feed);
+        app.tick_playback(&ctx);
+        assert!(app.playback.is_none() && app.error.is_some());
+        assert!(jobs.try_iter().next().is_none());
+    }
+
+    #[test]
+    fn choosing_a_subtitle_loads_the_frame_again_or_goes_on_playing_with_it() {
+        let subtitled = || {
+            let mut clip = video(10., (4, 4));
+            clip.tracks = vec![crtsim_media::Track {
+                index: 1,
+                kind: crtsim_media::TrackKind::Subtitle,
+                codec: "subrip".into(),
+                offset: 0.,
+                language: Some("eng".into()),
+                title: None,
+            }];
+            clip
+        };
+        let drawn = |app: &App| app.source.timeline.as_ref().unwrap().video.subtitle;
+
+        // Paused, the frame on screen is read again with the subtitle drawn into it.
+        let (mut app, _feed, jobs) = playing(subtitled(), false);
+        app.stop_playback();
+        app.show_subtitle(Some(0));
+        assert_eq!(drawn(&app), Some(0));
+        match jobs.try_iter().last() {
+            Some(Job::LoadVideo {
+                cached: Some((video, _)),
+                frame: 0,
+                ..
+            }) => assert_eq!(video.subtitle, Some(0)),
+            _ => panic!("expected the frame to be loaded again"),
+        }
+        app.show_subtitle(None);
+        assert_eq!(drawn(&app), None);
+        // A track that is not there changes nothing.
+        app.show_subtitle(Some(4));
+        assert_eq!(drawn(&app), None);
+
+        // Playing, it goes on playing from where it is, with the subtitle.
+        let (mut app, _feed, jobs) = playing(subtitled(), false);
+        app.show_subtitle(Some(0));
+        assert!(app.playback.is_some());
+        match jobs.try_iter().last() {
+            Some(Job::Playback { video, .. }) => assert_eq!(video.subtitle, Some(0)),
+            _ => panic!("expected playback to start again"),
+        }
+    }
+
+    #[test]
     fn stopping_it_stops_the_worker_and_discards_what_it_rendered() {
-        let (playback, feed) = Playback::new(&video(10., (4, 4)), 0., (4, 4), Config::default());
+        let (playback, feed) =
+            Playback::new(&video(10., (4, 4)), 0., (4, 4), Config::default(), false);
         drop(playback);
         assert!(feed.cancel.load(Ordering::Relaxed));
         assert!(feed.frames.send(frame(0.)).is_err());
@@ -428,7 +637,8 @@ mod tests {
             output: "320x240".into(),
             ..Config::default()
         };
-        let (playback, feed) = Playback::new(&video(10., (4, 4)), 0., (320, 240), config.clone());
+        let (playback, feed) =
+            Playback::new(&video(10., (4, 4)), 0., (320, 240), config.clone(), false);
         let brighter = Config {
             bloom: 1.5,
             ..config.clone()
@@ -478,7 +688,7 @@ mod tests {
             .with_max_output_side(input, app.preview.quality)
             .unwrap();
         let output = config.output_size(input).unwrap();
-        let (playback, feed) = Playback::new(&video(10., input), 0., output, config);
+        let (playback, feed) = Playback::new(&video(10., input), 0., output, config, false);
         app.playback = Some(playback);
         app.config.bloom = 0.;
         app.changed();
@@ -501,7 +711,8 @@ mod tests {
             None,
             Some(Smoke::new("unused-smoke.png".into())),
         );
-        let (playback, feed) = Playback::new(&video(10., (4, 4)), 0., (4, 4), Config::default());
+        let (playback, feed) =
+            Playback::new(&video(10., (4, 4)), 0., (4, 4), Config::default(), false);
         app.playback = Some(playback);
         // As starting playback does: it renders its own frames.
         app.preview.drop_pending();
@@ -559,6 +770,65 @@ mod tests {
         assert_eq!(app.status, "Playback finished");
         assert!(times.windows(2).all(|pair| pair[0] < pair[1]), "{times:?}");
         assert!(times.last().is_some_and(|&last| last >= 0.4), "{times:?}");
+    }
+
+    /// With the loop on, a real video plays on from its end to its start without stopping, and
+    /// finishes its lap once the loop is turned off.
+    #[test]
+    #[ignore = "requires a Vulkan adapter and FFmpeg"]
+    fn a_looping_video_goes_round_through_the_worker_until_the_loop_is_turned_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("clip.mkv");
+        let made = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-f", "lavfi", "-i"])
+            .args(["testsrc2=size=64x48:rate=10", "-t", "0.5", "-c:v", "ffv1"])
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let ctx = egui::Context::default();
+        let mut app = App::new(
+            &ctx,
+            worker::Gpu::Own(wgpu::Backends::VULKAN),
+            Ok(app_data::Store::temporary()),
+            Some(path),
+            Some(Smoke::new("unused-smoke.png".into())),
+        );
+        app.show_welcome = false;
+        let started = Instant::now();
+        let waited = |app: &mut App| {
+            app.receive(&ctx);
+            app.tick_playback(&ctx);
+            assert!(app.error.is_none(), "{:?}", app.error);
+            assert!(started.elapsed() < Duration::from_secs(120), "stalled");
+            std::thread::sleep(5 * MS);
+        };
+        while app.source.timeline.is_none() {
+            waited(&mut app);
+        }
+        app.set_loop_playback(true);
+        app.start_playback();
+        let mut times = vec![];
+        let mut laps = 0;
+        while laps < 3 {
+            waited(&mut app);
+            let time = app.source.timeline.as_ref().unwrap().time;
+            if times.last() != Some(&time) {
+                laps += usize::from(times.last().is_some_and(|last| time < *last));
+                times.push(time);
+            }
+            assert!(
+                app.playback.is_some(),
+                "it stopped at lap {laps}: {times:?}"
+            );
+        }
+        app.set_loop_playback(false);
+        while app.playback.is_some() {
+            waited(&mut app);
+        }
+        assert_eq!(app.status, "Playback finished");
+        let last = app.source.timeline.as_ref().unwrap().time;
+        assert!(last >= 0.4, "the lap was played out, to {last}");
     }
 
     /// Edited while playing, a real video plays on with the new look, and starts again from

@@ -45,12 +45,27 @@ to rebuild temporal history. Buffer size is bounded independently of clip length
 If rendering falls behind, playback shows Buffering again. Lower Preview quality for demanding footage or effects.
 Editing, seeking, opening a dialog or starting an export stops playback and cancels its decoder.
 
+**Loop** plays the video again from its start when it ends, for the video playing now and the next. The next lap is read before this
+one ends and the CRT keeps its history, so a short clip or GIF goes round without a pause, its last frame's glow fading into its first.
+Turning Loop off lets the lap in progress play out. A video that stops on an error does not start again by itself.
+
 Video previews are silent. The earlier separate ffplay audio process could drift and restart on buffer underruns,
 so it has been removed. Exported audio is configured in the video export window and still uses FFmpeg's stream-preservation pipeline.
 
 Playback normalizes variable-rate footage to the selected constant rate, as export does. During playback the frame
 counter is an estimate from media time; manual frame navigation still selects exact decoded ordinals.
 Frame export renders the displayed source as a settled still, independently of playback history.
+
+## Subtitles
+
+A video with subtitle tracks shows a **Subtitles** drop-down under the preview controls. Choosing a track draws it into every
+frame before the CRT sees it, so scanlines, mask, glow and curvature affect it as they do the picture; **Off** returns the plain
+frame. The frame on screen loads again, or playback goes on from where it is, with the subtitle. Text subtitles (SubRip, ASS/SSA,
+WebVTT, MP4 text) are typeset by FFmpeg's libass at the times the file gives, styling and embedded fonts included. Picture subtitles
+(Blu-ray PGS, DVD VobSub, DVB) are laid over the frames; to show one that began before a frame being loaded, FFmpeg reads up to ten
+seconds of footage before it. Reading a text subtitle takes FFmpeg through the whole file each time a frame is loaded or playback
+starts, which takes a moment on large files. Closed captions inside the video stream cannot be drawn. A file a browser opens in the web
+app has no subtitle tracks to choose from.
 
 ## Projects and recovery
 
@@ -119,6 +134,11 @@ MKV copies subtitles and attachments; MP4 converts supported text subtitles to m
 Bitmap subtitles cannot be copied into MP4/WebM, and text conversion can lose styling. Container-supported chapters,
 global metadata, audio/subtitle language tags and dispositions are retained where FFmpeg can represent them.
 Data tracks and additional video streams are omitted. MP4/WebM attachment and subtitle limitations appear beside export controls.
+When the video has subtitle tracks, the export window lists them: **Keep** copies a track into the file (while the additional tracks above
+are kept), and **Draw in picture** puts it through the CRT with the frames instead, for MP4, MKV, WebM, GIF or animated WebP. A track
+drawn in is unticked for keeping, since it would show twice, but can be ticked again. The window starts with the subtitle on screen in the
+preview drawn in and every track kept. These choices are for the export in hand; batch jobs open files not yet known, so they keep every
+subtitle track and draw none.
 The renderer preset occupies the output comment; the original comment is retained as `source_comment` where supported.
 Mute deliberately drops audio. Turning preservation off retains only the first audio track (unless muted).
 

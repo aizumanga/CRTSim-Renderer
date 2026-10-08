@@ -460,7 +460,11 @@ pub enum Look {
     Lut(usize),
 }
 pub struct PlaybackFrame {
+    /// Where in the video the frame is, in seconds.
     pub time: f64,
+    /// How long the playing has lasted when the frame shows, which a loop takes on past the
+    /// video's end where `time` starts again.
+    pub elapsed: f64,
     pub source: RgbaImage,
     pub crt: RgbaImage,
 }
@@ -469,6 +473,9 @@ pub struct PlaybackFrame {
 pub struct Feed {
     pub start: f64,
     pub settings: PlayingSettings,
+    /// Whether to play again from the start when the video ends, which the interface sets as
+    /// the video plays.
+    pub looping: Arc<AtomicBool>,
     pub frames: mpsc::SyncSender<Result<PlaybackFrame, String>>,
     pub cancel: Arc<AtomicBool>,
 }
@@ -1136,6 +1143,7 @@ async fn play(
     let Feed {
         start,
         settings,
+        looping,
         frames,
         cancel,
     } = feed;
@@ -1149,13 +1157,19 @@ async fn play(
                 *start,
                 config,
                 options,
+                || looping.load(Ordering::Relaxed),
                 async |span| crate::frames::open(video, span, cancel).await,
                 async |sequence, frame, config| {
                     crtsim_media::jobs::render(renderer, sequence, frame, config, cancel).await
                 },
                 cancel,
-                async |time, source, crt| {
-                    let mut item = Ok(PlaybackFrame { time, source, crt });
+                async |time, elapsed, source, crt| {
+                    let mut item = Ok(PlaybackFrame {
+                        time,
+                        elapsed,
+                        source,
+                        crt,
+                    });
                     loop {
                         match offer(frames, item, cancel, ctx)? {
                             None => return Ok(()),

@@ -19,6 +19,7 @@ pub use animation::{AnimationOptions, AnimationSummary, Dither};
 pub use crtsim_core::Timing;
 pub use decode::{playback, preview, preview_frame};
 pub use export::{export, export_animation, export_animation_with, export_with, Progress, Rate};
+use probe::is_text_subtitle;
 pub use probe::{frame_count, probe, probe_demuxed, Contents, Source, Track, TrackKind, Video};
 pub use tools::{Found, Tool, ToolCheck};
 
@@ -129,7 +130,7 @@ impl Container {
     /// How a subtitle track in `codec` is stored, if it can be: Matroska copies any, the
     /// others convert text subtitles to their own format and cannot hold bitmap ones.
     fn subtitle_codec(self, codec: &str) -> Option<&'static str> {
-        let text = ["subrip", "ass", "ssa", "webvtt", "mov_text", "text"].contains(&codec);
+        let text = is_text_subtitle(codec);
         match self {
             Self::Mkv => Some("copy"),
             Self::Mp4 if text => Some("mov_text"),
@@ -193,12 +194,57 @@ pub struct Options {
     pub quality: Quality,
     pub encoder: Encoder,
     pub preserve_streams: bool,
+    /// Which of the source's subtitle tracks the file keeps, as tracks of their own, when it
+    /// keeps the source's other tracks. Drawing one into the picture is the source's:
+    /// `Video::with_subtitle`.
+    pub keep_subtitles: Subtitles,
     /// Optional constant-quality override for software H.264/VP9 (lower is better).
     pub crf: Option<u8>,
     /// Optional fixed target bitrate for hardware H.264, in megabits per second.
     pub bitrate_mbps: Option<u32>,
     pub speed: Option<EncodingSpeed>,
 }
+/// Which of a video's subtitle tracks to keep, each by its place among the subtitle tracks
+/// counting from 0 (`Video::subtitles`), so a choice carries to another file with tracks in the
+/// same order.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Subtitles {
+    #[default]
+    All,
+    Only(Vec<usize>),
+}
+
+impl Subtitles {
+    /// Keeps no subtitle track.
+    pub fn none() -> Self {
+        Self::Only(vec![])
+    }
+
+    /// Whether subtitle track `track` is kept.
+    pub fn keeps(&self, track: usize) -> bool {
+        match self {
+            Self::All => true,
+            Self::Only(kept) => kept.contains(&track),
+        }
+    }
+
+    /// Keeps or drops subtitle track `track` of a video with `count` of them.
+    pub fn set(&mut self, track: usize, count: usize, keep: bool) {
+        let mut kept: Vec<usize> = (0..count).filter(|&n| self.keeps(n)).collect();
+        kept.retain(|&n| n != track);
+        if keep {
+            kept.push(track);
+            kept.sort_unstable();
+        }
+        *self = if kept.len() == count {
+            Self::All
+        } else {
+            Self::Only(kept)
+        };
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum EncodingSpeed {
@@ -239,6 +285,7 @@ impl Default for Options {
             quality: Quality::default(),
             encoder: Encoder::default(),
             preserve_streams: true,
+            keep_subtitles: Subtitles::default(),
             crf: None,
             bitrate_mbps: None,
             speed: None,
@@ -246,18 +293,24 @@ impl Default for Options {
     }
 }
 
-/// The tracks of `video` an export to `container` leaves out, when it keeps the others.
-pub fn preservation_notes(video: &Video, container: Container) -> Vec<String> {
+/// The tracks of `video` an export to `container` leaves out, when it keeps the others. A
+/// subtitle track that `options` does not keep is left out by choice, not mentioned.
+pub fn preservation_notes(video: &Video, container: Container, options: &Options) -> Vec<String> {
     let mut notes = vec![];
+    let mut subtitle = 0;
     for t in &video.tracks {
         match t.kind {
-            TrackKind::Subtitle if container.subtitle_codec(&t.codec).is_none() => {
-                notes.push(format!(
-                    "Subtitle {} ({}) cannot be stored in {}; use MKV to preserve it.",
-                    t.index,
-                    t.codec,
-                    container.extension()
-                ))
+            TrackKind::Subtitle => {
+                let kept = options.keep_subtitles.keeps(subtitle);
+                subtitle += 1;
+                if kept && container.subtitle_codec(&t.codec).is_none() {
+                    notes.push(format!(
+                        "Subtitle {} ({}) cannot be stored in {}; use MKV to preserve it.",
+                        t.index,
+                        t.codec,
+                        container.extension()
+                    ))
+                }
             }
             TrackKind::Attachment if container != Container::Mkv => {
                 notes.push(format!("Attachment {} is preserved only in MKV.", t.index))
@@ -403,6 +456,57 @@ mod tests {
         }
         .validate()
         .is_err());
+    }
+
+    #[test]
+    fn subtitle_choices_are_by_place_and_old_options_keep_every_track() {
+        let mut keep = Subtitles::All;
+        assert!(keep.keeps(0) && keep.keeps(7));
+        keep.set(1, 3, false);
+        assert_eq!(keep, Subtitles::Only(vec![0, 2]));
+        assert!(keep.keeps(2) && !keep.keeps(1));
+        keep.set(1, 3, true);
+        assert_eq!(keep, Subtitles::All, "every track kept is no choice");
+        for track in 0..3 {
+            keep.set(track, 3, false);
+        }
+        assert_eq!(keep, Subtitles::none());
+        keep.set(2, 3, true);
+        assert_eq!(keep, Subtitles::Only(vec![2]));
+        let options = Options {
+            keep_subtitles: keep,
+            ..Options::default()
+        };
+        let text = serde_json::to_string(&options).unwrap();
+        assert!(text.contains(r#""keep_subtitles":{"only":[2]}"#), "{text}");
+        assert_eq!(serde_json::from_str::<Options>(&text).unwrap(), options);
+        let legacy: Options = serde_json::from_str(r#"{"audio":"auto"}"#).unwrap();
+        assert_eq!(legacy.keep_subtitles, Subtitles::All);
+    }
+
+    #[test]
+    fn a_track_is_named_by_what_the_file_says_of_it() {
+        let track = |codec: &str, language: Option<&str>, title: Option<&str>| Track {
+            index: 3,
+            kind: TrackKind::Subtitle,
+            codec: codec.into(),
+            offset: 0.,
+            language: language.map(Into::into),
+            title: title.map(Into::into),
+        };
+        assert_eq!(track("subrip", None, None).label(), "subrip");
+        assert_eq!(track("subrip", Some("eng"), None).label(), "eng (subrip)");
+        assert_eq!(
+            track("ass", Some("jpn"), Some("Signs & songs")).label(),
+            "jpn · Signs & songs (ass)"
+        );
+        assert_eq!(
+            track("", None, Some("Commentary")).label(),
+            "Commentary (unknown)"
+        );
+        assert!(track("subrip", None, None).drawable());
+        assert!(track("hdmv_pgs_subtitle", None, None).drawable());
+        assert!(!track("eia_608", None, None).drawable());
     }
 
     #[test]

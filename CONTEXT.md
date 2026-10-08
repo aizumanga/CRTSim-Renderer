@@ -75,6 +75,17 @@ already overdue are skipped rather than shown late. Settings edited while it pla
 frames rendered next, once the few already buffered have played; one that needs a new
 sequence, such as another output size, plays again from the frame on screen.
 
+**Loop**: playback that goes on from a video's end to its start (`jobs::playback`'s `looping`),
+the CRT keeping its history rather than warming up again, and the time playing has lasted going
+on from the lap before so the clock never starts over. The next lap's frames are read shortly
+before the lap ends. A video that failed is not looped. Turning it off lets the lap play out.
+
+**Subtitle track**: one of a video's subtitle streams, called by its place among them, counting
+from 0 (`Video::subtitles`), since a stream index counts the file's other tracks too. A track is
+**kept** by an export as a track of its own (`Options::keep_subtitles`), or **drawn** into the
+frames (`Video::with_subtitle`), which the CRT then filters with the picture. The video decodes
+with the track drawn in for the preview, the frame on screen and every export alike.
+
 **Preroll**: the frames playback waits for before its clock starts: three, or all the buffer
 holds when large frames make it smaller. When the renderer falls behind, the clock stops and
 playback prerolls again.
