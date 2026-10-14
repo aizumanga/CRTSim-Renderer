@@ -1,7 +1,8 @@
 //! Outputs made without FFmpeg, as a browser page makes them, into a file in memory: animated
-//! GIF and WebP written here, frame by frame, and MP4 and WebM encoded by the host and muxed
+//! GIF, WebP and PNG written here, frame by frame, and MP4 and WebM encoded by the host and muxed
 //! here.
 use crate::{
+    apng_writer::ApngWriter,
     gif_writer::{GifWriter, Histogram},
     jobs::{Output, VideoEncoding},
     mux,
@@ -11,8 +12,8 @@ use crate::{
 use anyhow::{ensure, Result};
 use image::RgbaImage;
 
-/// An animated GIF or WebP written here. A GIF's first pass only counts colors; its second,
-/// and a WebP's only pass, write. A WebP's changed areas are written lossless here, or lossy
+/// An animated GIF, WebP or PNG written here. A GIF's first pass only counts colors; its second,
+/// and the others' only pass, write. A WebP's changed areas are written lossless here, or lossy
 /// by `lossy`, which the host supplies.
 pub struct Animation<L> {
     format: AnimationFormat,
@@ -24,6 +25,7 @@ pub struct Animation<L> {
     histogram: Histogram,
     gif: Option<GifWriter>,
     webp: Option<WebpWriter>,
+    apng: Option<ApngWriter>,
     lossy: L,
 }
 
@@ -36,7 +38,11 @@ impl<L: AsyncFnMut(&RgbaImage, u8) -> Result<Vec<u8>>> Animation<L> {
     ) -> Result<Self> {
         let webp = match format {
             AnimationFormat::Webp => Some(WebpWriter::new(size, options.fps)?),
-            AnimationFormat::Gif => None,
+            AnimationFormat::Gif | AnimationFormat::Apng => None,
+        };
+        let apng = match format {
+            AnimationFormat::Apng => Some(ApngWriter::new(size, options.fps)?),
+            AnimationFormat::Gif | AnimationFormat::Webp => None,
         };
         Ok(Self {
             format,
@@ -48,6 +54,7 @@ impl<L: AsyncFnMut(&RgbaImage, u8) -> Result<Vec<u8>>> Animation<L> {
             histogram: Histogram::default(),
             gif: None,
             webp,
+            apng,
             lossy,
         })
     }
@@ -59,7 +66,7 @@ impl<L: AsyncFnMut(&RgbaImage, u8) -> Result<Vec<u8>>> Output for Animation<L> {
     fn passes(&self) -> u32 {
         match self.format {
             AnimationFormat::Gif => 2,
-            AnimationFormat::Webp => 1,
+            AnimationFormat::Webp | AnimationFormat::Apng => 1,
         }
     }
 
@@ -67,11 +74,14 @@ impl<L: AsyncFnMut(&RgbaImage, u8) -> Result<Vec<u8>>> Output for Animation<L> {
         match (self.format, pass) {
             (AnimationFormat::Gif, 0) => " · choosing colors",
             (AnimationFormat::Gif, _) => " · writing",
-            (AnimationFormat::Webp, _) => "",
+            (AnimationFormat::Webp | AnimationFormat::Apng, _) => "",
         }
     }
 
     async fn frame(&mut self, pass: u32, frame: RgbaImage) -> Result<()> {
+        if let Some(writer) = &mut self.apng {
+            return writer.frame(&frame);
+        }
         if let Some(writer) = &mut self.webp {
             let change = writer.changed(&frame)?;
             let picture = match change {
@@ -105,10 +115,11 @@ impl<L: AsyncFnMut(&RgbaImage, u8) -> Result<Vec<u8>>> Output for Animation<L> {
     }
 
     async fn finish(self, _count: u64, _progress: &dyn Fn(Progress)) -> Result<Vec<u8>> {
-        match (self.gif, self.webp) {
-            (_, Some(writer)) => writer.finish(),
-            (Some(writer), _) => writer.finish(),
-            (None, None) => anyhow::bail!("No frames were written"),
+        match (self.gif, self.webp, self.apng) {
+            (_, _, Some(writer)) => writer.finish(),
+            (_, Some(writer), _) => writer.finish(),
+            (Some(writer), _, _) => writer.finish(),
+            (None, None, None) => anyhow::bail!("No frames were written"),
         }
     }
 }

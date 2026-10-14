@@ -202,7 +202,7 @@ pub fn export_animation_with(
     progress: impl FnMut(Progress),
 ) -> Result<()> {
     check_cancel(cancel)?;
-    let format = AnimationFormat::of(output).context("Choose a GIF or WebP filename")?;
+    let format = AnimationFormat::of(output).context("Choose a GIF, WebP or PNG filename")?;
     let plan = AnimationPlan::new(video, format, config, options)?;
     run(&plan, output, cancel, render, progress)
 }

@@ -937,10 +937,12 @@ name = "crtsim-media"
 version = "1.1.0"
 dependencies = [
  "anyhow",
+ "crc32fast",
  "crtsim-core",
  "gif",
  "image 0.24.9",
  "image-webp",
+ "png 0.17.16",
  "pollster 0.3.0",
  "re_mp4",
  "serde",

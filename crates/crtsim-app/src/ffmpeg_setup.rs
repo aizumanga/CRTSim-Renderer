@@ -56,7 +56,7 @@ impl FfmpegSetup {
 }
 
 /// The export formats and the encoders they need, as the setup window lists them.
-fn formats() -> [(&'static str, &'static str); 6] {
+fn formats() -> [(&'static str, &'static str); 7] {
     let video = |container| {
         Encoder::Software
             .codec(container)
@@ -67,6 +67,7 @@ fn formats() -> [(&'static str, &'static str); 6] {
         ("WebM video", video(Container::Webm)),
         ("GIF", AnimationFormat::Gif.encoder()),
         ("Animated WebP", AnimationFormat::Webp.encoder()),
+        ("Animated PNG", AnimationFormat::Apng.encoder()),
         ("AAC audio, for MP4 and MKV", "aac"),
         ("Opus audio, for WebM", "libopus"),
     ]

@@ -1,5 +1,6 @@
 //! Animated GIF and WebP, decoded here rather than by FFmpeg, so they open without it; and the
-//! video test card, whose frames are drawn here.
+//! video test card, whose frames are drawn here. Animated PNG is only written, so a PNG always
+//! opens as a still.
 //!
 //! Each frame comes out composited onto the whole canvas, with how long it shows. Frames are
 //! read in order and one at a time, since each one builds on the canvas the last one left.
@@ -28,21 +29,26 @@ const MEMORY_LIMIT: usize = 512 * 1024 * 1024;
 /// More frames than any animation worth rendering; a bound on the delays kept per file.
 const MAX_FRAMES: usize = 100_000;
 
-/// The animated image formats: opened as animations, and written by the animation export.
+/// The animated image formats written by the animation export. GIF and WebP also open as
+/// animations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AnimationFormat {
     Gif,
     Webp,
+    /// Animated PNG: every pixel kept, in a `.png` that viewers without APNG show as its first
+    /// frame.
+    Apng,
 }
 
 impl AnimationFormat {
-    pub const ALL: [Self; 2] = [Self::Gif, Self::Webp];
+    pub const ALL: [Self; 3] = [Self::Gif, Self::Webp, Self::Apng];
 
     pub fn extension(self) -> &'static str {
         match self {
             Self::Gif => "gif",
             Self::Webp => "webp",
+            Self::Apng => "png",
         }
     }
 
@@ -105,6 +111,7 @@ fn detect_in(origin: &Origin, format: AnimationFormat) -> Option<AnimationFormat
         }
         AnimationFormat::Webp => image_webp::WebPDecoder::new(file)
             .is_ok_and(|decoder| decoder.is_animated() && decoder.num_frames() > 1),
+        AnimationFormat::Apng => false,
     };
     animated.then_some(format)
 }
@@ -158,6 +165,7 @@ impl Frames {
                     },
                 ))
             }
+            AnimationFormat::Apng => bail!("A PNG opens as a still image"),
         }
     }
 }

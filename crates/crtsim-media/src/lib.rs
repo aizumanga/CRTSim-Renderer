@@ -1,6 +1,7 @@
 //! Bounded-memory FFmpeg decode -> ordered GPU frames -> encode -> audio mux.
 mod animated;
 mod animation;
+mod apng_writer;
 mod decode;
 pub mod demux;
 mod export;
@@ -148,6 +149,9 @@ pub enum Quality {
     Balanced,
     High,
     Archival,
+    /// Every pixel kept exactly, as RGB in FFV1, which only MKV holds here. For editing and
+    /// archiving: files are many times larger than Archival's.
+    Lossless,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -266,6 +270,22 @@ impl Options {
     }
     /// The constant quality a software encoder is given: the one asked for, or the quality
     /// profile's, which is higher for VP9 to give files of a similar size.
+    /// The FFmpeg encoder these options write `container`'s video with.
+    pub fn codec(&self, container: Container) -> Result<&'static str> {
+        if self.quality != Quality::Lossless {
+            return self.encoder.codec(container);
+        }
+        ensure!(
+            container == Container::Mkv,
+            "Lossless video is FFV1, which only MKV holds; choose MKV"
+        );
+        ensure!(
+            self.encoder == Encoder::Software,
+            "Hardware encoders are lossy; choose Software for lossless video"
+        );
+        Ok("ffv1")
+    }
+
     pub fn effective_crf(&self, container: Container) -> u8 {
         self.crf.unwrap_or(
             match self.quality {
@@ -273,6 +293,8 @@ impl Options {
                 Quality::Balanced => 18,
                 Quality::High => 14,
                 Quality::Archival => 10,
+                // FFV1 has no quality to set.
+                Quality::Lossless => 0,
             } + if container == Container::Webm { 6 } else { 0 },
         )
     }

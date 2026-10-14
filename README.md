@@ -9,7 +9,8 @@ It is not an official product or an exact reconstruction of a commercial game's 
 ## What works in this prototype
 
 - PNG/JPEG/WebP/BMP/GIF input and PNG export; an original test card when input is omitted.
-- Animated GIF and WebP open as animations, decoded without FFmpeg; videos, GIFs and animated WebPs export to MP4, MKV, WebM, GIF or animated WebP.
+- Animated GIF and WebP open as animations, decoded without FFmpeg; videos, GIFs and animated WebPs export to MP4, MKV, WebM, GIF, animated WebP or animated PNG.
+- Lossless outputs: animated PNG, written without FFmpeg in the web app, and **Lossless** MKV video in FFV1, both keeping every pixel of the CRT exactly.
 - **File → Video test card** opens ten seconds of original side-scrolling pixel-art gameplay at 256x224 and 60 frames per second, drawn by the app, to see a look on moving pixels before exporting it. It opens and plays without a file or FFmpeg, and exports like an opened animation.
 - The original curved screen, ray-traced as the sphere its mesh was cut from, with the same UVs and normals, and the mesh's own outline and edge shading baked across its UVs; the original bezel, baked from its mesh with its colors, normals, UVs and reflection weights and traced the same way, so both draw in one full-screen pass.
 - Composite artifacts, horizontal ringing, separate RGB persistence, shadow mask, lighting, edge reflections and bloom.
@@ -162,7 +163,7 @@ Vulkan/DX12/Metal implementation will show a compatible-adapter error; it is not
 The same app runs in a browser with WebGPU, as the web app. It opens images, animated GIF or
 WebP, and MP4, MOV, WebM or MKV videos you pick or drop on the page (the videos decoded by the
 browser, so the codecs are the browser's), previews and plays them, and saves PNGs, MP4 and WebM videos (encoded by the browser, so the
-formats offered are those it can write), GIF and animated WebP exports and presets as downloads;
+formats offered are those it can write), GIF, animated WebP and animated PNG exports and presets as downloads;
 its settings, presets and session stay in the browser. Its MP4 and WebM exports embed the
 preset as the desktop's do, and **Import preset from Image/Video…** reads one back from a PNG,
 MP4 or WebM, made by either app. Projects and batch export are
@@ -211,7 +212,8 @@ Nothing is downloaded automatically.
    When a valid container frame count exists it is used immediately. Other files require one decoded-frame count on open. Exact seeks decode by ordinal from the start and can take time on long videos; loading/seeking is cancellable.
 3. Choose output resolution and video timing: source-rate stable artifacts (default), 60 Hz alternating artifacts, or persistence off.
 4. Choose **Export → Video…**. A separate window explains MP4/H.264, MKV/H.264 and WebM/VP9, with quality/audio controls and optional advanced encoding settings,
-   and offers GIF and animated WebP with their own size, frame-rate and length settings and a file-size estimate. Then choose the destination.
+   and offers GIF, animated WebP and animated PNG with their own size, frame-rate and length settings and a file-size estimate.
+   For MKV, **Picture quality → Lossless** writes FFV1 that keeps every pixel exactly. Then choose the destination.
 
 The compact toolbar groups media/projects under **File**, gallery/imports under **Presets**, themes under **View**, rendering under **Export**, and credits and the update check under **Help**. Video previews are silent; audio is retained in exports unless explicitly muted.
 
@@ -225,7 +227,7 @@ closing the app also terminates its FFmpeg processes. Existing destinations are 
 Temporary encoded files require space on the destination drive, but decoded frames are streamed rather than saved as PNGs.
 Settings and the source are captured for each export; edits during export apply to the next job, and the preview keeps up with them while the export runs.
 
-Output is opaque SDR with software or optional hardware H.264 encoding. Video is explicitly converted from full-range RGB to limited-range BT.709 and tagged accordingly. HDR input uses FFmpeg's `zscale`/`tonemap` filters when available; HDR output remains outside this version.
+Output is opaque SDR with software or optional hardware H.264 encoding. Video is explicitly converted from full-range RGB to limited-range BT.709 and tagged accordingly, except Lossless, which keeps full-range RGB in FFV1 and is tagged as RGB. HDR input uses FFmpeg's `zscale`/`tonemap` filters when available; HDR output remains outside this version.
 Audio tracks, supported subtitles, chapters and source metadata are preserved by default; MKV also supports attachments. The export window lists the subtitle tracks, to keep each as a track of its own or not, and to draw one into the picture, through the CRT, instead of leaving it for the player to draw on top. See the [workflow guide](docs/WORKFLOW.md) for container limits and quality profiles.
 MP4/MKV/WebM exports embed an importable preset in a container comment, including the original controls and video timing/audio settings.
 PNG exports still embed importable presets. Full details and validation commands are in [VIDEO_PIPELINE.md](docs/VIDEO_PIPELINE.md).

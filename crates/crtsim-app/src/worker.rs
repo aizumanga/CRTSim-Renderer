@@ -1074,7 +1074,7 @@ async fn export_animation_here(
 ) -> Result<()> {
     use crtsim_media::jobs;
     let format = crtsim_media::AnimationFormat::of(path)
-        .ok_or_else(|| anyhow::anyhow!("Choose a GIF or WebP filename"))?;
+        .ok_or_else(|| anyhow::anyhow!("Choose a GIF, WebP or PNG filename"))?;
     let renderer = graphics.renderer(|| {}).await?;
     let bytes = jobs::export_animation(
         video,
@@ -1094,6 +1094,7 @@ async fn export_animation_here(
     let mime = match format {
         crtsim_media::AnimationFormat::Gif => "image/gif",
         crtsim_media::AnimationFormat::Webp => "image/webp",
+        crtsim_media::AnimationFormat::Apng => "image/png",
     };
     save(path, &bytes, mime)
 }
