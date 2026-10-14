@@ -296,6 +296,7 @@ impl EncoderSettings {
             crate::Quality::Balanced => 0.1,
             crate::Quality::High => 0.16,
             crate::Quality::Archival => 0.3,
+            crate::Quality::Lossless => bail!("Lossless video is written by FFmpeg, as MKV"),
         } * if container == Container::Webm {
             0.75
         } else {
@@ -964,6 +965,15 @@ mod tests {
             let decoder = image_webp::WebPDecoder::new(std::io::Cursor::new(&webp)).unwrap();
             assert_eq!((decoder.dimensions(), decoder.num_frames()), ((64, 64), 3));
         }
+        // An animated PNG keeps every pixel of every frame.
+        let apng = export(&video, AnimationFormat::Apng, &options).unwrap();
+        let decoder = image::codecs::png::PngDecoder::new(std::io::Cursor::new(&apng)).unwrap();
+        let frames: Vec<_> = decoder.apng().into_frames().map(Result::unwrap).collect();
+        let levels: Vec<u8> = frames
+            .iter()
+            .map(|f| f.buffer().get_pixel(9, 9)[0])
+            .collect();
+        assert_eq!(levels, [0, 60, 120]);
     }
 
     #[test]

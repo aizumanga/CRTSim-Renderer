@@ -53,7 +53,7 @@ impl<'a> ExportPlan<'a> {
     ) -> Result<Self> {
         let size = video_size(video, config, options)?;
         let container = Container::of(output).context("Choose an MP4, MKV or WebM filename")?;
-        let codec = options.encoder.codec(container)?;
+        let codec = options.codec(container)?;
         let rate = Rate::of(video, options);
         Ok(Self {
             video,
@@ -118,6 +118,31 @@ impl<'a> ExportPlan<'a> {
             "-c:v",
             self.codec,
         ]);
+        if self.options.quality == Quality::Lossless {
+            // The renderer's RGB exactly: no conversion to YUV, which rounds and halves color.
+            // FFV1 version 3 with every frame a keyframe and checksummed slices, as archives
+            // keep it.
+            cmd.args([
+                "-level",
+                "3",
+                "-g",
+                "1",
+                "-slicecrc",
+                "1",
+                "-pix_fmt",
+                "bgr0",
+                "-color_primaries",
+                "bt709",
+                "-color_trc",
+                "iec61966-2-1",
+                "-colorspace",
+                "rgb",
+                "-color_range",
+                "pc",
+            ])
+            .arg(silent);
+            return cmd;
+        }
         self.rate_control(&mut cmd);
         // Renderer bytes are full-range RGB with BT.709/sRGB primaries. Make the RGB-to-YUV
         // matrix and legal range explicit, then tag the encoded stream for consistent playback.
@@ -183,7 +208,7 @@ impl<'a> ExportPlan<'a> {
             Quality::Draft => 6,
             Quality::Balanced => 12,
             Quality::High => 24,
-            Quality::Archival => 40,
+            Quality::Archival | Quality::Lossless => 40,
         };
         let (width, height) = self.size;
         let automatic = (mbps as f64

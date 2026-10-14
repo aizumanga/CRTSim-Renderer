@@ -12,11 +12,17 @@ The CRT shader, `shaders/crtsim.wgsl`, is a translation/adaptation of the shared
 
 Cargo.lock records the exact versions used by this prototype. Their own license terms remain applicable.
 Direct dependencies include wgpu/Naga, image, glam, bytemuck, serde/serde_json, anyhow, clap, pollster,
-eframe/egui, rfd, tempfile and directories. The desktop uses eframe's bundled fonts, which retain their upstream notices.
+eframe/egui, rfd, tempfile, directories and, for the update check, ureq with rustls (whose ring is Apache-2.0 AND ISC). The desktop uses eframe's bundled fonts, which retain their upstream notices.
 Before distributing binaries, collect the complete license texts for all transitive dependencies using a license-reporting tool such as cargo-about.
 This document is a development inventory, not a completed binary-distribution license bundle.
 `crates/crtsim-ports` runs the RetroArch port in tests through librashader (MPL-2.0 or GPL-3.0),
 with glslang and SPIRV-Cross; it is never packaged, and nothing that ships depends on it.
+
+## Bitmap font
+
+Contact sheets label their tiles with the printable ASCII characters of
+[font8x8](https://github.com/dhepper/font8x8) by Daniel Hepper, public domain, after Marcel Sondaar's font from IBM's
+public domain VGA fonts. The glyphs are embedded in `crates/crtsim-core/src/sheet.rs`.
 
 ## FFmpeg
 

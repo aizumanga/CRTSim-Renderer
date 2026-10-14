@@ -53,6 +53,21 @@ impl App {
                             ui.close();
                         }
                     }
+                    ui.separator();
+                    if ui
+                        .button("Copy link to this look")
+                        .on_hover_text(
+                            "A link that opens these settings in the web app, to share them.                              The link holds the whole look.",
+                        )
+                        .clicked()
+                    {
+                        self.copy_look_link(ctx);
+                        ui.close();
+                    }
+                    if ui.button("Open look from link…").clicked() {
+                        self.look_link = Some(String::new());
+                        ui.close();
+                    }
                 });
                 ui.menu_button("View", |ui| {
                     ui.label("Interface theme");
@@ -94,6 +109,16 @@ impl App {
                         ui.close();
                     }
                     if ui
+                        .button("Contact sheet…")
+                        .on_hover_text(
+                            "This picture through many looks at once, each named, in one PNG.",
+                        )
+                        .clicked()
+                    {
+                        self.show_contact_sheet();
+                        ui.close();
+                    }
+                    if ui
                         .button("RetroArch shader…")
                         .on_hover_text(
                             "These settings as a shader preset for RetroArch, drawn over a \
@@ -117,8 +142,28 @@ impl App {
                     }
                 });
             });
-            if ui.button("Credits").clicked() {
-                self.show_credits = true;
+            ui.menu_button("Help", |ui| {
+                if ui.button("Credits & support…").clicked() {
+                    self.show_credits = true;
+                    ui.close();
+                }
+                // A browser page is the latest release already.
+                #[cfg(not(target_arch = "wasm32"))]
+                if ui.button("Check for updates…").clicked() {
+                    self.show_updates(ctx);
+                    ui.close();
+                }
+            });
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(release) = self.updates.newer() {
+                let tag = release.tag.clone();
+                if ui
+                    .button(format!("⬆ {tag} is out"))
+                    .on_hover_text("A newer release is out. See what changed and where to get it.")
+                    .clicked()
+                {
+                    self.updates.open = true;
+                }
             }
         });
     }

@@ -13,6 +13,7 @@ use std::{
 
 const WELCOME: &str = "welcome-v1.txt";
 const THEME: &str = "theme-v1.txt";
+const UPDATES: &str = "updates-v1.txt";
 const WINDOWS: &str = "windows-v1.json";
 const PRESETS: &str = "presets";
 const RECENT: &str = "recent-projects-v1.json";
@@ -197,6 +198,20 @@ impl Store {
 
     pub fn set_theme(&self, theme: Theme) -> Result<()> {
         self.write(THEME, format!("{}\n", theme.id()).as_bytes())
+    }
+
+    /// Whether the person asked for a check for updates each time the app starts. Until they
+    /// do, the app never reaches the network by itself (ADR 4).
+    pub fn check_updates_at_start(&self) -> bool {
+        self.read(UPDATES, 64, "").ok().flatten().as_deref() == Some(b"check-at-start\n")
+    }
+
+    pub fn set_check_updates_at_start(&self, check: bool) -> Result<()> {
+        if check {
+            self.write(UPDATES, b"check-at-start\n")
+        } else {
+            self.remove(UPDATES)
+        }
     }
 
     /// Tool window placements from the last run, keyed by window title.
@@ -431,6 +446,19 @@ mod tests {
 
     fn store(root: &Path) -> Store {
         Store::in_folder(root)
+    }
+
+    #[test]
+    fn checking_for_updates_at_start_is_off_until_chosen() {
+        let temp = tempfile::tempdir().unwrap();
+        let s = store(temp.path());
+        assert!(!s.check_updates_at_start());
+        s.set_check_updates_at_start(true).unwrap();
+        assert!(store(temp.path()).check_updates_at_start());
+        s.set_check_updates_at_start(false).unwrap();
+        assert!(!s.check_updates_at_start());
+        // Turning it off when it was never on is not an error.
+        s.set_check_updates_at_start(false).unwrap();
     }
 
     #[test]

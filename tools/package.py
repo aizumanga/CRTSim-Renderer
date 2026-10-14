@@ -63,6 +63,11 @@ for source, destination in [
 # it runs the shader ports with, are never built into a package.
 metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--format-version', '1']))
 nodes = {node['id']: node for node in metadata['resolve']['nodes']}
+# The app's own version, as it reports it in its status bar and compares with the latest release
+# when asked to check for updates. A release tag must name that same version.
+app_version = next(p['version'] for p in metadata['packages'] if p['name'] == 'crtsim-app' and p['source'] is None)
+if args.version.startswith('v') and args.version != f'v{app_version}':
+    raise SystemExit(f'Release {args.version} does not match the version in Cargo.toml, {app_version}')
 shipped = set()
 pending = [p['id'] for p in metadata['packages'] if p['name'] in ('crtsim-app', 'crtsim-cli') and p['source'] is None]
 while pending:
@@ -124,8 +129,8 @@ if args.platform == 'macos-arm64':
     with (app / 'Info.plist').open('wb') as output:
         plistlib.dump({'CFBundleName': 'CRTSim Renderer', 'CFBundleDisplayName': 'CRTSim Renderer',
                       'CFBundleIdentifier': 'org.crtsim.renderer', 'CFBundleExecutable': 'crtsim-desktop',
-                      'CFBundlePackageType': 'APPL', 'CFBundleVersion': '1',
-                      'CFBundleShortVersionString': '0.1.1', 'NSHighResolutionCapable': True}, output)
+                      'CFBundlePackageType': 'APPL', 'CFBundleVersion': app_version,
+                      'CFBundleShortVersionString': app_version, 'NSHighResolutionCapable': True}, output)
     # Ad-hoc signing permits execution on Apple Silicon; it is not Developer ID signing/notarization.
     subprocess.run(['codesign', '--force', '--deep', '--sign', '-', str(app.parent)], check=True)
 if exe or web:

@@ -2,7 +2,7 @@ use anyhow::{ensure, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use crtsim_core::{
     config::{self, Config, Phase},
-    mesh, retroarch, PrepareOn, Renderer, Sequence,
+    mesh, presets, retroarch, sheet, PrepareOn, Renderer, Sequence,
 };
 use image::{DynamicImage, ImageOutputFormat};
 use std::{
@@ -14,7 +14,7 @@ use std::{
 #[derive(Parser)]
 #[command(
     version,
-    about = "Headless CRTSim still-image renderer. The desktop app renders video."
+    about = "Headless CRTSim renderer for images, videos and animations."
 )]
 struct Args {
     #[command(subcommand)]
@@ -22,15 +22,21 @@ struct Args {
 }
 #[derive(Subcommand)]
 enum Command {
-    /// Render an image, or the built-in original test card if --input is omitted.
+    /// Render an image, video or animation; the built-in test card, or the video test card for
+    /// a moving output, if --input is omitted. The output's extension picks what is made:
+    /// .mp4, .mkv or .webm a video; .gif or .webp an animation; .png a still, or an animated
+    /// PNG of a moving input. Video and animation output, and video input, need FFmpeg.
     Render {
         #[arg(short, long)]
         input: Option<PathBuf>,
         #[arg(short, long)]
         output: PathBuf,
         /// JSON overrides; omitted fields use the public-reference defaults.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "preset")]
         config: Option<PathBuf>,
+        /// An included preset by name, such as "NTSC 240p"; `presets` lists them.
+        #[arg(long)]
+        preset: Option<String>,
         /// original, auto, native, 240p, 288p, 360p, 480p, 576p or WIDTHxHEIGHT
         #[arg(long)]
         signal: Option<String>,
@@ -48,12 +54,36 @@ enum Command {
         /// original implementation, for comparing the two.
         #[arg(long, value_enum, default_value = "gpu")]
         prepare: PrepareArg,
-        /// Save clean.png, signal.png and settings.json into a NEW directory.
+        /// Save clean.png, signal.png and settings.json into a NEW directory. Stills only.
         #[arg(long)]
         debug_dir: Option<PathBuf>,
+        #[command(flatten)]
+        moving: Moving,
     },
-    /// Print the resolution presets. Sizes never select image type automatically.
+    /// Print the included presets and the resolution presets.
     Presets,
+    /// Render one image through many looks into a labelled grid, to compare them: every
+    /// included preset, or the looks given.
+    ContactSheet {
+        /// The image; the built-in test card if omitted.
+        #[arg(short, long)]
+        input: Option<PathBuf>,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// An included preset to show, by name; repeat for more.
+        #[arg(long = "preset", value_name = "NAME")]
+        presets: Vec<String>,
+        /// Your own look to show, as NAME=SETTINGS.json; repeat for more.
+        #[arg(long = "look", value_name = "NAME=SETTINGS.json")]
+        looks: Vec<String>,
+        /// Each tile's size, WIDTHxHEIGHT.
+        #[arg(long, default_value = "480x360")]
+        tile: String,
+        #[arg(long, default_value_t = 4)]
+        columns: u32,
+        #[arg(long, value_enum, default_value = "auto")]
+        backend: Backend,
+    },
     /// Write a starting configuration. Never overwrites an existing file.
     Config {
         #[arg(short, long)]
@@ -75,6 +105,67 @@ enum Command {
         #[arg(long)]
         export_dir: Option<PathBuf>,
     },
+}
+/// How a video or animation is made.
+#[derive(clap::Args)]
+#[command(next_help_heading = "Videos and animations")]
+struct Moving {
+    /// Video quality; lossless is FFV1 and needs .mkv.
+    #[arg(long, value_enum, default_value = "balanced")]
+    quality: QualityArg,
+    /// stable: the source's rate, artifacts held still; ntsc60: 60 per second, alternating
+    /// (videos only); off: no glow carried between frames.
+    #[arg(long, value_enum, default_value = "stable")]
+    timing: TimingArg,
+    /// Video audio: keep it where the container holds it, re-encode it, or leave it out.
+    #[arg(long, value_enum, default_value = "auto")]
+    audio: AudioArg,
+    /// Video encoder; hardware ones write H.264 to .mp4 or .mkv.
+    #[arg(long, value_enum, default_value = "software")]
+    encoder: EncoderArg,
+    /// Animations: frames per second (GIF up to 30, WebP and PNG up to 60).
+    #[arg(long, default_value_t = 24)]
+    fps: u32,
+    /// Animations: the CRT canvas's longest side, in pixels.
+    #[arg(long, default_value_t = 640)]
+    max_side: u32,
+    /// Animations: where in the source to start, in seconds.
+    #[arg(long, default_value_t = 0.)]
+    start: f64,
+    /// Animations: at most this many seconds; 0 for the rest of the source.
+    #[arg(long, default_value_t = 10.)]
+    seconds: f64,
+    /// Lossless WebP animation.
+    #[arg(long)]
+    lossless: bool,
+}
+#[derive(Clone, Copy, ValueEnum)]
+enum QualityArg {
+    Draft,
+    Balanced,
+    High,
+    Archival,
+    Lossless,
+}
+#[derive(Clone, Copy, ValueEnum)]
+enum TimingArg {
+    Stable,
+    Ntsc60,
+    Off,
+}
+#[derive(Clone, Copy, ValueEnum)]
+enum AudioArg {
+    Auto,
+    Encode,
+    Mute,
+}
+#[derive(Clone, Copy, ValueEnum)]
+enum EncoderArg {
+    Software,
+    Nvenc,
+    Qsv,
+    Amf,
+    Videotoolbox,
 }
 #[derive(Clone, Copy, ValueEnum)]
 enum Backend {
@@ -114,9 +205,178 @@ fn save_png(path: &Path, img: image::RgbaImage) -> Result<()> {
     file.flush()?;
     Ok(())
 }
+/// The included preset called `name`, or an error listing them.
+fn preset(name: &str) -> Result<Config> {
+    presets::named(name).map(|p| p.config).with_context(|| {
+        let names: Vec<_> = presets::included().iter().map(|p| p.name).collect();
+        format!(
+            "No included preset is called {name:?}. They are: {}",
+            names.join(", ")
+        )
+    })
+}
+
+/// Looks given as NAME=SETTINGS.json.
+fn looks_from_files(looks: &[String]) -> Result<Vec<(String, Config)>> {
+    looks
+        .iter()
+        .map(|look| {
+            let (name, path) = look
+                .split_once('=')
+                .context("Give each look as NAME=SETTINGS.json")?;
+            let bytes = fs::read(path).with_context(|| format!("Cannot read {path}"))?;
+            Ok((name.to_string(), Config::from_json_slice(&bytes)?))
+        })
+        .collect()
+}
+
+fn renderer(backend: Backend) -> Result<Renderer> {
+    let backends = match backend {
+        Backend::Auto => wgpu::Backends::PRIMARY,
+        Backend::Vulkan => wgpu::Backends::VULKAN,
+        Backend::Dx12 => wgpu::Backends::DX12,
+        Backend::Metal => wgpu::Backends::METAL,
+    };
+    let renderer = pollster::block_on(Renderer::new(backends))?;
+    eprintln!(
+        "Adapter: {} ({:?}, {:?})",
+        renderer.adapter.name, renderer.adapter.backend, renderer.adapter.device_type
+    );
+    Ok(renderer)
+}
+
+/// The image at `input`, or the built-in test card.
+fn source(input: Option<&Path>) -> Result<image::RgbaImage> {
+    match input {
+        Some(path) => crtsim_core::input::load_image(path),
+        None => Ok(config::test_card()),
+    }
+}
+
+/// What a render makes, by its output's extension and whether its input moves.
+enum Making {
+    Still,
+    Video,
+    Animation,
+}
+
+fn making(input: Option<&Path>, output: &Path) -> Result<Making> {
+    let moving = input.is_some_and(|i| crtsim_media::MediaKind::of(i).is_moving());
+    if crtsim_media::Container::of(output).is_some() {
+        Ok(Making::Video)
+    } else if let Some(format) = crtsim_media::AnimationFormat::of(output) {
+        Ok(match format {
+            crtsim_media::AnimationFormat::Apng if !moving => Making::Still,
+            _ => Making::Animation,
+        })
+    } else {
+        anyhow::bail!("The output must be .png, .mp4, .mkv, .webm, .gif or .webp")
+    }
+}
+
+/// Renders a video or an animation of `input`, or of the video test card.
+fn render_moving(
+    input: Option<&Path>,
+    output: &Path,
+    config: &Config,
+    moving: &Moving,
+    animation: bool,
+    backend: Backend,
+) -> Result<()> {
+    use crtsim_media::{AnimationOptions, Audio, Encoder, Options, Quality, Timing};
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let video = match input {
+        Some(path) => crtsim_media::probe(path, &cancel)?,
+        None => crtsim_media::test_clip(),
+    };
+    let timing = match moving.timing {
+        TimingArg::Stable => Timing::Stable,
+        TimingArg::Ntsc60 => Timing::Ntsc60,
+        TimingArg::Off => Timing::Disabled,
+    };
+    eprintln!(
+        "Input {}x{} at {:.3} frames per second, {:.2}s",
+        video.size.0, video.size.1, video.fps, video.duration
+    );
+    let renderer = renderer(backend)?;
+    let started = std::time::Instant::now();
+    // Each stage once, and its progress in whole tenths.
+    let mut said = (String::new(), -1);
+    let progress = |p: crtsim_media::Progress| {
+        let tenth = (p.fraction * 10.).floor() as i32;
+        if p.stage != said.0 || tenth != said.1 {
+            eprintln!("{:3.0}% {}", p.fraction * 100., p.stage);
+            said = (p.stage, tenth);
+        }
+    };
+    if animation {
+        let options = AnimationOptions {
+            max_side: moving.max_side,
+            fps: moving.fps,
+            timing,
+            start: moving.start,
+            max_seconds: (moving.seconds > 0.).then_some(moving.seconds),
+            lossless: moving.lossless,
+            ..AnimationOptions::default()
+        };
+        crtsim_media::export_animation(
+            &video, output, config, &options, &renderer, &cancel, progress,
+        )?;
+    } else {
+        let options = Options {
+            timing,
+            audio: match moving.audio {
+                AudioArg::Auto => Audio::Auto,
+                AudioArg::Encode => Audio::Encode,
+                AudioArg::Mute => Audio::Mute,
+            },
+            quality: match moving.quality {
+                QualityArg::Draft => Quality::Draft,
+                QualityArg::Balanced => Quality::Balanced,
+                QualityArg::High => Quality::High,
+                QualityArg::Archival => Quality::Archival,
+                QualityArg::Lossless => Quality::Lossless,
+            },
+            encoder: match moving.encoder {
+                EncoderArg::Software => Encoder::Software,
+                EncoderArg::Nvenc => Encoder::Nvenc,
+                EncoderArg::Qsv => Encoder::Qsv,
+                EncoderArg::Amf => Encoder::Amf,
+                EncoderArg::Videotoolbox => Encoder::VideoToolbox,
+            },
+            ..Options::default()
+        };
+        options.validate()?;
+        crtsim_media::export(
+            &video, output, config, &options, &renderer, &cancel, progress,
+        )?;
+    }
+    eprintln!(
+        "Saved {} in {:.2}s",
+        output.display(),
+        started.elapsed().as_secs_f64()
+    );
+    Ok(())
+}
+
+fn ensure_new_png(output: &Path) -> Result<()> {
+    ensure!(!output.exists(), "Output already exists; choose a new path");
+    ensure!(
+        output
+            .extension()
+            .is_some_and(|s| s.eq_ignore_ascii_case("png")),
+        "The output must be a .png"
+    );
+    Ok(())
+}
+
 fn main() -> Result<()> {
     match Args::parse().command {
         Command::Presets => {
+            println!("Included presets, for render --preset and contact-sheet --preset:");
+            for preset in presets::included() {
+                println!("  {}: {}", preset.name, preset.description);
+            }
             println!("Signal: original (256x224), auto (up to 480 rows, preserves aspect), native, 240p, 288p, 360p, 480p, 576p, WIDTHxHEIGHT\nOutput: reference (1600x900), 720p, 1080p, 1440p, 4k, match-input, WIDTHxHEIGHT\nUse config --general for square-pixel images and contain fitting. Default is CRTSim Reference.");
         }
         Command::Config { output, general } => {
@@ -132,23 +392,73 @@ fn main() -> Result<()> {
             let looks = if looks.is_empty() {
                 retroarch::shipped()
             } else {
-                looks
-                    .iter()
-                    .map(|look| {
-                        let (name, path) = look
-                            .split_once('=')
-                            .context("Give each look as NAME=SETTINGS.json")?;
-                        let bytes =
-                            fs::read(path).with_context(|| format!("Cannot read {path}"))?;
-                        Ok((name.to_string(), Config::from_json_slice(&bytes)?))
-                    })
-                    .collect::<Result<_>>()?
+                looks_from_files(&looks)?
             };
             let looks: Vec<_> = looks.iter().map(|(name, c)| (name.as_str(), c)).collect();
             retroarch::write(&output_dir, &retroarch::export(&looks)?)?;
             for (name, _) in &looks {
                 println!("{}", output_dir.join(format!("{name}.slangp")).display());
             }
+        }
+        Command::ContactSheet {
+            input,
+            output,
+            presets: names,
+            looks,
+            tile,
+            columns,
+            backend,
+        } => {
+            ensure_new_png(&output)?;
+            let size = |text: &str| -> Option<(u32, u32)> {
+                let (w, h) = text.split_once('x')?;
+                Some((w.parse().ok()?, h.parse().ok()?))
+            };
+            let tile = size(&tile)
+                .filter(|&(w, h)| (16..=4096).contains(&w) && (16..=4096).contains(&h))
+                .context("--tile must be WIDTHxHEIGHT, each 16 to 4096 pixels")?;
+            let mut chosen: Vec<sheet::Look> = names
+                .iter()
+                .map(|name| {
+                    Ok(sheet::Look {
+                        name: presets::named(name).map_or(name.clone(), |p| p.name.into()),
+                        config: preset(name)?,
+                    })
+                })
+                .collect::<Result<_>>()?;
+            chosen.extend(
+                looks_from_files(&looks)?
+                    .into_iter()
+                    .map(|(name, config)| sheet::Look { name, config }),
+            );
+            if chosen.is_empty() {
+                chosen = presets::included()
+                    .into_iter()
+                    .map(|p| sheet::Look {
+                        name: p.name.into(),
+                        config: p.config,
+                    })
+                    .collect();
+            }
+            let src = source(input.as_deref())?;
+            let renderer = renderer(backend)?;
+            let started = std::time::Instant::now();
+            let count = chosen.len();
+            let made = pollster::block_on(sheet::render(
+                &renderer,
+                &src,
+                &chosen,
+                tile,
+                columns,
+                None,
+                |done| eprintln!("Rendered {done} of {count}: {}", chosen[done - 1].name),
+            ))?;
+            save_png(&output, made)?;
+            eprintln!(
+                "Saved {} in {:.2}s",
+                output.display(),
+                started.elapsed().as_secs_f64()
+            );
         }
         Command::InspectMeshes { export_dir } => {
             if let Some(ref dir) = export_dir {
@@ -173,6 +483,7 @@ fn main() -> Result<()> {
             input,
             output,
             config,
+            preset: preset_name,
             signal,
             size,
             phase,
@@ -180,19 +491,20 @@ fn main() -> Result<()> {
             backend,
             prepare,
             debug_dir,
+            moving,
         } => {
+            let making = making(input.as_deref(), &output)?;
             ensure!(!output.exists(), "Output already exists; choose a new path");
-            ensure!(
-                output
-                    .extension()
-                    .is_some_and(|s| s.eq_ignore_ascii_case("png")),
-                "Phase 0 output must use .png"
-            );
+            if !matches!(making, Making::Still) {
+                ensure!(debug_dir.is_none(), "--debug-dir is for stills");
+            }
             if let Some(ref dir) = debug_dir {
                 ensure!(!dir.exists(), "debug directory must be new");
             }
             let mut c = if let Some(path) = config {
                 Config::from_json_slice(&fs::read(path)?)?
+            } else if let Some(name) = preset_name {
+                preset(&name)?
             } else {
                 Config::default()
             };
@@ -214,11 +526,11 @@ fn main() -> Result<()> {
                 };
             }
             c.validate()?;
-            let src = if let Some(path) = input {
-                crtsim_core::input::load_image(&path)?
-            } else {
-                config::test_card()
-            };
+            if let Making::Video | Making::Animation = making {
+                let animation = matches!(making, Making::Animation);
+                return render_moving(input.as_deref(), &output, &c, &moving, animation, backend);
+            }
+            let src = source(input.as_deref())?;
             let sig = c.signal_size(src.dimensions())?;
             let out = c.output_size(src.dimensions())?;
             eprintln!(
@@ -231,21 +543,11 @@ fn main() -> Result<()> {
                 out.1,
                 c.warmup + 1
             );
-            let backends = match backend {
-                Backend::Auto => wgpu::Backends::PRIMARY,
-                Backend::Vulkan => wgpu::Backends::VULKAN,
-                Backend::Dx12 => wgpu::Backends::DX12,
-                Backend::Metal => wgpu::Backends::METAL,
-            };
-            let mut renderer = pollster::block_on(Renderer::new(backends))?;
+            let mut renderer = renderer(backend)?;
             renderer.prepare = match prepare {
                 PrepareArg::Gpu => PrepareOn::Gpu,
                 PrepareArg::Cpu => PrepareOn::Cpu,
             };
-            eprintln!(
-                "Adapter: {} ({:?}, {:?})",
-                renderer.adapter.name, renderer.adapter.backend, renderer.adapter.device_type
-            );
             let started = std::time::Instant::now();
             let mut sequence = Sequence::still();
             pollster::block_on(renderer.frame(&mut sequence, &src, &c, None, |_| {}))?;

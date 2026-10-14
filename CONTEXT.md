@@ -65,6 +65,10 @@ With it off, edits wait for Refresh.
 An audition is previewed whether or not live preview is on, and never reaches the settings,
 their undo history or an export.
 
+**Pinned look**: a settled preview and its settings, kept to compare later settings with in
+Compare (`Preview::pin`). It is the same picture on screen when it was pinned, not rendered
+again, so another source unpins it.
+
 **Timeline**: where the editor is in an open video: the frame on screen, the frame the
 controls have picked to go to, and the time playing starts from
 (`crates/crtsim-app/src/timeline.rs`). There is one only while a video or animation is open.
@@ -98,6 +102,13 @@ project or session holding it opens it again.
 **Colour table**: the LUT or the NES palette a look maps colours through before the CRT. A look
 has one at most; choosing either replaces the other (`Config::set_lut`, `Config::set_palette`).
 
+**Contact sheet**: one picture rendered through many looks, as settled stills of one tile size,
+laid out in a grid with each look's name beneath it in an 8x8 bitmap font
+(`crtsim_core::sheet`; the app's window is `sheet_ui.rs`, the CLI's `contact-sheet`).
+
+**Included presets**: the looks the gallery offers and `crtsim render --preset` names
+(`crtsim_core::presets`). Personal presets are the app's own.
+
 **Preset gallery** and **LUT gallery**: the windows offering looks to audition and apply
 (`gallery.rs` and `lut_gallery.rs`). The preset gallery also saves the settings in use as a
 personal preset; the LUT gallery decodes each included LUT once and shares it.
@@ -116,6 +127,10 @@ the test card, the video test card, a file on disk, a file a browser handed over
 project's source that is missing or could not be opened, with the test card in its place. A
 video's comes with its timeline. A project opens its source first and is held until that has
 loaded; then its settings and queue apply, whether the source opened or not.
+
+**Look link**: a link to the web app whose `#look=` fragment holds a look, deflated, with an
+included NES LUT by name (`crates/crtsim-app/src/look_link.rs`). Opening it applies the look as
+an undoable change. A look with an imported LUT has no link.
 
 **Incoming file**: a file picked or dropped for a LUT or a preset, read the same way whether it
 came as a path on the desktop or as a browser's name and bytes, with one size limit for each
@@ -144,6 +159,11 @@ a frame source (FFmpeg, the browser's decoder, or an animation decoded here), re
 handed on, to the preview or to an **output** that makes the file (FFmpeg on the desktop,
 the browser's encoders or the GIF and WebP writers on a page). The desktop drives the same
 loops from its worker thread.
+
+**Update check**: asking GitHub whether a newer release than this one is published, when a
+person chooses Help → Check for updates, or at each start once they have turned that on
+(`crates/crtsim-app/src/updates.rs`). It tells; it never downloads a release, which package
+managers and AppImage tools do instead. See [the decision](docs/adr/0004-check-for-updates-never-download-them.md).
 
 **Web app**: the whole app, with editing, the galleries, playback and exports, running in a
 browser from the author's Neocities site. It is not a cut-down demo: what the desktop app does

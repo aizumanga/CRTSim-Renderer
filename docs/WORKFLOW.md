@@ -1,6 +1,6 @@
 # v0.2 workflow
 
-The toolbar groups commands under **File**, **Presets**, **View** and **Export**, followed by Credits.
+The toolbar groups commands under **File**, **Presets**, **View**, **Export** and **Help**, which holds the credits and, on the desktop, the update check.
 File contains media and project commands; Presets contains the gallery and imports; View contains interface themes.
 Export contains PNG, video and batch queue commands.
 
@@ -97,9 +97,9 @@ Leave overrides off to use the quality profile. Selecting another profile resets
 because H.264 and VP9 use different quality scales. WebM always uses software VP9.
 The batch queue has its own **Video settings…** window for new jobs; existing jobs keep their settings.
 
-## GIF and animated WebP
+## GIF, animated WebP and animated PNG
 
-The same window offers **GIF** and **Animated WebP**, neither with sound. Both grow quickly with size, rate and length,
+The same window offers **GIF**, **Animated WebP** and **Animated PNG**, none with sound. All grow quickly with size, rate and length,
 so their defaults are small: the CRT is rendered with its longest side at 640 pixels, at 24 frames per second, for the
 first 10 seconds. The CRT is rendered at that size rather than scaled down afterwards, which would turn the mask and
 scanlines into moiré. **Start at the frame shown** begins at the frame on screen; **Only the first … s** limits the length.
@@ -111,10 +111,14 @@ animation, so the frames are first encoded losslessly to a temporary file next t
 how much space that needs. Dithering can be a pattern (smallest), diffusion (smoother) or none (banding).
 Animated WebP allows up to 60 frames per second and is usually several times smaller, with full color. Lossy WebP
 stores color at half resolution, softening the mask's colored stripes; **Lossless** keeps them at a larger size.
+Animated PNG allows up to 60 frames per second and keeps every pixel exactly as rendered, in a `.png` that browsers
+play and other viewers show as its first frame: the largest of the three, for editing or archiving a clip. FFmpeg's
+APNG encoder is built in, so any FFmpeg writes it, and the web app writes it without FFmpeg. A PNG still opens as a
+still image, not as an animation.
 
 Below the settings the window shows the rendered size, the frame count and a likely size range, from still scenes
 (low) to busy footage with room to spare (high). Above 25 MB the estimate turns amber and names what shrinks the file
-most, and choosing a destination asks once more. GIF and WebP files do not store the renderer preset.
+most, and choosing a destination asks once more. GIF, WebP and animated PNG files do not store the renderer preset.
 
 ## Keyboard
 
@@ -124,7 +128,10 @@ whole-number sliders by at least one. **Delete** or **Backspace** returns it to 
 **Esc** or a click elsewhere lets go; until then the arrows no longer step video frames. Holding a key is one undo step.
 
 Draft, Balanced, High and Archival select software CRF 26/18/14/10 for H.264 and 32/24/20/16 for VP9.
-Archival is a high-quality lossy profile. Hardware H.264 choices are NVIDIA NVENC, Intel Quick Sync, AMD AMF and Apple VideoToolbox.
+Archival is a high-quality lossy profile. **Lossless**, offered for MKV on the desktop, writes the CRT's RGB exactly in
+FFV1 (version 3, every frame a keyframe, checksummed slices), without the conversion to limited-range YUV 4:2:0 the
+other profiles make: for editing and archiving, at many times Archival's size, and not every player plays FFV1.
+Hardware H.264 choices are NVIDIA NVENC, Intel Quick Sync, AMD AMF and Apple VideoToolbox.
 They use resolution/frame-rate-scaled bitrate targets; the selected encoder is tested before rendering starts.
 Availability depends on FFmpeg, driver and hardware. Unsupported selections produce an error; choose Software to retry.
 WebM uses software VP9. Actual hardware throughput and visual quality require testing on the target machine.

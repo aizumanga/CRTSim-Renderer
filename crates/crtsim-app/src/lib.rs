@@ -16,6 +16,7 @@ mod gallery;
 mod gallery_ui;
 mod incoming;
 mod lane;
+mod look_link;
 mod lut_gallery;
 mod model;
 #[cfg(not(target_arch = "wasm32"))]
@@ -26,12 +27,15 @@ mod preview_ui;
 mod project;
 mod session;
 mod settings_ui;
+mod sheet_ui;
 mod smoke;
 mod source;
 mod theme;
 mod thumbnails;
 mod timeline;
 mod toolbar;
+#[cfg(not(target_arch = "wasm32"))]
+mod updates;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
 #[cfg(target_arch = "wasm32")]
@@ -87,7 +91,12 @@ struct App {
     luts: lut_gallery::LutGallery,
     /// Whether FFmpeg is there for video work, and how to install it.
     ffmpeg: ffmpeg_setup::FfmpegSetup,
+    /// Whether a newer release is out, checked when asked.
+    #[cfg(not(target_arch = "wasm32"))]
+    updates: updates::Updates,
     thumbnails: thumbnails::Thumbnails,
+    /// The contact sheet window and what the next sheet holds.
+    sheet: sheet_ui::ContactSheet,
     tool_windows: app_data::Layout,
     tool_windows_saved: app_data::Layout,
     config: Config,
@@ -110,6 +119,8 @@ struct App {
     /// Whether a video plays again from the start when it ends.
     loop_playback: bool,
     dialog_open: bool,
+    /// The link typed into Open look from link, while that window is open.
+    look_link: Option<String>,
     jobs: worker::Jobs,
     events: mpsc::Receiver<Event>,
     dialog_send: mpsc::Sender<dialogs::Answer>,
@@ -229,7 +240,10 @@ impl App {
             presets,
             luts,
             ffmpeg: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            updates: Default::default(),
             thumbnails: Default::default(),
+            sheet: Default::default(),
             tool_windows_saved: tool_windows.clone(),
             tool_windows,
             history: model::History::new(config.clone()),
@@ -245,6 +259,7 @@ impl App {
             fit_preview: true,
             loop_playback: false,
             dialog_open: false,
+            look_link: None,
             jobs,
             events,
             dialog_send,
@@ -254,6 +269,8 @@ impl App {
             smoke,
         };
         app.ffmpeg.start_check(ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        app.check_for_updates_at_start(ctx);
         app.load_session(input_path.is_some());
         if let Some(path) = input_path {
             app.load(path);
@@ -600,6 +617,14 @@ impl eframe::App for App {
         self.lut_gallery_window(ctx);
         self.credits_window(ctx);
         self.ffmpeg_window(ctx);
+        self.look_link_window(ctx);
+        self.contact_sheet_window(ctx);
+        #[cfg(target_arch = "wasm32")]
+        if !self.modal_open() {
+            self.look_from_address_bar();
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.updates_window(ctx);
         let now = Instant::now();
         let pointer_down = ctx.input(|i| i.pointer.any_down());
         let may_preview = self.may_preview();

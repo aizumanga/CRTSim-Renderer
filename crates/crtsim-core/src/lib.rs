@@ -8,9 +8,11 @@ pub mod input;
 pub mod mesh;
 pub mod nes_luts;
 pub mod palette;
+pub mod presets;
 pub mod retroarch;
 mod sequence;
 pub mod settings;
+pub mod sheet;
 pub mod test_clip;
 #[cfg(test)]
 mod tests;

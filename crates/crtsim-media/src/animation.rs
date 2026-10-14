@@ -1,10 +1,10 @@
-//! Exporting to animated GIF and WebP: a small CRT canvas at a modest rate, since both formats
+//! Exporting to animated GIF, WebP and PNG: a small CRT canvas at a modest rate, since all three
 //! grow quickly with size, rate and length.
 //!
 //! A GIF holds 256 colors, chosen for the whole animation. The frames are first encoded
 //! losslessly to a temporary file, the palette is chosen from all of them, and then they are
 //! mapped to it. FFmpeg can do both in one pass only by holding every frame in memory.
-//! WebP is encoded directly.
+//! WebP and APNG are encoded directly; FFmpeg's APNG encoder is built in, so any FFmpeg has it.
 use crate::{
     export::{Encoding, Frames, Step, Work},
     tools::require_encoder,
@@ -75,7 +75,7 @@ impl AnimationFormat {
     pub fn max_fps(self) -> u32 {
         match self {
             Self::Gif => 30,
-            Self::Webp => 60,
+            Self::Webp | Self::Apng => 60,
         }
     }
 
@@ -83,6 +83,7 @@ impl AnimationFormat {
         match self {
             Self::Gif => "GIF",
             Self::Webp => "WebP",
+            Self::Apng => "APNG",
         }
     }
 
@@ -91,6 +92,7 @@ impl AnimationFormat {
         match self {
             Self::Gif => "gif",
             Self::Webp => "libwebp_anim",
+            Self::Apng => "apng",
         }
     }
 }
@@ -142,7 +144,7 @@ impl AnimationOptions {
             // The GIF's lossless FFV1 intermediate; WebP is written directly.
             temporary: match format {
                 AnimationFormat::Gif => (pixels * 2.) as u64,
-                AnimationFormat::Webp => 0,
+                AnimationFormat::Webp | AnimationFormat::Apng => 0,
             },
         })
     }
@@ -173,6 +175,7 @@ fn bytes_per_pixel(format: AnimationFormat, options: &AnimationOptions) -> (f64,
         },
         AnimationFormat::Webp if options.lossless => (0.02, 0.5),
         AnimationFormat::Webp => (0.001, 0.07),
+        AnimationFormat::Apng => (0.02, 1.),
     }
 }
 
@@ -260,7 +263,7 @@ impl Encoding for AnimationPlan<'_> {
     fn intermediate(&self) -> Option<&'static str> {
         match self.format {
             AnimationFormat::Gif => Some("mkv"),
-            AnimationFormat::Webp => None,
+            AnimationFormat::Webp | AnimationFormat::Apng => None,
         }
     }
 
@@ -295,13 +298,20 @@ impl Encoding for AnimationPlan<'_> {
                     "webp",
                 ]);
             }
+            // The CRT is opaque, so RGB; mixed prediction picks each row's best filter.
+            AnimationFormat::Apng => {
+                cmd.args([
+                    "-c:v", "apng", "-pred", "mixed", "-pix_fmt", "rgb24", "-plays", "0", "-f",
+                    "apng",
+                ]);
+            }
         }
         cmd.arg(encoded);
         cmd
     }
 
     fn metadata_file(&self) -> Result<Option<String>> {
-        // Neither FFmpeg's GIF nor its WebP writer stores tags, so the preset is not kept.
+        // None of FFmpeg's GIF, WebP and APNG writers stores tags, so the preset is not kept.
         Ok(None)
     }
 

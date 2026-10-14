@@ -770,12 +770,13 @@ fn animation_exports_are_small_timed_and_replace_the_output_only_when_done() {
                 ..one_second.clone()
             },
         ),
+        ("exact.png", one_second.clone()),
     ];
     for (source_name, source) in &sources {
         for (name, options) in &exports {
             // The still card only needs its smallest and largest cases, to keep CI short.
             let still = *source_name == "still.mkv";
-            if still && !["bayer.gif", "lossless.webp"].contains(name) {
+            if still && !["bayer.gif", "lossless.webp", "exact.png"].contains(name) {
                 continue;
             }
             let output = dir.path().join(format!("{source_name}-{name}"));
@@ -798,6 +799,14 @@ fn animation_exports_are_small_timed_and_replace_the_output_only_when_done() {
                 "{source_name} {name}: {bytes} bytes, {per_pixel:.3} per pixel; estimated {:?}",
                 summary.bytes
             );
+            if format == AnimationFormat::Apng {
+                // A PNG opens as a still, so its frames are counted by decoding it.
+                let file = std::io::BufReader::new(std::fs::File::open(&output).unwrap());
+                let decoder = image::codecs::png::PngDecoder::new(file).unwrap();
+                let frames = image::AnimationDecoder::into_frames(decoder.apng()).count();
+                assert_eq!(frames, 24, "{name}");
+                continue;
+            }
             if still {
                 // libwebp stores a run of identical frames as one longer frame.
                 continue;
@@ -876,4 +885,79 @@ fn animation_exports_are_small_timed_and_replace_the_output_only_when_done() {
     assert!(error.to_string().contains("cancelled"));
     assert_eq!(std::fs::read(&kept).unwrap(), b"keep existing destination");
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), files);
+}
+
+#[test]
+#[ignore = "requires FFmpeg, ffprobe and a Vulkan adapter"]
+fn lossless_video_keeps_every_pixel_of_the_crt() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("input.mkv");
+    fixture(&path, "30");
+    let cancel = Arc::new(AtomicBool::new(false));
+    let info = crtsim_media::probe(&path, &cancel).unwrap();
+    let renderer = pollster::block_on(crtsim_core::Renderer::new(wgpu::Backends::VULKAN)).unwrap();
+    let config = Config {
+        output: "160x120".into(),
+        signal: "64x48".into(),
+        warmup: 2,
+        ..Config::default()
+    };
+    let options = Options {
+        quality: crtsim_media::Quality::Lossless,
+        ..Options::default()
+    };
+    // Only MKV holds it, and only the software encoder makes it.
+    assert!(options.codec(crtsim_media::Container::Mp4).is_err());
+    let hardware = Options {
+        encoder: crtsim_media::Encoder::Nvenc,
+        ..options.clone()
+    };
+    assert!(hardware.codec(crtsim_media::Container::Mkv).is_err());
+    let output = dir.path().join("lossless.mkv");
+    crtsim_media::export(
+        &info,
+        &output,
+        &config,
+        &options,
+        &renderer,
+        &cancel,
+        |_| {},
+    )
+    .unwrap();
+    let streams = inspect(&output)["streams"].clone();
+    let video = streams
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["codec_type"] == "video")
+        .unwrap();
+    assert_eq!(video["codec_name"], "ffv1");
+    assert_eq!(video["pix_fmt"], "bgr0");
+    // The first frame, decoded, is the first frame the CRT rendered, to the byte.
+    let decoded = Command::new("ffmpeg")
+        .args(["-v", "error", "-i"])
+        .arg(&output)
+        .args(["-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgba", "-"])
+        .output()
+        .unwrap();
+    assert!(decoded.status.success());
+    let mut first = None;
+    let config = Arc::new(config);
+    crtsim_media::playback(
+        &info,
+        0.,
+        || config.clone(),
+        &options,
+        || false,
+        &renderer,
+        &cancel,
+        |_, _, _, crt| {
+            first.get_or_insert_with(|| crt.clone());
+            Ok(())
+        },
+    )
+    .unwrap();
+    let first = first.unwrap();
+    assert_eq!(decoded.stdout.len(), first.as_raw().len());
+    assert!(decoded.stdout == *first.as_raw(), "not the rendered frame");
 }

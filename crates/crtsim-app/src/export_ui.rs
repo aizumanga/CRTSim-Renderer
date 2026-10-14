@@ -53,6 +53,7 @@ impl ExportFormat {
             Self::Video(_) => "Video",
             Self::Animation(AnimationFormat::Gif) => "GIF animation",
             Self::Animation(AnimationFormat::Webp) => "WebP animation",
+            Self::Animation(AnimationFormat::Apng) => "Animated PNG",
         }
     }
 
@@ -65,6 +66,7 @@ impl ExportFormat {
             Self::Animation(AnimationFormat::Webp) => {
                 "Animated WebP · smaller, full color, no sound"
             }
+            Self::Animation(AnimationFormat::Apng) => "Animated PNG · every pixel exact, no sound",
         }
     }
 
@@ -106,6 +108,12 @@ impl ExportFormat {
                 "Usually several times smaller than a GIF, with full color. Most browsers and \
                  chat apps play it; some image editors do not. The renderer preset is not \
                  stored in the file."
+            }
+            Self::Animation(AnimationFormat::Apng) => {
+                "Every pixel exactly as rendered, mask and scanlines included, so the largest \
+                 of the three: for editing or archiving a clip rather than sharing it. \
+                 Browsers play it; a viewer that does not shows its first frame. The renderer \
+                 preset is not stored in the file."
             }
         }
     }
@@ -357,26 +365,39 @@ fn video_settings(
     if container == Container::Webm {
         options.encoder = Encoder::Software;
     }
+    // Lossless is FFV1, which FFmpeg writes into MKV only.
+    let lossless = container == Container::Mkv && !cfg!(target_arch = "wasm32");
+    if !lossless && options.quality == Quality::Lossless {
+        options.quality = Quality::Balanced;
+    }
     ui.separator();
-    let quality = choice(
-        ui,
-        "Picture quality",
-        &mut options.quality,
-        &[
-            (Quality::Draft, "Draft · smaller, quicker files"),
-            (Quality::Balanced, "Balanced · recommended"),
-            (Quality::High, "High · more detail, larger files"),
-            (Quality::Archival, "Archival · largest files, still lossy"),
-        ],
-    );
+    let mut qualities = vec![
+        (Quality::Draft, "Draft · smaller, quicker files"),
+        (Quality::Balanced, "Balanced · recommended"),
+        (Quality::High, "High · more detail, larger files"),
+        (Quality::Archival, "Archival · largest files, still lossy"),
+    ];
+    if lossless {
+        qualities.push((Quality::Lossless, "Lossless · FFV1, every pixel exact"));
+    }
+    let quality = choice(ui, "Picture quality", &mut options.quality, &qualities);
     if quality {
         options.crf = None;
         options.bitrate_mbps = None;
     }
-    ui.small(
-        "Quality changes file size and compression. It does not \
-        change export resolution or CRT effects.",
-    );
+    if options.quality == Quality::Lossless {
+        options.encoder = Encoder::Software;
+        ui.small(
+            "The CRT's RGB exactly, mask and scanlines included, in FFV1: for editing or \
+             archiving. Files are many times larger than Archival's, and not every player \
+             plays FFV1.",
+        );
+    } else {
+        ui.small(
+            "Quality changes file size and compression. It does not \
+            change export resolution or CRT effects.",
+        );
+    }
     timing_controls(ui, options);
     choice(
         ui,
@@ -430,6 +451,10 @@ fn desktop_settings(
     }
     if let Some((video, choice)) = subtitles {
         subtitle_settings(ui, video, choice, Some(options.preserve_streams));
+    }
+    // FFV1 has no quality, speed or hardware to choose.
+    if options.quality == Quality::Lossless {
+        return;
     }
     crate::chrome::Section::new("Advanced encoding settings").show(ui, |ui| {
         if container == Container::Webm {
@@ -629,6 +654,7 @@ fn animation_settings(
                 );
             }
         }
+        AnimationFormat::Apng => {}
     }
 }
 

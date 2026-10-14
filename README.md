@@ -9,7 +9,8 @@ It is not an official product or an exact reconstruction of a commercial game's 
 ## What works in this prototype
 
 - PNG/JPEG/WebP/BMP/GIF input and PNG export; an original test card when input is omitted.
-- Animated GIF and WebP open as animations, decoded without FFmpeg; videos, GIFs and animated WebPs export to MP4, MKV, WebM, GIF or animated WebP.
+- Animated GIF and WebP open as animations, decoded without FFmpeg; videos, GIFs and animated WebPs export to MP4, MKV, WebM, GIF, animated WebP or animated PNG.
+- Lossless outputs: animated PNG, written without FFmpeg in the web app, and **Lossless** MKV video in FFV1, both keeping every pixel of the CRT exactly.
 - **File → Video test card** opens ten seconds of original side-scrolling pixel-art gameplay at 256x224 and 60 frames per second, drawn by the app, to see a look on moving pixels before exporting it. It opens and plays without a file or FFmpeg, and exports like an opened animation.
 - The original curved screen, ray-traced as the sphere its mesh was cut from, with the same UVs and normals, and the mesh's own outline and edge shading baked across its UVs; the original bezel, baked from its mesh with its colors, normals, UVs and reflection weights and traced the same way, so both draw in one full-screen pass.
 - Composite artifacts, horizontal ringing, separate RGB persistence, shadow mask, lighting, edge reflections and bloom.
@@ -24,7 +25,7 @@ See [the implementation plan](docs/PLAN.md) and [validation notes](docs/VALIDATI
 ## Desktop app
 
 On first launch, the app honestly describes this AI-assisted project as “what some would call \"vibe-coded slop\", built based on J. Kyle Pittman's public CRTSim”.
-Acknowledging that message is remembered on this computer. **Credits** always reopens the attribution and links to
+Acknowledging that message is remembered on this computer. **Help → Credits & support** always reopens the attribution and links to
 [J. Kyle Pittman's itch.io page](https://piratehearts.itch.io/) and [Minor Key Games on Steam](https://store.steampowered.com/developer/MinorKeyGames).
 Please support the original developer by buying and playing their games. This port is unofficial and is not endorsed by him.
 The welcome and credits also link to Pittman's
@@ -37,6 +38,11 @@ Each preset shows a thumbnail rendered from your current image. Point at a prese
 Enter a name and choose **Save current** to add your exact settings to **My presets**; they reappear after restarting. Use **Edit description** on any personal preset to add, change or clear its description, and **Delete** to remove it, after confirming.
 Descriptions are saved beside gallery JSON files as UTF-8 `.txt` files; the JSON stays CLI-compatible.
 To add an existing JSON, load it, then use Save current in the gallery. JSON export remains available for sharing.
+**Presets → Copy link to this look** copies a link to the web app that holds the settings in use, compressed into the
+link's `#look=` fragment (about 800 characters); opening it in a browser applies the look in the web app, and
+**Presets → Open look from link…** applies one in either app, as a change Undo reverses. No server keeps the look,
+and a fragment is never sent to the site. An included NES LUT travels by name; a look with a LUT imported from a file
+is too large for a link, so share that one as a JSON preset.
 Saving under a name already in My presets, in any letter case, asks first, then replaces that preset's settings and keeps its name and description.
 The included presets' names are refused, in any letter case, so an included preset is never replaced or shadowed. Malformed files are skipped with an explanation. Personal JSON files live outside the checkout,
 in the app data directory shown in the gallery. `CRTSIM_DATA_DIR` can override that directory with an absolute path.
@@ -98,6 +104,10 @@ already exists; after confirmation, the app writes a complete temporary file and
   including 256x224 signal resampling and saturation 1.35, with the game's own CRT options on top.
 - **General image** starts with square pixels, smooth resizing, contain fitting and saturation 1.0.
 - **Original / CRT / Compare** compares the source with the rendered tube. Drag the comparison divider. The CRT bends the image, so the two views are not geometrically registered.
+- **Pin look** keeps the settled picture and its settings; **Compare** then shows the pinned look left of the divider and
+  the settings in use right of it, with the settings changed since listed above the picture. **Unpin look**, or opening
+  another source, returns Compare to the original. The pinned picture is a still: after moving to another frame of a
+  video, pin again to compare that one.
 - **Fast / Balanced / Export resolution** changes preview canvas resolution only. Use Export resolution and turn off Fit view at 1x zoom to inspect mask sampling.
 - **Load / Save preset** uses the same version-1 JSON format as the CLI. **Undo / Redo / Reset** acts on settings, not source files or exported files.
   `Ctrl+Z` and `Ctrl+Shift+Z` provide undo and redo shortcuts (`Command` equivalents are also accepted on macOS).
@@ -107,7 +117,11 @@ already exists; after confirmation, the app writes a complete temporary file and
 - Dragging a slider moves it a quarter as far as the pointer, so it can be set finely; hold **Shift** to move it as far
   as the pointer, or **Alt** for a tenth as far again. A click still jumps it to the pointer.
 - Click or drag a slider to give it the keyboard: **←/→** step it by 0.1% of its range, **Shift** by 1%, **Alt** by 0.01%, and **Delete** returns it to its default. **Esc** or a click elsewhere lets go.
-- The status bar shows the app's version in its lower right corner.
+- The status bar shows the app's version in its lower right corner. **Help → Check for updates…** asks GitHub
+  whether a newer release is out and shows its notes and download page; turn on **Check when the app starts**
+  there to be told without asking. The app never downloads or installs a release itself; package managers and
+  AppImage tools do that (see [updating](docs/RELEASES.md#with-a-package-manager) and
+  [the decision](docs/adr/0004-check-for-updates-never-download-them.md)).
 
 The original-image display is limited to a 2048-pixel thumbnail; export always uses the loaded source.
 While a control is being changed, each preview runs the CRT on screen on with the new settings, so the
@@ -149,7 +163,7 @@ Vulkan/DX12/Metal implementation will show a compatible-adapter error; it is not
 The same app runs in a browser with WebGPU, as the web app. It opens images, animated GIF or
 WebP, and MP4, MOV, WebM or MKV videos you pick or drop on the page (the videos decoded by the
 browser, so the codecs are the browser's), previews and plays them, and saves PNGs, MP4 and WebM videos (encoded by the browser, so the
-formats offered are those it can write), GIF and animated WebP exports and presets as downloads;
+formats offered are those it can write), GIF, animated WebP and animated PNG exports and presets as downloads;
 its settings, presets and session stay in the browser. Its MP4 and WebM exports embed the
 preset as the desktop's do, and **Import preset from Image/Video…** reads one back from a PNG,
 MP4 or WebM, made by either app. Projects and batch export are
@@ -198,9 +212,10 @@ Nothing is downloaded automatically.
    When a valid container frame count exists it is used immediately. Other files require one decoded-frame count on open. Exact seeks decode by ordinal from the start and can take time on long videos; loading/seeking is cancellable.
 3. Choose output resolution and video timing: source-rate stable artifacts (default), 60 Hz alternating artifacts, or persistence off.
 4. Choose **Export → Video…**. A separate window explains MP4/H.264, MKV/H.264 and WebM/VP9, with quality/audio controls and optional advanced encoding settings,
-   and offers GIF and animated WebP with their own size, frame-rate and length settings and a file-size estimate. Then choose the destination.
+   and offers GIF, animated WebP and animated PNG with their own size, frame-rate and length settings and a file-size estimate.
+   For MKV, **Picture quality → Lossless** writes FFV1 that keeps every pixel exactly. Then choose the destination.
 
-The compact toolbar groups media/projects under **File**, gallery/imports under **Presets**, themes under **View**, and rendering under **Export**. Video previews are silent; audio is retained in exports unless explicitly muted.
+The compact toolbar groups media/projects under **File**, gallery/imports under **Presets**, themes under **View**, rendering under **Export**, and credits and the update check under **Help**. Video previews are silent; audio is retained in exports unless explicitly muted.
 
 Exports retain CRT history between ordered frames. Variable-frame-rate input is normalized to the detected average frame rate,
 or to 60 FPS in 60 Hz mode. Source-rate mode corrects persistence decay by media time; this is an approximation of the spatial feedback effect.
@@ -212,7 +227,7 @@ closing the app also terminates its FFmpeg processes. Existing destinations are 
 Temporary encoded files require space on the destination drive, but decoded frames are streamed rather than saved as PNGs.
 Settings and the source are captured for each export; edits during export apply to the next job, and the preview keeps up with them while the export runs.
 
-Output is opaque SDR with software or optional hardware H.264 encoding. Video is explicitly converted from full-range RGB to limited-range BT.709 and tagged accordingly. HDR input uses FFmpeg's `zscale`/`tonemap` filters when available; HDR output remains outside this version.
+Output is opaque SDR with software or optional hardware H.264 encoding. Video is explicitly converted from full-range RGB to limited-range BT.709 and tagged accordingly, except Lossless, which keeps full-range RGB in FFV1 and is tagged as RGB. HDR input uses FFmpeg's `zscale`/`tonemap` filters when available; HDR output remains outside this version.
 Audio tracks, supported subtitles, chapters and source metadata are preserved by default; MKV also supports attachments. The export window lists the subtitle tracks, to keep each as a track of its own or not, and to draw one into the picture, through the CRT, instead of leaving it for the player to draw on top. See the [workflow guide](docs/WORKFLOW.md) for container limits and quality profiles.
 MP4/MKV/WebM exports embed an importable preset in a container comment, including the original controls and video timing/audio settings.
 PNG exports still embed importable presets. Full details and validation commands are in [VIDEO_PIPELINE.md](docs/VIDEO_PIPELINE.md).
@@ -228,8 +243,35 @@ cargo run --release -p crtsim-cli -- render --output test-crt.png
 ```
 
 The last command uses the built-in test card and the public-reference defaults, with stable artifact phase.
+`--preset "NTSC 240p"` renders with an included preset instead; `presets` lists them.
+
+```sh
+cargo run --release -p crtsim-cli -- contact-sheet --input image.png --output sheet.png
+cargo run --release -p crtsim-cli -- contact-sheet --preset "Clean RGB" --look Mine=mine.json --tile 640x480 --columns 2 --output mine.png
+```
+
+`render` also makes videos and animations, the output's extension choosing which: `.mp4`, `.mkv` or `.webm` a video,
+`.gif` or `.webp` an animation, and `.png` a still, or an animated PNG when the input is a video or animation. Without
+`--input`, a moving output renders the video test card. They need FFmpeg, as the desktop's do.
+
+```sh
+cargo run --release -p crtsim-cli -- render -i clip.mp4 -o crt.mp4 --preset "NTSC 240p" --size 1080p
+cargo run --release -p crtsim-cli -- render -i clip.mp4 -o crt.mkv --quality lossless --timing ntsc60
+cargo run --release -p crtsim-cli -- render -i clip.mp4 -o crt.gif --max-side 480 --fps 24 --seconds 5
+```
+
+`--quality` (draft, balanced, high, archival or lossless), `--timing` (stable, ntsc60 or off), `--audio` and
+`--encoder` set a video as the desktop's Export → Video does; `--fps`, `--max-side`, `--start`, `--seconds` and
+`--lossless` (WebP) set an animation. Progress is printed as it goes.
+
+A **contact sheet** renders one image through many looks, every included preset unless `--preset` or
+`--look NAME=SETTINGS.json` choose some, and lays them out in a grid with each look's name beneath its tile
+(`--tile` sets each tile's size, 480x360 by default, and `--columns` how many go in a row). In the desktop and web
+apps, **Export → Contact sheet…** does the same with the picture on screen, the settings in use and any of the
+gallery's presets, your own included.
 Files are **never overwritten**: choose a new output name if it already exists. Parent directories must exist.
-All assets are embedded; the executable does not download anything at runtime.
+All assets are embedded; the executable downloads nothing at runtime. The desktop reaches the network only to check for a
+newer release, when asked ([ADR 4](docs/adr/0004-check-for-updates-never-download-them.md)); the CLI never does.
 
 ### Your own image
 

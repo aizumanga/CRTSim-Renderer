@@ -47,12 +47,23 @@ enum Picture {
     },
 }
 
+/// A look kept to compare the settings in use with: its settings and the settled picture of
+/// them, held until it is unpinned or another source opens.
+struct Pinned {
+    picture: Picture,
+    config: Config,
+    /// The source picture it is of, to tell when the source has moved on, as to another frame.
+    input: std::sync::Weak<RgbaImage>,
+}
+
 pub struct Preview {
     schedule: Schedule,
     lane: PreviewLane,
     /// The interface's device, needed to register and release frames rendered on it.
     render_state: Option<eframe::egui_wgpu::RenderState>,
     picture: Option<Picture>,
+    /// The look pinned to compare with, if one is.
+    pinned: Option<Pinned>,
     /// A look previewed from a gallery without being applied.
     audition: Option<Audition>,
     /// What a gallery pointed at this frame; the last offer of the frame wins.
@@ -75,6 +86,7 @@ impl Preview {
             lane,
             render_state,
             picture: None,
+            pinned: None,
             audition: None,
             offered: None,
             quality: Some(1280),
@@ -174,9 +186,66 @@ impl Preview {
         self.schedule.show_current();
     }
 
-    /// Takes the picture off screen, as when another source opens.
+    /// Takes the picture off screen, as when another source opens, and unpins the look pinned,
+    /// whose picture is of the source before.
     pub fn clear(&mut self) {
         self.show(None);
+        self.unpin();
+    }
+
+    /// Whether the picture on screen can be pinned: it shows `config` as it settled, not an
+    /// audition or an edit under way.
+    pub fn can_pin(&self) -> bool {
+        self.picture.is_some() && self.is_settled() && self.audition.is_none()
+    }
+
+    /// Pins the picture on screen, of `config` and `input`, to compare later settings with.
+    pub fn pin(&mut self, config: &Config, input: &Arc<RgbaImage>) {
+        if !self.can_pin() {
+            return;
+        }
+        let picture = match self.picture.as_ref() {
+            Some(Picture::Uploaded(handle)) => Some(Picture::Uploaded(handle.clone())),
+            // The same frame registered again, so it outlives the registration on screen.
+            Some(Picture::Frame { _texture, size, .. }) => {
+                self.render_state.as_ref().map(|state| Picture::Frame {
+                    id: state.renderer.write().register_native_texture(
+                        &state.device,
+                        &_texture.create_view(&Default::default()),
+                        wgpu::FilterMode::Linear,
+                    ),
+                    _texture: _texture.clone(),
+                    size: *size,
+                })
+            }
+            None => None,
+        };
+        self.unpin();
+        self.pinned = picture.map(|picture| Pinned {
+            picture,
+            config: config.clone(),
+            input: Arc::downgrade(input),
+        });
+    }
+
+    pub fn unpin(&mut self) {
+        if let Some(pinned) = self.pinned.take() {
+            self.release(pinned.picture);
+        }
+    }
+
+    /// The look pinned, with its picture, and whether it is of `input`, the source picture now.
+    pub fn pinned(
+        &self,
+        input: &Arc<RgbaImage>,
+    ) -> Option<(egui::load::SizedTexture, &Config, bool)> {
+        self.pinned.as_ref().map(|pinned| {
+            (
+                sized(&pinned.picture),
+                &pinned.config,
+                std::sync::Weak::ptr_eq(&pinned.input, &Arc::downgrade(input)),
+            )
+        })
     }
 
     /// Forgets the change waiting to be previewed, as when playing takes over the screen.
@@ -191,10 +260,7 @@ impl Preview {
 
     /// The picture on screen, if there is one.
     pub fn picture(&self) -> Option<egui::load::SizedTexture> {
-        self.picture.as_ref().map(|picture| match picture {
-            Picture::Uploaded(handle) => egui::load::SizedTexture::from_handle(handle),
-            Picture::Frame { id, size, .. } => egui::load::SizedTexture::new(*id, *size),
-        })
+        self.picture.as_ref().map(sized)
     }
 
     /// The name of the look being auditioned, if one is.
@@ -309,18 +375,32 @@ impl Preview {
     /// Puts `next` on screen, releasing the registration of the frame it replaces: egui keeps
     /// no ownership of a frame handed to it, so nothing else frees these.
     fn show(&mut self, next: Option<Picture>) {
-        if let Some(Picture::Frame { id, .. }) = self.picture.take() {
-            if let Some(state) = &self.render_state {
-                state.renderer.write().free_texture(&id);
-            }
+        if let Some(picture) = self.picture.take() {
+            self.release(picture);
         }
         self.picture = next;
+    }
+
+    /// Frees the registration of a frame no longer drawn.
+    fn release(&self, picture: Picture) {
+        if let (Picture::Frame { id, .. }, Some(state)) = (picture, &self.render_state) {
+            state.renderer.write().free_texture(&id);
+        }
+    }
+}
+
+/// `picture` as egui draws it.
+fn sized(picture: &Picture) -> egui::load::SizedTexture {
+    match picture {
+        Picture::Uploaded(handle) => egui::load::SizedTexture::from_handle(handle),
+        Picture::Frame { id, size, .. } => egui::load::SizedTexture::new(*id, *size),
     }
 }
 
 impl Drop for Preview {
     fn drop(&mut self) {
         self.show(None);
+        self.unpin();
     }
 }
 
@@ -396,6 +476,40 @@ mod tests {
         let summary = preview.returned(&ctx, revision, rendered(0.1));
         assert!(summary.is_some_and(|s| s.starts_with("Preview ")));
         assert!(preview.is_settled() && preview.picture().is_some());
+    }
+
+    #[test]
+    fn a_pinned_look_outlives_the_pictures_after_it_until_another_source() {
+        let ctx = egui::Context::default();
+        let (mut preview, previews, mut config, input) = preview();
+        assert!(!preview.can_pin());
+        assert!(preview.refresh(&config, &input).settled);
+        let (revision, ..) = sent(&previews);
+        preview.returned(&ctx, revision, rendered(0.1));
+        let pinned_config = config.clone();
+        preview.pin(&config, &input);
+        let first = preview.picture().unwrap().id;
+        // An edit under way is not pinned: only a settled picture is.
+        config.bloom = 0.;
+        preview.changed(Instant::now());
+        assert!(!preview.can_pin());
+        assert_eq!(
+            preview.tick(settled(), false, &config, &input, true),
+            SETTLES
+        );
+        let (revision, ..) = sent(&previews);
+        preview.returned(&ctx, revision, rendered(0.1));
+        let (picture, kept, same_source) = preview.pinned(&input).unwrap();
+        assert_eq!(
+            (picture.id, kept, same_source),
+            (first, &pinned_config, true)
+        );
+        assert_ne!(preview.picture().unwrap().id, first);
+        // Another frame of the same source: still pinned, but not of it.
+        let other = Arc::new(crtsim_core::config::test_card());
+        assert!(!preview.pinned(&other).unwrap().2);
+        preview.clear();
+        assert!(preview.pinned(&input).is_none());
     }
 
     #[test]

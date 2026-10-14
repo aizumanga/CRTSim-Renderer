@@ -1,5 +1,34 @@
 # Portable releases (Phase 4)
 
+## v1.2.0
+
+The app tells you when a release is out and package managers install and update it, looks travel as links, two looks
+compare side by side, contact sheets show many looks at once, exports can be lossless, and the CLI renders video.
+
+- **Help → Check for updates…** asks GitHub for the latest release and shows its notes and download page. **Check when
+  the app starts**, off until you turn it on, does the same at each start. The app never downloads or installs a
+  release itself, and reaches the network for nothing else ([ADR 4](adr/0004-check-for-updates-never-download-them.md)).
+  **Credits** moves into the new **Help** menu.
+- Install and update with **Scoop** or **Homebrew** from this repository, and with **winget** once its manifests are
+  accepted (see [With a package manager](#with-a-package-manager)). The AppImage carries its update information, and a
+  `.zsync` file is published beside it, so AppImageUpdate or Gear Lever update it in place.
+- **Presets → Copy link to this look** copies a link that opens the settings in use in the web app; **Open look from
+  link…** applies one in either app, as a change Undo reverses. A look with an imported `.cube` LUT is too large for a
+  link and is shared as a preset instead.
+- **Pin look** keeps the picture on screen and its settings; **Compare** then shows them beside the settings in use,
+  with the settings changed listed above the picture.
+- **Export → Contact sheet…** renders the picture through the settings in use and any of the gallery's presets into one
+  labelled PNG. `crtsim contact-sheet` does the same from the command line, and `crtsim render --preset NAME` renders
+  with an included preset.
+- **Animated PNG** joins GIF and WebP as an animation export, every pixel exact, written without FFmpeg in the web app.
+  MKV video has a **Lossless** quality that keeps the CRT's RGB exactly in FFV1.
+- `crtsim render` makes videos and animations, by the output's extension: `.mp4`, `.mkv`, `.webm`, `.gif`, `.webp`,
+  or `.png` from a moving input. Without `--input` a moving output renders the video test card.
+- The macOS app reports its own version; it said 0.1.1 since that release. Packaging refuses a tag that does not match
+  the version in `Cargo.toml`.
+- Presets, projects and sessions are written as before. A video exported with Lossless quality carries a preset that
+  earlier versions cannot import.
+
 ## v1.1.0
 
 Super Win the Game is the default look, sliders move finely, the web app's videos carry their preset, and
@@ -146,6 +175,27 @@ brings the web app and the new version to the site.
 | Web | ZIP of the web app, for a website to serve | Serve the files over HTTPS in a browser with WebGPU; the site does this at `aizumanga.neocities.org/crtsim/` |
 | RetroArch | ZIP of shader presets for the shipped looks | Copy its `crtsim-renderer` folder into RetroArch's `shaders` folder; see the README inside |
 
+### With a package manager
+
+Scoop and Homebrew install a release, and their own update commands bring it to the next one:
+
+```sh
+# Windows, Scoop
+scoop bucket add crtsim https://github.com/aizumanga/CRTSim-Renderer
+scoop install crtsim-renderer          # later: scoop update crtsim-renderer
+
+# macOS (Apple Silicon), Homebrew
+brew tap aizumanga/crtsim https://github.com/aizumanga/CRTSim-Renderer
+brew install --cask crtsim-renderer    # later: brew upgrade --cask crtsim-renderer
+```
+
+This repository is the Scoop bucket (`bucket/`) and the Homebrew tap (`Casks/`). Once a release is published,
+the **Package managers** workflow opens a pull request bringing both to it, written by `tools/manifests.py` from the
+release's SHA256SUMS files; merging it offers the release. The same workflow writes the release's winget manifests
+(`aizumanga.CRTSimRenderer`, a portable ZIP with `crtsim-desktop` and `crtsim` commands) and, when the repository
+has a `WINGET_TOKEN` secret, submits them to winget's repository, after which `winget install aizumanga.CRTSimRenderer`
+and `winget upgrade` work too. Without the secret, the manifests are kept as the run's `winget-manifests` artifact.
+
 No Rust installation or repository checkout is required. Effects/assets are embedded.
 Each archive includes the README, project license, original asset provenance, dependency license texts/index and commit identifier.
 SHA256SUMS files accompany downloads. Builds are not claimed to be byte-for-byte reproducible.
@@ -166,6 +216,10 @@ chmod +x CRTSim-Renderer-*-linux-x86_64.AppImage
 If FUSE is unavailable, use `APPIMAGE_EXTRACT_AND_RUN=1 ./CRTSim-Renderer-...AppImage`
 or `--appimage-extract` and launch `squashfs-root/AppRun`.
 Pass `--cli` to the AppImage to run the command-line renderer, e.g. `./renderer.AppImage --cli inspect-meshes`.
+The AppImage carries its update information, and each release publishes its `.AppImage.zsync` beside it, so
+[AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate), Gear Lever or AppImageLauncher can bring it to
+the latest release in place, downloading only what changed. The app itself never does
+([ADR 4](adr/0004-check-for-updates-never-download-them.md)).
 The AppImage is launched under software Vulkan/Xvfb in CI before its artifact is uploaded.
 
 ### Windows and macOS
@@ -183,7 +237,7 @@ Install FFmpeg and ffprobe separately; **Export → FFmpeg setup…** gives the 
 in a folder named `ffmpeg` next to the app (the Windows ZIP and Linux tarball), or set `CRTSIM_FFMPEG` and
 `CRTSIM_FFPROBE` to their full paths. On macOS, Homebrew's folders are searched even when the app is opened from Finder.
 They must include the codecs described in [VIDEO_PIPELINE.md](VIDEO_PIPELINE.md). Image rendering works without FFmpeg.
-There are no automatic runtime downloads. Personal presets remain in the normal per-user app-data directory;
+There are no runtime downloads; the desktop reaches the network only when asked to check for a newer release. Personal presets remain in the normal per-user app-data directory;
 updating or replacing a portable package does not delete them. Use `CRTSIM_DATA_DIR` for an explicit alternate directory.
 
 ## Local packaging
