@@ -83,12 +83,17 @@ jobs:
         env:
           ARCH: x86_64
           APPIMAGE_EXTRACT_AND_RUN: '1'
+          # AppImageUpdate, Gear Lever and AppImageLauncher read this to fetch the latest
+          # release's AppImage, downloading only the blocks the .zsync file says changed.
+          LDAI_UPDATE_INFORMATION: gh-releases-zsync|aizumanga|CRTSim-Renderer|latest|CRTSim-Renderer-*-linux-x86_64.AppImage.zsync
         run: |
           curl --fail --location --retry 3 -o linuxdeploy.AppImage https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
           chmod +x linuxdeploy.AppImage
           sha256sum linuxdeploy.AppImage > dist/linuxdeploy-tool.sha256
           export OUTPUT="$PWD/dist/CRTSim-Renderer-${PACKAGE_VERSION}-linux-x86_64.AppImage"
           ./linuxdeploy.AppImage --appdir dist/AppDir --executable target/release/crtsim-desktop --executable target/release/crtsim --desktop-file packaging/crtsim-renderer.desktop --icon-file packaging/crtsim-renderer.svg --library /usr/lib/x86_64-linux-gnu/libxkbcommon-x11.so.0 --library /usr/lib/x86_64-linux-gnu/libwayland-client.so.0 --custom-apprun packaging/AppRun --output appimage
+          # appimagetool writes the .zsync file into the working folder, not beside the AppImage.
+          mv -- *.AppImage.zsync dist/
       - name: Smoke-test packaged Linux AppImage
         if: runner.os == 'Linux'
         env:
@@ -112,6 +117,7 @@ jobs:
             dist/*.zip
             dist/*.tar.gz
             dist/*.AppImage
+            dist/*.AppImage.zsync
             dist/*.txt
             dist/*.sha256
             package-smoke/*.png
@@ -193,7 +199,7 @@ jobs:
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release create "$RELEASE_TAG" --verify-tag --draft --title "CRTSim Renderer $RELEASE_TAG" --notes 'Portable desktop and CLI packages, the web app the site serves, and the CRT as RetroArch shader presets. See the included README and docs/RELEASES.md. Video requires a separate FFmpeg/ffprobe installation. macOS is ad-hoc signed only, without Apple Developer ID signing or notarization.'
           fi
-          gh release upload "$RELEASE_TAG" packages/dist/*.zip packages/dist/*.tar.gz packages/dist/*.AppImage packages/dist/SHA256SUMS-*.txt --clobber
+          gh release upload "$RELEASE_TAG" packages/dist/*.zip packages/dist/*.tar.gz packages/dist/*.AppImage packages/dist/*.AppImage.zsync packages/dist/SHA256SUMS-*.txt --clobber
   # The web app for a release published before its package existed, such as v0.7.0.
   add-web:
     if: inputs.release_tag != ''

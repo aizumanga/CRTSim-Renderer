@@ -166,6 +166,10 @@ chmod +x CRTSim-Renderer-*-linux-x86_64.AppImage
 If FUSE is unavailable, use `APPIMAGE_EXTRACT_AND_RUN=1 ./CRTSim-Renderer-...AppImage`
 or `--appimage-extract` and launch `squashfs-root/AppRun`.
 Pass `--cli` to the AppImage to run the command-line renderer, e.g. `./renderer.AppImage --cli inspect-meshes`.
+The AppImage carries its update information, and each release publishes its `.AppImage.zsync` beside it, so
+[AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate), Gear Lever or AppImageLauncher can bring it to
+the latest release in place, downloading only what changed. The app itself never does
+([ADR 4](adr/0004-check-for-updates-never-download-them.md)).
 The AppImage is launched under software Vulkan/Xvfb in CI before its artifact is uploaded.
 
 ### Windows and macOS
