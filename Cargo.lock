@@ -910,6 +910,7 @@ dependencies = [
  "anyhow",
  "clap",
  "crtsim-core",
+ "crtsim-media",
  "image 0.24.9",
  "pollster 0.3.0",
  "serde_json",

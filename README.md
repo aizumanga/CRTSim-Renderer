@@ -250,6 +250,20 @@ cargo run --release -p crtsim-cli -- contact-sheet --input image.png --output sh
 cargo run --release -p crtsim-cli -- contact-sheet --preset "Clean RGB" --look Mine=mine.json --tile 640x480 --columns 2 --output mine.png
 ```
 
+`render` also makes videos and animations, the output's extension choosing which: `.mp4`, `.mkv` or `.webm` a video,
+`.gif` or `.webp` an animation, and `.png` a still, or an animated PNG when the input is a video or animation. Without
+`--input`, a moving output renders the video test card. They need FFmpeg, as the desktop's do.
+
+```sh
+cargo run --release -p crtsim-cli -- render -i clip.mp4 -o crt.mp4 --preset "NTSC 240p" --size 1080p
+cargo run --release -p crtsim-cli -- render -i clip.mp4 -o crt.mkv --quality lossless --timing ntsc60
+cargo run --release -p crtsim-cli -- render -i clip.mp4 -o crt.gif --max-side 480 --fps 24 --seconds 5
+```
+
+`--quality` (draft, balanced, high, archival or lossless), `--timing` (stable, ntsc60 or off), `--audio` and
+`--encoder` set a video as the desktop's Export → Video does; `--fps`, `--max-side`, `--start`, `--seconds` and
+`--lossless` (WebP) set an animation. Progress is printed as it goes.
+
 A **contact sheet** renders one image through many looks, every included preset unless `--preset` or
 `--look NAME=SETTINGS.json` choose some, and lays them out in a grid with each look's name beneath its tile
 (`--tile` sets each tile's size, 480x360 by default, and `--columns` how many go in a row). In the desktop and web

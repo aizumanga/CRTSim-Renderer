@@ -14,7 +14,7 @@ use std::{
 #[derive(Parser)]
 #[command(
     version,
-    about = "Headless CRTSim still-image renderer. The desktop app renders video."
+    about = "Headless CRTSim renderer for images, videos and animations."
 )]
 struct Args {
     #[command(subcommand)]
@@ -22,7 +22,10 @@ struct Args {
 }
 #[derive(Subcommand)]
 enum Command {
-    /// Render an image, or the built-in original test card if --input is omitted.
+    /// Render an image, video or animation; the built-in test card, or the video test card for
+    /// a moving output, if --input is omitted. The output's extension picks what is made:
+    /// .mp4, .mkv or .webm a video; .gif or .webp an animation; .png a still, or an animated
+    /// PNG of a moving input. Video and animation output, and video input, need FFmpeg.
     Render {
         #[arg(short, long)]
         input: Option<PathBuf>,
@@ -51,9 +54,11 @@ enum Command {
         /// original implementation, for comparing the two.
         #[arg(long, value_enum, default_value = "gpu")]
         prepare: PrepareArg,
-        /// Save clean.png, signal.png and settings.json into a NEW directory.
+        /// Save clean.png, signal.png and settings.json into a NEW directory. Stills only.
         #[arg(long)]
         debug_dir: Option<PathBuf>,
+        #[command(flatten)]
+        moving: Moving,
     },
     /// Print the included presets and the resolution presets.
     Presets,
@@ -100,6 +105,67 @@ enum Command {
         #[arg(long)]
         export_dir: Option<PathBuf>,
     },
+}
+/// How a video or animation is made.
+#[derive(clap::Args)]
+#[command(next_help_heading = "Videos and animations")]
+struct Moving {
+    /// Video quality; lossless is FFV1 and needs .mkv.
+    #[arg(long, value_enum, default_value = "balanced")]
+    quality: QualityArg,
+    /// stable: the source's rate, artifacts held still; ntsc60: 60 per second, alternating
+    /// (videos only); off: no glow carried between frames.
+    #[arg(long, value_enum, default_value = "stable")]
+    timing: TimingArg,
+    /// Video audio: keep it where the container holds it, re-encode it, or leave it out.
+    #[arg(long, value_enum, default_value = "auto")]
+    audio: AudioArg,
+    /// Video encoder; hardware ones write H.264 to .mp4 or .mkv.
+    #[arg(long, value_enum, default_value = "software")]
+    encoder: EncoderArg,
+    /// Animations: frames per second (GIF up to 30, WebP and PNG up to 60).
+    #[arg(long, default_value_t = 24)]
+    fps: u32,
+    /// Animations: the CRT canvas's longest side, in pixels.
+    #[arg(long, default_value_t = 640)]
+    max_side: u32,
+    /// Animations: where in the source to start, in seconds.
+    #[arg(long, default_value_t = 0.)]
+    start: f64,
+    /// Animations: at most this many seconds; 0 for the rest of the source.
+    #[arg(long, default_value_t = 10.)]
+    seconds: f64,
+    /// Lossless WebP animation.
+    #[arg(long)]
+    lossless: bool,
+}
+#[derive(Clone, Copy, ValueEnum)]
+enum QualityArg {
+    Draft,
+    Balanced,
+    High,
+    Archival,
+    Lossless,
+}
+#[derive(Clone, Copy, ValueEnum)]
+enum TimingArg {
+    Stable,
+    Ntsc60,
+    Off,
+}
+#[derive(Clone, Copy, ValueEnum)]
+enum AudioArg {
+    Auto,
+    Encode,
+    Mute,
+}
+#[derive(Clone, Copy, ValueEnum)]
+enum EncoderArg {
+    Software,
+    Nvenc,
+    Qsv,
+    Amf,
+    Videotoolbox,
 }
 #[derive(Clone, Copy, ValueEnum)]
 enum Backend {
@@ -185,6 +251,112 @@ fn source(input: Option<&Path>) -> Result<image::RgbaImage> {
         Some(path) => crtsim_core::input::load_image(path),
         None => Ok(config::test_card()),
     }
+}
+
+/// What a render makes, by its output's extension and whether its input moves.
+enum Making {
+    Still,
+    Video,
+    Animation,
+}
+
+fn making(input: Option<&Path>, output: &Path) -> Result<Making> {
+    let moving = input.is_some_and(|i| crtsim_media::MediaKind::of(i).is_moving());
+    if crtsim_media::Container::of(output).is_some() {
+        Ok(Making::Video)
+    } else if let Some(format) = crtsim_media::AnimationFormat::of(output) {
+        Ok(match format {
+            crtsim_media::AnimationFormat::Apng if !moving => Making::Still,
+            _ => Making::Animation,
+        })
+    } else {
+        anyhow::bail!("The output must be .png, .mp4, .mkv, .webm, .gif or .webp")
+    }
+}
+
+/// Renders a video or an animation of `input`, or of the video test card.
+fn render_moving(
+    input: Option<&Path>,
+    output: &Path,
+    config: &Config,
+    moving: &Moving,
+    animation: bool,
+    backend: Backend,
+) -> Result<()> {
+    use crtsim_media::{AnimationOptions, Audio, Encoder, Options, Quality, Timing};
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let video = match input {
+        Some(path) => crtsim_media::probe(path, &cancel)?,
+        None => crtsim_media::test_clip(),
+    };
+    let timing = match moving.timing {
+        TimingArg::Stable => Timing::Stable,
+        TimingArg::Ntsc60 => Timing::Ntsc60,
+        TimingArg::Off => Timing::Disabled,
+    };
+    eprintln!(
+        "Input {}x{} at {:.3} frames per second, {:.2}s",
+        video.size.0, video.size.1, video.fps, video.duration
+    );
+    let renderer = renderer(backend)?;
+    let started = std::time::Instant::now();
+    // Each stage once, and its progress in whole tenths.
+    let mut said = (String::new(), -1);
+    let progress = |p: crtsim_media::Progress| {
+        let tenth = (p.fraction * 10.).floor() as i32;
+        if p.stage != said.0 || tenth != said.1 {
+            eprintln!("{:3.0}% {}", p.fraction * 100., p.stage);
+            said = (p.stage, tenth);
+        }
+    };
+    if animation {
+        let options = AnimationOptions {
+            max_side: moving.max_side,
+            fps: moving.fps,
+            timing,
+            start: moving.start,
+            max_seconds: (moving.seconds > 0.).then_some(moving.seconds),
+            lossless: moving.lossless,
+            ..AnimationOptions::default()
+        };
+        crtsim_media::export_animation(
+            &video, output, config, &options, &renderer, &cancel, progress,
+        )?;
+    } else {
+        let options = Options {
+            timing,
+            audio: match moving.audio {
+                AudioArg::Auto => Audio::Auto,
+                AudioArg::Encode => Audio::Encode,
+                AudioArg::Mute => Audio::Mute,
+            },
+            quality: match moving.quality {
+                QualityArg::Draft => Quality::Draft,
+                QualityArg::Balanced => Quality::Balanced,
+                QualityArg::High => Quality::High,
+                QualityArg::Archival => Quality::Archival,
+                QualityArg::Lossless => Quality::Lossless,
+            },
+            encoder: match moving.encoder {
+                EncoderArg::Software => Encoder::Software,
+                EncoderArg::Nvenc => Encoder::Nvenc,
+                EncoderArg::Qsv => Encoder::Qsv,
+                EncoderArg::Amf => Encoder::Amf,
+                EncoderArg::Videotoolbox => Encoder::VideoToolbox,
+            },
+            ..Options::default()
+        };
+        options.validate()?;
+        crtsim_media::export(
+            &video, output, config, &options, &renderer, &cancel, progress,
+        )?;
+    }
+    eprintln!(
+        "Saved {} in {:.2}s",
+        output.display(),
+        started.elapsed().as_secs_f64()
+    );
+    Ok(())
 }
 
 fn ensure_new_png(output: &Path) -> Result<()> {
@@ -319,8 +491,13 @@ fn main() -> Result<()> {
             backend,
             prepare,
             debug_dir,
+            moving,
         } => {
-            ensure_new_png(&output)?;
+            let making = making(input.as_deref(), &output)?;
+            ensure!(!output.exists(), "Output already exists; choose a new path");
+            if !matches!(making, Making::Still) {
+                ensure!(debug_dir.is_none(), "--debug-dir is for stills");
+            }
             if let Some(ref dir) = debug_dir {
                 ensure!(!dir.exists(), "debug directory must be new");
             }
@@ -349,6 +526,10 @@ fn main() -> Result<()> {
                 };
             }
             c.validate()?;
+            if let Making::Video | Making::Animation = making {
+                let animation = matches!(making, Making::Animation);
+                return render_moving(input.as_deref(), &output, &c, &moving, animation, backend);
+            }
             let src = source(input.as_deref())?;
             let sig = c.signal_size(src.dimensions())?;
             let out = c.output_size(src.dimensions())?;

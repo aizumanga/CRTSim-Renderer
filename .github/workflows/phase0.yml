@@ -99,6 +99,10 @@ jobs:
           cargo run --locked -p crtsim-cli -- render -i output/4k.png --config output/general.json -o output/auto.png --debug-dir output/auto-debug --backend vulkan
           cargo run --locked -p crtsim-cli -- render -o output/ntsc-240p.png --preset "NTSC 240p" --backend vulkan
           cargo run --locked -p crtsim-cli -- contact-sheet -o output/contact-sheet.png --backend vulkan
+          # The video integration tests leave their input here.
+          cargo run --locked -p crtsim-cli -- render -i output/video-input.mkv -o output/cli-video.mp4 --size 320x240 --backend vulkan
+          cargo run --locked -p crtsim-cli -- render -i output/video-input.mkv -o output/cli-lossless.mkv --size 320x240 --quality lossless --backend vulkan
+          cargo run --locked -p crtsim-cli -- render -i output/video-input.mkv -o output/cli-animation.png --max-side 320 --backend vulkan
       - name: Launch desktop and capture rendered preview
         env:
           LIBGL_ALWAYS_SOFTWARE: '1'
