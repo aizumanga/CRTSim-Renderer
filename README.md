@@ -37,6 +37,11 @@ Each preset shows a thumbnail rendered from your current image. Point at a prese
 Enter a name and choose **Save current** to add your exact settings to **My presets**; they reappear after restarting. Use **Edit description** on any personal preset to add, change or clear its description, and **Delete** to remove it, after confirming.
 Descriptions are saved beside gallery JSON files as UTF-8 `.txt` files; the JSON stays CLI-compatible.
 To add an existing JSON, load it, then use Save current in the gallery. JSON export remains available for sharing.
+**Presets → Copy link to this look** copies a link to the web app that holds the settings in use, compressed into the
+link's `#look=` fragment (about 800 characters); opening it in a browser applies the look in the web app, and
+**Presets → Open look from link…** applies one in either app, as a change Undo reverses. No server keeps the look,
+and a fragment is never sent to the site. An included NES LUT travels by name; a look with a LUT imported from a file
+is too large for a link, so share that one as a JSON preset.
 Saving under a name already in My presets, in any letter case, asks first, then replaces that preset's settings and keeps its name and description.
 The included presets' names are refused, in any letter case, so an included preset is never replaced or shadowed. Malformed files are skipped with an explanation. Personal JSON files live outside the checkout,
 in the app data directory shown in the gallery. `CRTSIM_DATA_DIR` can override that directory with an absolute path.

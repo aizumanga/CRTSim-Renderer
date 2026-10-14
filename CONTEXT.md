@@ -117,6 +117,10 @@ project's source that is missing or could not be opened, with the test card in i
 video's comes with its timeline. A project opens its source first and is held until that has
 loaded; then its settings and queue apply, whether the source opened or not.
 
+**Look link**: a link to the web app whose `#look=` fragment holds a look, deflated, with an
+included NES LUT by name (`crates/crtsim-app/src/look_link.rs`). Opening it applies the look as
+an undoable change. A look with an imported LUT has no link.
+
 **Incoming file**: a file picked or dropped for a LUT or a preset, read the same way whether it
 came as a path on the desktop or as a browser's name and bytes, with one size limit for each
 kind, and applied in one place (`crates/crtsim-app/src/incoming.rs`).

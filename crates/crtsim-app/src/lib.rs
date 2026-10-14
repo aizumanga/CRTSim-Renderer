@@ -16,6 +16,7 @@ mod gallery;
 mod gallery_ui;
 mod incoming;
 mod lane;
+mod look_link;
 mod lut_gallery;
 mod model;
 #[cfg(not(target_arch = "wasm32"))]
@@ -115,6 +116,8 @@ struct App {
     /// Whether a video plays again from the start when it ends.
     loop_playback: bool,
     dialog_open: bool,
+    /// The link typed into Open look from link, while that window is open.
+    look_link: Option<String>,
     jobs: worker::Jobs,
     events: mpsc::Receiver<Event>,
     dialog_send: mpsc::Sender<dialogs::Answer>,
@@ -252,6 +255,7 @@ impl App {
             fit_preview: true,
             loop_playback: false,
             dialog_open: false,
+            look_link: None,
             jobs,
             events,
             dialog_send,
@@ -609,6 +613,11 @@ impl eframe::App for App {
         self.lut_gallery_window(ctx);
         self.credits_window(ctx);
         self.ffmpeg_window(ctx);
+        self.look_link_window(ctx);
+        #[cfg(target_arch = "wasm32")]
+        if !self.modal_open() {
+            self.look_from_address_bar();
+        }
         #[cfg(not(target_arch = "wasm32"))]
         self.updates_window(ctx);
         let now = Instant::now();

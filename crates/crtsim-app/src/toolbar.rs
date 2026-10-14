@@ -53,6 +53,21 @@ impl App {
                             ui.close();
                         }
                     }
+                    ui.separator();
+                    if ui
+                        .button("Copy link to this look")
+                        .on_hover_text(
+                            "A link that opens these settings in the web app, to share them.                              The link holds the whole look.",
+                        )
+                        .clicked()
+                    {
+                        self.copy_look_link(ctx);
+                        ui.close();
+                    }
+                    if ui.button("Open look from link…").clicked() {
+                        self.look_link = Some(String::new());
+                        ui.close();
+                    }
                 });
                 ui.menu_button("View", |ui| {
                     ui.label("Interface theme");

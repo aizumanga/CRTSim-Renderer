@@ -887,6 +887,7 @@ dependencies = [
  "crtsim-media",
  "directories",
  "eframe",
+ "flate2",
  "image 0.24.9",
  "js-sys",
  "pollster 0.3.0",

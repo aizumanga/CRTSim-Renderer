@@ -24,6 +24,8 @@ eframe = { version = "0.36.2", default-features = false, features = ["default_fo
 pollster = "0.3"
 tempfile = "3"
 directories = "5"
+# Deflates a look shared as a link.
+flate2 = "1"
 # Instant as std's on the desktop, and one that works in a browser, where std's panics.
 web-time = "1"
 
@@ -53,6 +55,7 @@ web-sys = { version = "0.3", features = [
     "HtmlAnchorElement",
     "HtmlCanvasElement",
     "HtmlElement",
+    "History",
     "HtmlInputElement",
     "IdbCursorWithValue",
     "IdbDatabase",
@@ -65,6 +68,7 @@ web-sys = { version = "0.3", features = [
     "IdbVersionChangeEvent",
     "ImageData",
     "ImageEncodeOptions",
+    "Location",
     "OffscreenCanvas",
     "OffscreenCanvasRenderingContext2d",
     "Url",
