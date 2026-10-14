@@ -146,6 +146,27 @@ brings the web app and the new version to the site.
 | Web | ZIP of the web app, for a website to serve | Serve the files over HTTPS in a browser with WebGPU; the site does this at `aizumanga.neocities.org/crtsim/` |
 | RetroArch | ZIP of shader presets for the shipped looks | Copy its `crtsim-renderer` folder into RetroArch's `shaders` folder; see the README inside |
 
+### With a package manager
+
+Scoop and Homebrew install a release, and their own update commands bring it to the next one:
+
+```sh
+# Windows, Scoop
+scoop bucket add crtsim https://github.com/aizumanga/CRTSim-Renderer
+scoop install crtsim-renderer          # later: scoop update crtsim-renderer
+
+# macOS (Apple Silicon), Homebrew
+brew tap aizumanga/crtsim https://github.com/aizumanga/CRTSim-Renderer
+brew install --cask crtsim-renderer    # later: brew upgrade --cask crtsim-renderer
+```
+
+This repository is the Scoop bucket (`bucket/`) and the Homebrew tap (`Casks/`). Once a release is published,
+the **Package managers** workflow opens a pull request bringing both to it, written by `tools/manifests.py` from the
+release's SHA256SUMS files; merging it offers the release. The same workflow writes the release's winget manifests
+(`aizumanga.CRTSimRenderer`, a portable ZIP with `crtsim-desktop` and `crtsim` commands) and, when the repository
+has a `WINGET_TOKEN` secret, submits them to winget's repository, after which `winget install aizumanga.CRTSimRenderer`
+and `winget upgrade` work too. Without the secret, the manifests are kept as the run's `winget-manifests` artifact.
+
 No Rust installation or repository checkout is required. Effects/assets are embedded.
 Each archive includes the README, project license, original asset provenance, dependency license texts/index and commit identifier.
 SHA256SUMS files accompany downloads. Builds are not claimed to be byte-for-byte reproducible.

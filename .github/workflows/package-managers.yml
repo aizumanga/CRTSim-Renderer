@@ -1,0 +1,78 @@
+name: Package managers
+# Once a release is published, its Scoop manifest and Homebrew cask are brought to it in a pull
+# request, since this repository is itself the Scoop bucket and the Homebrew tap. Its winget
+# manifests are submitted to winget's own repository when a WINGET_TOKEN secret exists: a
+# classic token with the public_repo scope, from the account that will fork winget-pkgs.
+# Drafts publish nothing, so a release is only offered once it is published by hand.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: The published release to write manifests for, such as v1.1.0
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}
+jobs:
+  scoop-and-homebrew:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ inputs.release_tag || github.event.release.tag_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - name: Write the manifests
+        run: |
+          gh release download "$RELEASE_TAG" --pattern 'SHA256SUMS-*.txt' --dir release-sums
+          python tools/manifests.py --version "$RELEASE_TAG" --sums release-sums
+      - name: Open a pull request
+        run: |
+          if git diff --quiet -- bucket Casks; then
+            echo "The manifests already describe $RELEASE_TAG."
+            exit 0
+          fi
+          branch="package-managers/$RELEASE_TAG"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c "$branch"
+          git add bucket Casks
+          git commit -m "Scoop and Homebrew install $RELEASE_TAG"
+          git push --force origin "$branch"
+          gh pr create --head "$branch" --title "Scoop and Homebrew install $RELEASE_TAG" \
+            --body "The Scoop manifest and Homebrew cask, written by \`tools/manifests.py\` from the published $RELEASE_TAG release's SHA256SUMS files." \
+            || echo "A pull request for $branch is already open."
+  winget:
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ inputs.release_tag || github.event.release.tag_name }}
+      WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Write the manifests
+        shell: bash
+        run: |
+          gh release download "$RELEASE_TAG" --pattern 'SHA256SUMS-*.txt' --dir release-sums
+          python tools/manifests.py --version "$RELEASE_TAG" --sums release-sums --winget winget
+      - uses: actions/upload-artifact@v4
+        with:
+          name: winget-manifests
+          path: winget
+          retention-days: 14
+      - name: Submit to winget-pkgs
+        if: env.WINGET_TOKEN != ''
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+          $folder = "winget/$($env:RELEASE_TAG.TrimStart('v'))"
+          ./wingetcreate.exe submit --token $env:WINGET_TOKEN $folder

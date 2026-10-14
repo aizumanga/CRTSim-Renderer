@@ -1,0 +1,39 @@
+{
+    "version": "1.1.0",
+    "description": "Renders images and video through J. Kyle Pittman's CRTSim, a simulated CRT television.",
+    "homepage": "https://github.com/aizumanga/CRTSim-Renderer",
+    "license": "CC0-1.0",
+    "notes": [
+        "Video needs FFmpeg and ffprobe, which CRTSim Renderer finds where Scoop installs them:",
+        "    scoop install ffmpeg"
+    ],
+    "suggest": {
+        "FFmpeg": "main/ffmpeg"
+    },
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/aizumanga/CRTSim-Renderer/releases/download/v1.1.0/CRTSim-Renderer-v1.1.0-windows-x86_64.zip",
+            "hash": "d50b227beef473703d2421842a1a2495f88f7a21667413e29614c0ed652792f0"
+        }
+    },
+    "bin": "crtsim.exe",
+    "shortcuts": [
+        [
+            "crtsim-desktop.exe",
+            "CRTSim Renderer"
+        ]
+    ],
+    "checkver": {
+        "github": "https://github.com/aizumanga/CRTSim-Renderer"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/aizumanga/CRTSim-Renderer/releases/download/v$version/CRTSim-Renderer-v$version-windows-x86_64.zip",
+                "hash": {
+                    "url": "$baseurl/SHA256SUMS-windows-x86_64.txt"
+                }
+            }
+        }
+    }
+}
