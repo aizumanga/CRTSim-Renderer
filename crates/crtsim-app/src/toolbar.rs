@@ -117,8 +117,28 @@ impl App {
                     }
                 });
             });
-            if ui.button("Credits").clicked() {
-                self.show_credits = true;
+            ui.menu_button("Help", |ui| {
+                if ui.button("Credits & support…").clicked() {
+                    self.show_credits = true;
+                    ui.close();
+                }
+                // A browser page is the latest release already.
+                #[cfg(not(target_arch = "wasm32"))]
+                if ui.button("Check for updates…").clicked() {
+                    self.show_updates(ctx);
+                    ui.close();
+                }
+            });
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(release) = self.updates.newer() {
+                let tag = release.tag.clone();
+                if ui
+                    .button(format!("⬆ {tag} is out"))
+                    .on_hover_text("A newer release is out. See what changed and where to get it.")
+                    .clicked()
+                {
+                    self.updates.open = true;
+                }
             }
         });
     }

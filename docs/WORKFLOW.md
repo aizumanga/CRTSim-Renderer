@@ -1,6 +1,6 @@
 # v0.2 workflow
 
-The toolbar groups commands under **File**, **Presets**, **View** and **Export**, followed by Credits.
+The toolbar groups commands under **File**, **Presets**, **View**, **Export** and **Help**, which holds the credits and, on the desktop, the update check.
 File contains media and project commands; Presets contains the gallery and imports; View contains interface themes.
 Export contains PNG, video and batch queue commands.
 

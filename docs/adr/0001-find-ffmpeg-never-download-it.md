@@ -1,6 +1,8 @@
 # 1. Find FFmpeg; never download it
 
-Status: accepted. The maintainer ruled out a download button too (see the end).
+Status: accepted. The maintainer ruled out a download button too (see the end). The promise of no
+network use is narrowed by [ADR 4](0004-check-for-updates-never-download-them.md), which lets the
+desktop ask for the latest release when a person checks for updates; FFmpeg is still never downloaded.
 
 ## Context
 

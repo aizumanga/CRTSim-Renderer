@@ -145,6 +145,11 @@ handed on, to the preview or to an **output** that makes the file (FFmpeg on the
 the browser's encoders or the GIF and WebP writers on a page). The desktop drives the same
 loops from its worker thread.
 
+**Update check**: asking GitHub whether a newer release than this one is published, when a
+person chooses Help → Check for updates, or at each start once they have turned that on
+(`crates/crtsim-app/src/updates.rs`). It tells; it never downloads a release, which package
+managers and AppImage tools do instead. See [the decision](docs/adr/0004-check-for-updates-never-download-them.md).
+
 **Web app**: the whole app, with editing, the galleries, playback and exports, running in a
 browser from the author's Neocities site. It is not a cut-down demo: what the desktop app does
 with a look, the web app does too, within what a browser allows. It needs WebGPU and never

@@ -32,6 +32,8 @@ mod theme;
 mod thumbnails;
 mod timeline;
 mod toolbar;
+#[cfg(not(target_arch = "wasm32"))]
+mod updates;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
 #[cfg(target_arch = "wasm32")]
@@ -87,6 +89,9 @@ struct App {
     luts: lut_gallery::LutGallery,
     /// Whether FFmpeg is there for video work, and how to install it.
     ffmpeg: ffmpeg_setup::FfmpegSetup,
+    /// Whether a newer release is out, checked when asked.
+    #[cfg(not(target_arch = "wasm32"))]
+    updates: updates::Updates,
     thumbnails: thumbnails::Thumbnails,
     tool_windows: app_data::Layout,
     tool_windows_saved: app_data::Layout,
@@ -229,6 +234,8 @@ impl App {
             presets,
             luts,
             ffmpeg: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            updates: Default::default(),
             thumbnails: Default::default(),
             tool_windows_saved: tool_windows.clone(),
             tool_windows,
@@ -254,6 +261,8 @@ impl App {
             smoke,
         };
         app.ffmpeg.start_check(ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        app.check_for_updates_at_start(ctx);
         app.load_session(input_path.is_some());
         if let Some(path) = input_path {
             app.load(path);
@@ -600,6 +609,8 @@ impl eframe::App for App {
         self.lut_gallery_window(ctx);
         self.credits_window(ctx);
         self.ffmpeg_window(ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.updates_window(ctx);
         let now = Instant::now();
         let pointer_down = ctx.input(|i| i.pointer.any_down());
         let may_preview = self.may_preview();

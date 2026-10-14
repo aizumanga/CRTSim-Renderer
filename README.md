@@ -24,7 +24,7 @@ See [the implementation plan](docs/PLAN.md) and [validation notes](docs/VALIDATI
 ## Desktop app
 
 On first launch, the app honestly describes this AI-assisted project as “what some would call \"vibe-coded slop\", built based on J. Kyle Pittman's public CRTSim”.
-Acknowledging that message is remembered on this computer. **Credits** always reopens the attribution and links to
+Acknowledging that message is remembered on this computer. **Help → Credits & support** always reopens the attribution and links to
 [J. Kyle Pittman's itch.io page](https://piratehearts.itch.io/) and [Minor Key Games on Steam](https://store.steampowered.com/developer/MinorKeyGames).
 Please support the original developer by buying and playing their games. This port is unofficial and is not endorsed by him.
 The welcome and credits also link to Pittman's
@@ -107,7 +107,11 @@ already exists; after confirmation, the app writes a complete temporary file and
 - Dragging a slider moves it a quarter as far as the pointer, so it can be set finely; hold **Shift** to move it as far
   as the pointer, or **Alt** for a tenth as far again. A click still jumps it to the pointer.
 - Click or drag a slider to give it the keyboard: **←/→** step it by 0.1% of its range, **Shift** by 1%, **Alt** by 0.01%, and **Delete** returns it to its default. **Esc** or a click elsewhere lets go.
-- The status bar shows the app's version in its lower right corner.
+- The status bar shows the app's version in its lower right corner. **Help → Check for updates…** asks GitHub
+  whether a newer release is out and shows its notes and download page; turn on **Check when the app starts**
+  there to be told without asking. The app never downloads or installs a release itself; package managers and
+  AppImage tools do that (see [updating](docs/RELEASES.md#with-a-package-manager) and
+  [the decision](docs/adr/0004-check-for-updates-never-download-them.md)).
 
 The original-image display is limited to a 2048-pixel thumbnail; export always uses the loaded source.
 While a control is being changed, each preview runs the CRT on screen on with the new settings, so the
@@ -200,7 +204,7 @@ Nothing is downloaded automatically.
 4. Choose **Export → Video…**. A separate window explains MP4/H.264, MKV/H.264 and WebM/VP9, with quality/audio controls and optional advanced encoding settings,
    and offers GIF and animated WebP with their own size, frame-rate and length settings and a file-size estimate. Then choose the destination.
 
-The compact toolbar groups media/projects under **File**, gallery/imports under **Presets**, themes under **View**, and rendering under **Export**. Video previews are silent; audio is retained in exports unless explicitly muted.
+The compact toolbar groups media/projects under **File**, gallery/imports under **Presets**, themes under **View**, rendering under **Export**, and credits and the update check under **Help**. Video previews are silent; audio is retained in exports unless explicitly muted.
 
 Exports retain CRT history between ordered frames. Variable-frame-rate input is normalized to the detected average frame rate,
 or to 60 FPS in 60 Hz mode. Source-rate mode corrects persistence decay by media time; this is an approximation of the spatial feedback effect.
@@ -229,7 +233,8 @@ cargo run --release -p crtsim-cli -- render --output test-crt.png
 
 The last command uses the built-in test card and the public-reference defaults, with stable artifact phase.
 Files are **never overwritten**: choose a new output name if it already exists. Parent directories must exist.
-All assets are embedded; the executable does not download anything at runtime.
+All assets are embedded; the executable downloads nothing at runtime. The desktop reaches the network only to check for a
+newer release, when asked ([ADR 4](docs/adr/0004-check-for-updates-never-download-them.md)); the CLI never does.
 
 ### Your own image
 
