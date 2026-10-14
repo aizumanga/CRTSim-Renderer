@@ -241,6 +241,18 @@ cargo run --release -p crtsim-cli -- render --output test-crt.png
 ```
 
 The last command uses the built-in test card and the public-reference defaults, with stable artifact phase.
+`--preset "NTSC 240p"` renders with an included preset instead; `presets` lists them.
+
+```sh
+cargo run --release -p crtsim-cli -- contact-sheet --input image.png --output sheet.png
+cargo run --release -p crtsim-cli -- contact-sheet --preset "Clean RGB" --look Mine=mine.json --tile 640x480 --columns 2 --output mine.png
+```
+
+A **contact sheet** renders one image through many looks, every included preset unless `--preset` or
+`--look NAME=SETTINGS.json` choose some, and lays them out in a grid with each look's name beneath its tile
+(`--tile` sets each tile's size, 480x360 by default, and `--columns` how many go in a row). In the desktop and web
+apps, **Export → Contact sheet…** does the same with the picture on screen, the settings in use and any of the
+gallery's presets, your own included.
 Files are **never overwritten**: choose a new output name if it already exists. Parent directories must exist.
 All assets are embedded; the executable downloads nothing at runtime. The desktop reaches the network only to check for a
 newer release, when asked ([ADR 4](docs/adr/0004-check-for-updates-never-download-them.md)); the CLI never does.

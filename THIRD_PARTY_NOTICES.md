@@ -18,6 +18,12 @@ This document is a development inventory, not a completed binary-distribution li
 `crates/crtsim-ports` runs the RetroArch port in tests through librashader (MPL-2.0 or GPL-3.0),
 with glslang and SPIRV-Cross; it is never packaged, and nothing that ships depends on it.
 
+## Bitmap font
+
+Contact sheets label their tiles with the printable ASCII characters of
+[font8x8](https://github.com/dhepper/font8x8) by Daniel Hepper, public domain, after Marcel Sondaar's font from IBM's
+public domain VGA fonts. The glyphs are embedded in `crates/crtsim-core/src/sheet.rs`.
+
 ## FFmpeg
 
 Phase 3 invokes a user-installed FFmpeg and ffprobe as separate executables. Neither is bundled, linked or downloaded by this application.

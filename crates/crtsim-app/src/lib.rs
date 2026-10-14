@@ -27,6 +27,7 @@ mod preview_ui;
 mod project;
 mod session;
 mod settings_ui;
+mod sheet_ui;
 mod smoke;
 mod source;
 mod theme;
@@ -94,6 +95,8 @@ struct App {
     #[cfg(not(target_arch = "wasm32"))]
     updates: updates::Updates,
     thumbnails: thumbnails::Thumbnails,
+    /// The contact sheet window and what the next sheet holds.
+    sheet: sheet_ui::ContactSheet,
     tool_windows: app_data::Layout,
     tool_windows_saved: app_data::Layout,
     config: Config,
@@ -240,6 +243,7 @@ impl App {
             #[cfg(not(target_arch = "wasm32"))]
             updates: Default::default(),
             thumbnails: Default::default(),
+            sheet: Default::default(),
             tool_windows_saved: tool_windows.clone(),
             tool_windows,
             history: model::History::new(config.clone()),
@@ -614,6 +618,7 @@ impl eframe::App for App {
         self.credits_window(ctx);
         self.ffmpeg_window(ctx);
         self.look_link_window(ctx);
+        self.contact_sheet_window(ctx);
         #[cfg(target_arch = "wasm32")]
         if !self.modal_open() {
             self.look_from_address_bar();

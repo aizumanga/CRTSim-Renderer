@@ -382,6 +382,13 @@ pub enum Export {
         options: crtsim_media::AnimationOptions,
         config: Config,
     },
+    /// A contact sheet: the still rendered through each look, laid out in a grid.
+    Sheet {
+        input: Arc<RgbaImage>,
+        looks: Vec<crtsim_core::sheet::Look>,
+        tile: (u32, u32),
+        columns: u32,
+    },
     /// A batch job, whose source is only read once it runs. The queue chose a video or a PNG
     /// when it named the output.
     Batch {
@@ -395,7 +402,7 @@ impl Export {
     /// Reported when the graphics driver fails under the export.
     fn driver_failed(&self) -> &'static str {
         match self {
-            Self::Image { .. } => STILL_FAILED,
+            Self::Image { .. } | Self::Sheet { .. } => STILL_FAILED,
             Self::Video { .. } => "Video graphics driver failed. Try a smaller resolution.",
             Self::Animation { .. } => "Animation graphics driver failed. Try a smaller size.",
             Self::Batch { .. } => "Batch graphics driver failed. Try a smaller resolution.",
@@ -412,6 +419,43 @@ impl Export {
         match self {
             Self::Image { input, config } => {
                 export_image(graphics, input, config, path, cancel, progress).await
+            }
+            Self::Sheet {
+                input,
+                looks,
+                tile,
+                columns,
+            } => {
+                let renderer = graphics.renderer(|| {}).await?;
+                let count = looks.len();
+                let sheet = crtsim_core::sheet::render(
+                    renderer,
+                    input,
+                    looks,
+                    *tile,
+                    *columns,
+                    Some(cancel),
+                    |done| {
+                        progress(Progress {
+                            fraction: done as f32 / count as f32 * 0.95,
+                            stage: format!("Rendered {done} of {count} looks"),
+                        })
+                    },
+                )
+                .await?;
+                ensure!(!cancel.load(Ordering::Relaxed), "Render cancelled");
+                progress(Progress {
+                    fraction: 0.97,
+                    stage: "Encoding and saving PNG".into(),
+                });
+                #[cfg(not(target_arch = "wasm32"))]
+                return files::save_png(path, sheet, None);
+                #[cfg(target_arch = "wasm32")]
+                return crate::web::download(
+                    &file_name(path),
+                    &files::png_bytes(sheet, None)?,
+                    "image/png",
+                );
             }
             Self::Video {
                 video,
@@ -1712,6 +1756,44 @@ mod tests {
                 still(&wide),
                 "{runtime}: settled"
             );
+            stop(worker);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a Vulkan adapter"]
+    fn a_contact_sheet_is_saved_with_a_tile_for_each_look() {
+        for (runtime, worker, next) in workers() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("sheet.png");
+            let looks = ["General image", "Clean RGB", "NTSC 240p"]
+                .map(|name| crtsim_core::sheet::Look {
+                    name: name.into(),
+                    config: crtsim_core::presets::named(name).unwrap().config,
+                })
+                .into();
+            worker
+                .jobs
+                .send(Job::Export {
+                    export: Export::Sheet {
+                        input: Arc::new(crtsim_core::config::test_card()),
+                        looks,
+                        tile: (160, 120),
+                        columns: 2,
+                    },
+                    path: path.clone(),
+                    cancel: Arc::new(AtomicBool::new(false)),
+                })
+                .unwrap();
+            loop {
+                if let Event::Exported(result) = next(&worker) {
+                    assert!(result.is_ok(), "{runtime}: the sheet failed");
+                    break;
+                }
+            }
+            // Two columns of 160 and two rows of 120 with their labels, between 4-pixel gaps.
+            let sheet = image::open(&path).unwrap();
+            assert_eq!((sheet.width(), sheet.height()), (2 * 164 + 4, 2 * 136 + 4));
             stop(worker);
         }
     }

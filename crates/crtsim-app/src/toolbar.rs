@@ -109,6 +109,16 @@ impl App {
                         ui.close();
                     }
                     if ui
+                        .button("Contact sheet…")
+                        .on_hover_text(
+                            "This picture through many looks at once, each named, in one PNG.",
+                        )
+                        .clicked()
+                    {
+                        self.show_contact_sheet();
+                        ui.close();
+                    }
+                    if ui
                         .button("RetroArch shader…")
                         .on_hover_text(
                             "These settings as a shader preset for RetroArch, drawn over a \

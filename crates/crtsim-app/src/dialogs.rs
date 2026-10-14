@@ -19,6 +19,7 @@ pub(crate) enum Dialog {
     SavePreset,
     Export,
     RetroArch,
+    ContactSheet,
 }
 
 /// What a dialog is asked for.
@@ -119,6 +120,7 @@ impl Dialog {
             Self::SavePreset => ("CRT preset", vec!["json"], Some("my-crt")),
             Self::Export => ("PNG image", vec!["png"], Some("rendered")),
             Self::RetroArch => ("RetroArch shader", vec!["zip"], Some("my-crt-retroarch")),
+            Self::ContactSheet => ("PNG image", vec!["png"], Some("contact-sheet")),
         };
         Chooser {
             filter,
@@ -222,6 +224,7 @@ impl App {
                 }
             }
             Dialog::Export => self.export(path),
+            Dialog::ContactSheet => self.export_contact_sheet(path),
             Dialog::RetroArch => match files::save_retroarch(&path, &self.config) {
                 Ok(()) => {
                     self.status = format!("Exported RetroArch shader {}", path.display());

@@ -102,6 +102,13 @@ project or session holding it opens it again.
 **Colour table**: the LUT or the NES palette a look maps colours through before the CRT. A look
 has one at most; choosing either replaces the other (`Config::set_lut`, `Config::set_palette`).
 
+**Contact sheet**: one picture rendered through many looks, as settled stills of one tile size,
+laid out in a grid with each look's name beneath it in an 8x8 bitmap font
+(`crtsim_core::sheet`; the app's window is `sheet_ui.rs`, the CLI's `contact-sheet`).
+
+**Included presets**: the looks the gallery offers and `crtsim render --preset` names
+(`crtsim_core::presets`). Personal presets are the app's own.
+
 **Preset gallery** and **LUT gallery**: the windows offering looks to audition and apply
 (`gallery.rs` and `lut_gallery.rs`). The preset gallery also saves the settings in use as a
 personal preset; the LUT gallery decodes each included LUT once and shares it.

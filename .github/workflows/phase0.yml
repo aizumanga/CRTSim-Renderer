@@ -84,6 +84,7 @@ jobs:
           cargo test --locked -p crtsim-app interactive_previews_run_on_and_a_settled_one_is_a_still -- --ignored --nocapture
           cargo test --locked -p crtsim-app a_video_plays_through_the_worker_to_its_end -- --ignored --nocapture
           cargo test --locked -p crtsim-app edits_while_playing_reach_the_next_frames_without_stopping -- --ignored --nocapture
+          cargo test --locked -p crtsim-app a_contact_sheet_is_saved_with_a_tile_for_each_look -- --ignored --nocapture
       - name: Render resolution and phase fixtures
         shell: bash
         run: |
@@ -96,6 +97,8 @@ jobs:
           cargo run --locked -p crtsim-cli -- render -o output/phase-b.png --phase b --backend vulkan
           cargo run --locked -p crtsim-cli -- config --general -o output/general.json
           cargo run --locked -p crtsim-cli -- render -i output/4k.png --config output/general.json -o output/auto.png --debug-dir output/auto-debug --backend vulkan
+          cargo run --locked -p crtsim-cli -- render -o output/ntsc-240p.png --preset "NTSC 240p" --backend vulkan
+          cargo run --locked -p crtsim-cli -- contact-sheet -o output/contact-sheet.png --backend vulkan
       - name: Launch desktop and capture rendered preview
         env:
           LIBGL_ALWAYS_SOFTWARE: '1'
