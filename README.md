@@ -103,6 +103,10 @@ already exists; after confirmation, the app writes a complete temporary file and
   including 256x224 signal resampling and saturation 1.35, with the game's own CRT options on top.
 - **General image** starts with square pixels, smooth resizing, contain fitting and saturation 1.0.
 - **Original / CRT / Compare** compares the source with the rendered tube. Drag the comparison divider. The CRT bends the image, so the two views are not geometrically registered.
+- **Pin look** keeps the settled picture and its settings; **Compare** then shows the pinned look left of the divider and
+  the settings in use right of it, with the settings changed since listed above the picture. **Unpin look**, or opening
+  another source, returns Compare to the original. The pinned picture is a still: after moving to another frame of a
+  video, pin again to compare that one.
 - **Fast / Balanced / Export resolution** changes preview canvas resolution only. Use Export resolution and turn off Fit view at 1x zoom to inspect mask sampling.
 - **Load / Save preset** uses the same version-1 JSON format as the CLI. **Undo / Redo / Reset** acts on settings, not source files or exported files.
   `Ctrl+Z` and `Ctrl+Shift+Z` provide undo and redo shortcuts (`Command` equivalents are also accepted on macOS).

@@ -8,6 +8,25 @@ impl App {
             ui.selectable_value(&mut self.view, View::Original, "Original");
             ui.selectable_value(&mut self.view, View::Crt, "CRT");
             ui.selectable_value(&mut self.view, View::Compare, "Compare");
+            if self.preview.pinned(self.source.input()).is_some() {
+                if ui
+                    .button("Unpin look")
+                    .on_hover_text("Compare with the original again")
+                    .clicked()
+                {
+                    self.preview.unpin();
+                }
+            } else if ui
+                .add_enabled(self.preview.can_pin(), egui::Button::new("Pin look"))
+                .on_hover_text(
+                    "Keep this picture and its settings, to compare what you change next with                      them in Compare.",
+                )
+                .on_disabled_hover_text("Wait for the preview to settle, then pin it.")
+                .clicked()
+            {
+                self.preview.pin(&self.config, self.source.input());
+                self.view = View::Compare;
+            }
             ui.separator();
             ui.checkbox(self.preview.live_mut(), "Live preview");
             if ui
@@ -86,6 +105,9 @@ impl App {
         if self.preview.stale() {
             ui.colored_label(ui.visuals().warn_fg_color, "Preview is out of date.");
         }
+        if self.view == View::Compare {
+            self.pinned_differences(ui);
+        }
         let controls_height = match &self.source.timeline {
             // A row more for the subtitles of a video that has any.
             Some(timeline) if timeline.video.subtitles().next().is_some() => 168.,
@@ -101,15 +123,24 @@ impl App {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 if self.view == View::Compare {
+                    let pinned = self.preview.pinned(self.source.input());
+                    let (left, label) = match pinned {
+                        Some((picture, ..)) => (picture, "the pinned look"),
+                        None => (
+                            egui::load::SizedTexture::from_handle(self.source.original()),
+                            "the original",
+                        ),
+                    };
                     if let Some(im) = self.preview.picture() {
                         compare(
                             ui,
-                            egui::load::SizedTexture::from_handle(self.source.original()),
+                            left,
                             im,
                             available,
                             self.fit_preview,
                             self.zoom,
                             &mut self.comparison,
+                            label,
                         );
                     }
                 } else if self.view == View::Original {
@@ -130,6 +161,45 @@ impl App {
                 }
             });
         self.video_controls(ui);
+    }
+
+    /// What changed since the look pinned, beneath the comparison.
+    fn pinned_differences(&self, ui: &mut egui::Ui) {
+        let Some((_, pinned, same_source)) = self.preview.pinned(self.source.input()) else {
+            return;
+        };
+        if !same_source {
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                "The pinned look is of another frame. Pin the look again to compare this one.",
+            );
+        }
+        let changes = model::differences(pinned, &self.config);
+        let heading = match changes.len() {
+            0 => "No settings changed since the pinned look".to_owned(),
+            1 => "1 setting changed since the pinned look".to_owned(),
+            n => format!("{n} settings changed since the pinned look"),
+        };
+        egui::CollapsingHeader::new(heading)
+            .id_salt("pinned differences")
+            .enabled(!changes.is_empty())
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(110.)
+                    .show(ui, |ui| {
+                        egui::Grid::new("pinned changes")
+                            .striped(true)
+                            .show(ui, |ui| {
+                                for change in &changes {
+                                    ui.label(&change.setting);
+                                    ui.weak(&change.from);
+                                    ui.label("→");
+                                    ui.strong(&change.to);
+                                    ui.end_row();
+                                }
+                            });
+                    });
+            });
     }
 
     fn video_controls(&mut self, ui: &mut egui::Ui) {
@@ -275,6 +345,11 @@ fn minutes_and_seconds(seconds: f64) -> String {
     format!("{:02}:{:02}", whole / 60, whole % 60)
 }
 
+/// `original` left of a divider and `rendered` right of it, `original` being what `label` says.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a drawing call, each argument a plain value"
+)]
 pub fn compare(
     ui: &mut egui::Ui,
     original: egui::load::SizedTexture,
@@ -283,6 +358,7 @@ pub fn compare(
     fit: bool,
     zoom: f32,
     split: &mut f32,
+    label: &str,
 ) {
     let native = rendered.size;
     let size = if fit {
@@ -322,5 +398,7 @@ pub fn compare(
     );
     response
         .on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
-        .on_hover_text("Drag to compare · original on the left, CRT on the right");
+        .on_hover_text(format!(
+            "Drag to compare · {label} on the left, the settings in use on the right"
+        ));
 }

@@ -65,6 +65,10 @@ With it off, edits wait for Refresh.
 An audition is previewed whether or not live preview is on, and never reaches the settings,
 their undo history or an export.
 
+**Pinned look**: a settled preview and its settings, kept to compare later settings with in
+Compare (`Preview::pin`). It is the same picture on screen when it was pinned, not rendered
+again, so another source unpins it.
+
 **Timeline**: where the editor is in an open video: the frame on screen, the frame the
 controls have picked to go to, and the time playing starts from
 (`crates/crtsim-app/src/timeline.rs`). There is one only while a video or animation is open.
