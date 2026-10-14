@@ -1,5 +1,34 @@
 # Portable releases (Phase 4)
 
+## v1.2.0
+
+The app tells you when a release is out and package managers install and update it, looks travel as links, two looks
+compare side by side, contact sheets show many looks at once, exports can be lossless, and the CLI renders video.
+
+- **Help → Check for updates…** asks GitHub for the latest release and shows its notes and download page. **Check when
+  the app starts**, off until you turn it on, does the same at each start. The app never downloads or installs a
+  release itself, and reaches the network for nothing else ([ADR 4](adr/0004-check-for-updates-never-download-them.md)).
+  **Credits** moves into the new **Help** menu.
+- Install and update with **Scoop** or **Homebrew** from this repository, and with **winget** once its manifests are
+  accepted (see [With a package manager](#with-a-package-manager)). The AppImage carries its update information, and a
+  `.zsync` file is published beside it, so AppImageUpdate or Gear Lever update it in place.
+- **Presets → Copy link to this look** copies a link that opens the settings in use in the web app; **Open look from
+  link…** applies one in either app, as a change Undo reverses. A look with an imported `.cube` LUT is too large for a
+  link and is shared as a preset instead.
+- **Pin look** keeps the picture on screen and its settings; **Compare** then shows them beside the settings in use,
+  with the settings changed listed above the picture.
+- **Export → Contact sheet…** renders the picture through the settings in use and any of the gallery's presets into one
+  labelled PNG. `crtsim contact-sheet` does the same from the command line, and `crtsim render --preset NAME` renders
+  with an included preset.
+- **Animated PNG** joins GIF and WebP as an animation export, every pixel exact, written without FFmpeg in the web app.
+  MKV video has a **Lossless** quality that keeps the CRT's RGB exactly in FFV1.
+- `crtsim render` makes videos and animations, by the output's extension: `.mp4`, `.mkv`, `.webm`, `.gif`, `.webp`,
+  or `.png` from a moving input. Without `--input` a moving output renders the video test card.
+- The macOS app reports its own version; it said 0.1.1 since that release. Packaging refuses a tag that does not match
+  the version in `Cargo.toml`.
+- Presets, projects and sessions are written as before. A video exported with Lossless quality carries a preset that
+  earlier versions cannot import.
+
 ## v1.1.0
 
 Super Win the Game is the default look, sliders move finely, the web app's videos carry their preset, and
