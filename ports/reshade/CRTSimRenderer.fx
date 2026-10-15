@@ -110,7 +110,7 @@ FILTERED(tex_bloom_up, CLAMP);
 #define P(name) name
 #define HOST_LINEAR (CRTSIM_LINEAR != 0)
 #define HOST_FRAME_COUNT crtsim_frame_count
-#define HOST_FRAME_MICROSECONDS (crtsim_frame_time * 1000.0)
+#define HOST_FRAME_TICKS (crtsim_frame_time * 0.06)
 #define HOST_PICTURE_ASPECT (float(SIGNAL_WIDTH) / float(SIGNAL_HEIGHT) * CRTSIM_PIXEL_ASPECT)
 #define HOST_SIGNAL_SIZE float2(SIGNAL_WIDTH, SIGNAL_HEIGHT)
 #define HOST_OUTPUT_SIZE float2(BUFFER_WIDTH, BUFFER_HEIGHT)

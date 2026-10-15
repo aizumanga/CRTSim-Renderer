@@ -18,6 +18,17 @@ This document is a development inventory, not a completed binary-distribution li
 `crates/crtsim-ports` runs the RetroArch port in tests through librashader (MPL-2.0 or GPL-3.0),
 with glslang and SPIRV-Cross; it is never packaged, and nothing that ships depends on it.
 
+## OBS Studio and ReShade
+
+The OBS filter (`ports/obs`) is a plugin that links OBS's library, libobs (GPL-2.0-or-later),
+and runs only inside OBS. Its own code is CC0, which is compatible with the GPL; a built plugin
+is distributed as a work combined with libobs, whose complete source is `ports/obs` here. The
+test driver beside it runs the plugin through libobs in CI.
+
+CI compiles the ReShade effect with ReShade's own FX compiler (Patrick Mours, BSD-3-Clause),
+taken from vkBasalt's Ubuntu source package (`tools/reshadefx`). It is built for the check
+and never packaged.
+
 ## Bitmap font
 
 Contact sheets label their tiles with the printable ASCII characters of

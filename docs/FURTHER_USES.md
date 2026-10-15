@@ -100,7 +100,8 @@ handles). Porting the shaders is less work and more robust.
 ## Other hosts worth considering
 
 - **OBS Studio**, for streamers. A native filter plugin keeps history between frames, which the
-  generic shader-filter plugin cannot. It is a large audience, and it needs only the `encode` path.
+  generic shader-filter plugin cannot. Done: as a shader port running the shared passes, not the
+  renderer ([ADR 5](adr/0005-the-ports-share-one-translation-of-the-passes.md)).
 - **Video editors via OpenFX** (DaVinci Resolve, Natron, Nuke). This matches the app's strength:
   deterministic, high-quality offline renders. Editors do not render frames in order, so a
   plugin must warm up from a few frames earlier each time, as stills already do.
@@ -112,15 +113,17 @@ handles). Porting the shaders is less work and more robust.
 ## Suggested order
 
 Decided since: games get shader ports, RetroArch first and then ReShade, with the renderer's
-glass made full-screen as their reference ([ADR 3](adr/0003-games-get-shader-ports-not-the-renderer.md)).
+glass made full-screen as their reference ([ADR 3](adr/0003-games-get-shader-ports-not-the-renderer.md)),
+and every port shares one translation of the passes, OBS's filter included
+([ADR 5](adr/0005-the-ports-share-one-translation-of-the-passes.md)).
 
 | Step | Work | Unlocks |
 | --- | --- | --- |
 | 1 | `Renderer::encode`, a persistent uniform buffer, no waits; upgrade wgpu and eframe | Everything below. The app's preview gets faster too. |
 | 2 | `crtsim-web` with an image and webcam demo page | The widest audience, with WGSL as it is. |
 | 3 | ~~Baked mesh textures and a full-screen-only variant, checked against the goldens~~ Done: the glass is ray-traced and the bezel baked, in one full-screen pass | Every engine without mesh support. |
-| 4 | RetroArch slang preset, then ReShade | Emulators and existing PC games. |
-| 5 | Bevy plugin; OBS filter | Rust games; live streams. |
+| 4 | ~~RetroArch slang preset, then ReShade~~ Done, sharing their passes | Emulators and existing PC games. |
+| 5 | Bevy plugin; ~~OBS filter~~ Done, as a shader port | Rust games; live streams. |
 
 Visual parity with the mesh renderer has to be checked for step 3. The golden-image tests
 already compare renders pixel by pixel, so the baked variant can be held to the same fixtures

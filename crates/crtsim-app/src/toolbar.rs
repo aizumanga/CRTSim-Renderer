@@ -132,6 +132,12 @@ impl App {
                             "These settings as a ReShade preset, drawn over almost any PC game \
                              as it plays.",
                         ),
+                        (
+                            Host::Obs,
+                            "OBS filter…",
+                            "These settings as a look for the CRTSim Renderer filter in OBS \
+                             Studio, drawn over a source as it streams or records.",
+                        ),
                     ] {
                         if ui.button(label).on_hover_text(hover).clicked() {
                             self.dialog(Dialog::Port(host), ctx);

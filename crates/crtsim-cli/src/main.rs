@@ -96,6 +96,13 @@ enum Command {
     ExportRetroarch(PortExport),
     /// Write looks as ReShade presets, with the effect, into a NEW directory.
     ExportReshade(PortExport),
+    /// Write looks for the OBS filter into a NEW directory.
+    ExportObs(PortExport),
+    /// Write the OBS filter's data folder, its effect and images, into a NEW directory.
+    ObsPluginData {
+        #[arg(short, long)]
+        output_dir: PathBuf,
+    },
     /// Validate original meshes or export all attributes to portable JSON.
     InspectMeshes {
         #[arg(long)]
@@ -411,6 +418,10 @@ fn main() -> Result<()> {
         }
         Command::ExportRetroarch(export) => export_port(ports::Host::RetroArch, export)?,
         Command::ExportReshade(export) => export_port(ports::Host::ReShade, export)?,
+        Command::ExportObs(export) => export_port(ports::Host::Obs, export)?,
+        Command::ObsPluginData { output_dir } => {
+            ports::write(&output_dir, &ports::obs::plugin_data()?)?
+        }
         Command::ContactSheet {
             input,
             output,

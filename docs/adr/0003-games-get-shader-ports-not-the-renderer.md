@@ -24,7 +24,7 @@ effect is made of full-screen passes only.
   exactly, so the renderer is the port's reference and the golden images hold both. The bezel,
   an irregular mesh, is baked into textures.
 - The RetroArch port is checked against the renderer in CI through librashader, which runs
-  `.slangp` presets on wgpu. There is no such harness for ReShade, so it is translated from the
-  checked RetroArch port.
+  `.slangp` presets on wgpu. There is no such harness for ReShade, so it shares its passes with
+  the checked ports ([ADR 5](0005-the-ports-share-one-translation-of-the-passes.md)).
 - The renderer still waits on the GPU every frame and still takes only CPU images. That is
   fine for the app, and it is the first thing to change if a game ever embeds the renderer.

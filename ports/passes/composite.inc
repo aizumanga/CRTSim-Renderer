@@ -4,7 +4,7 @@
 // Reads: HOST_FETCH_PREPARED, the prepared signal; HOST_FETCH_PREVIOUS, this pass's output the
 // frame before, when HOST_HAS_PREVIOUS says there is one at this size (a new signal size starts
 // the glow again); HOST_FETCH_ARTIFACTS and HOST_ARTIFACT_SIZE, the artifact pattern;
-// HOST_SIGNAL_SIZE, HOST_FRAME_COUNT and HOST_FRAME_MICROSECONDS.
+// HOST_SIGNAL_SIZE, HOST_FRAME_COUNT and HOST_FRAME_TICKS.
 
 float3 prepared_at(int2 xy) {
     int2 last = int2(HOST_SIGNAL_SIZE) - int2(1, 1);
@@ -36,8 +36,8 @@ float artifact_phase() {
 float3 persistence() {
     float3 per_tick = float3(P(CRTSIM_PERSISTENCE_R), P(CRTSIM_PERSISTENCE_G),
         P(CRTSIM_PERSISTENCE_B));
-    float microseconds = HOST_FRAME_MICROSECONDS;
-    if (microseconds > 0.0) return pow(per_tick, V3(60.0 * microseconds / 1000000.0));
+    float ticks = HOST_FRAME_TICKS;
+    if (ticks > 0.0) return pow(per_tick, V3(ticks));
     return per_tick;
 }
 

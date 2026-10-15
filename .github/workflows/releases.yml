@@ -73,9 +73,11 @@ jobs:
           fi
           echo "PACKAGE_VERSION=$version" >> "$GITHUB_ENV"
           python tools/package.py --platform "$PACKAGE_PLATFORM" --version "$version"
-          # The RetroArch presets are the same on every system, so one build writes them.
+          # The RetroArch and ReShade presets are the same on every system, so one build writes
+          # them.
           if [ "$PACKAGE_PLATFORM" = linux-x86_64 ]; then
             python tools/package.py --platform retroarch --version "$version"
+            python tools/package.py --platform reshade --version "$version"
           fi
       - name: Build Linux AppImage
         if: runner.os == 'Linux'
@@ -121,6 +123,42 @@ jobs:
             dist/*.txt
             dist/*.sha256
             package-smoke/*.png
+          if-no-files-found: error
+          retention-days: 14
+  # The OBS filter for Linux, built against the OBS 30 that Ubuntu 24.04 packages; the
+  # desktop's Linux packages are built on an older system, whose OBS is too old for it.
+  obs:
+    if: inputs.release_tag == ''
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the filter and the command line that writes its data
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y libobs-dev
+          cargo build --release --locked -p crtsim-cli
+          cmake -S ports/obs -B build/obs -DCMAKE_BUILD_TYPE=Release -DCMAKE_COMPILE_WARNING_AS_ERROR=ON
+          cmake --build build/obs
+      - name: Package the filter
+        shell: bash
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          if [ "$REF_TYPE" = tag ]; then
+            version="$REF_NAME"
+          else
+            version="preview-${GITHUB_SHA:0:8}"
+          fi
+          python tools/package.py --platform obs-linux-x86_64 --version "$version"
+          (cd dist && sha256sum -- *.zip > SHA256SUMS-obs-linux-x86_64.txt && cat SHA256SUMS-obs-linux-x86_64.txt)
+          # Kept under dist/ in the artifact, where the release looks for every package.
+          mkdir -p artifact/dist && mv dist/*.zip dist/*.txt artifact/dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CRTSim-Renderer-obs-linux-x86_64
+          path: artifact/
           if-no-files-found: error
           retention-days: 14
   web:
@@ -175,7 +213,7 @@ jobs:
           retention-days: 14
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [package, web]
+    needs: [package, obs, web]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -197,7 +235,7 @@ jobs:
         shell: bash
         run: |
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release create "$RELEASE_TAG" --verify-tag --draft --title "CRTSim Renderer $RELEASE_TAG" --notes 'Portable desktop and CLI packages, the web app the site serves, and the CRT as RetroArch shader presets. See the included README and docs/RELEASES.md. Video requires a separate FFmpeg/ffprobe installation. macOS is ad-hoc signed only, without Apple Developer ID signing or notarization.'
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "CRTSim Renderer $RELEASE_TAG" --notes 'Portable desktop and CLI packages, the web app the site serves, and the CRT as RetroArch shader presets, ReShade presets and an OBS filter for Linux. See the included README and docs/RELEASES.md. Video requires a separate FFmpeg/ffprobe installation. macOS is ad-hoc signed only, without Apple Developer ID signing or notarization.'
           fi
           gh release upload "$RELEASE_TAG" packages/dist/*.zip packages/dist/*.tar.gz packages/dist/*.AppImage packages/dist/*.AppImage.zsync packages/dist/SHA256SUMS-*.txt --clobber
   # The web app for a release published before its package existed, such as v0.7.0.

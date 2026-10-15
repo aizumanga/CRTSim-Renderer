@@ -7,14 +7,16 @@
 // as it is, and that RetroArch's GLSL reads through the names its port defines in dialect.inc.
 // So no vector is made from one number (V2 and V3 spell it out), no comparison is made of whole
 // vectors, no array is written, no texture is a function's argument, and no global constant is
-// declared: constants are macros.
+// declared: constants are macros. And no macro without parameters is defined as something in
+// parentheses, which OBS's preprocessor would read as its parameters.
 //
 // Each host defines what the passes read of it before including them, as HOST_ macros:
 //
 //   P(NAME)                 a parameter's value, as a float or an int
 //   HOST_LINEAR             true when rendering in linear light
 //   HOST_FRAME_COUNT        an int: the frames drawn before this one
-//   HOST_FRAME_MICROSECONDS a float: how long this frame lasts, 0 when the host does not say
+//   HOST_FRAME_TICKS        a float: how many sixtieths of a second this frame lasts, 0 when
+//                           the host does not say
 //   HOST_PICTURE_ASPECT     a float: the shape the picture is meant to be shown at
 //   HOST_SIGNAL_SIZE        a float2: the signal's size, which the picture is prepared at
 //   HOST_OUTPUT_SIZE        a float2: the size of the screen the tube is drawn on

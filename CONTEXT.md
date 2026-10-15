@@ -42,8 +42,18 @@ _Avoid_: live sequence, since live preview means something else.
 game, as opposed to the app, which renders files.
 
 **Shader port**: the effect rewritten in a host's own shader language, as passes the host runs
-on every frame of its picture, rather than this renderer running inside the host. See
+on every frame of its picture, rather than this renderer running inside the host: for
+RetroArch, ReShade and OBS (`ports/`, exported by `crtsim_core::ports`). See
 [the decision](docs/adr/0003-games-get-shader-ports-not-the-renderer.md).
+
+**Shared passes**: the effect's passes written once for every shader port, in the part of HLSL
+each host's language reads (`ports/passes`). A port's **shell** is what it wraps them in: its
+uniforms, textures and entry points, and the **host macros** (`HOST_...`) through which a pass
+reads its host. See [the decision](docs/adr/0005-the-ports-share-one-translation-of-the-passes.md).
+
+**Port parameter**: a setting as a shader port reads it, one number each, named `CRTSIM_...`,
+from one table for every port (`crtsim_core::ports::parameters`). A choice is numbered from 0;
+some hosts read only some parameters.
 
 **Bezel**: the moulded surround of the picture tube, lit and reflecting the glass.
 _Avoid_: frame, which already means a picture in a sequence.

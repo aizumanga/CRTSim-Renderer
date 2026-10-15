@@ -9,8 +9,10 @@ import zipfile
 
 parser = argparse.ArgumentParser()
 # `web` packages the web app that tools/build_web.py left in web/dist, for a website to serve.
-# `retroarch` packages the shipped looks as RetroArch shader presets, written by the release CLI.
-parser.add_argument('--platform', choices=['linux-x86_64', 'windows-x86_64', 'macos-arm64', 'web', 'retroarch'],
+# `retroarch` and `reshade` package the shipped looks as those ports' presets, written by the release CLI.
+# `obs-linux-x86_64` packages the OBS filter that CMake built into build/obs, with its data folder.
+parser.add_argument('--platform', choices=['linux-x86_64', 'windows-x86_64', 'macos-arm64', 'web', 'retroarch',
+                                           'reshade', 'obs-linux-x86_64'],
                     required=True)
 parser.add_argument('--version', required=True)
 args = parser.parse_args()
@@ -22,21 +24,37 @@ dist.mkdir(exist_ok=True)
 name = f'CRTSim-Renderer-{args.version}-{args.platform}'
 stage = dist / name
 stage.mkdir()  # Refuse stale/reused staging folders.
-if args.platform == 'retroarch':
-    # One folder to copy into RetroArch's shaders folder. The shaders and textures are CC0 and
-    # hold no dependency's code, so the package carries only the original assets' sources.
-    shaders = stage / 'crtsim-renderer'
-    subprocess.run([str(root / 'target' / 'release' / 'crtsim'), 'export-retroarch', '--output-dir', str(shaders)],
-                   check=True, stdout=subprocess.DEVNULL)
-    shutil.copy2(root / 'LICENSE', shaders)
-    shutil.copy2(root / 'assets/original-crtsim/SOURCES.md', shaders / 'ORIGINAL_ASSETS.md')
+cli = str(root / 'target' / 'release' / 'crtsim')
+
+
+def zip_port(folder):
+    """One folder to copy where its host looks. The shaders, textures and plugin are CC0 and hold no
+    dependency's code; the plugin links OBS's own library only as OBS loads it. So the package
+    carries only the original assets' sources."""
+    shutil.copy2(root / 'LICENSE', folder)
+    shutil.copy2(root / 'assets/original-crtsim/SOURCES.md', folder / 'ORIGINAL_ASSETS.md')
     archive = dist / (name + '.zip')
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as output:
-        for path in sorted(shaders.rglob('*')):
+        for path in sorted(folder.rglob('*')):
             if path.is_file():
                 output.write(path, path.relative_to(stage))
     print(archive)
     raise SystemExit
+
+
+if args.platform in ('retroarch', 'reshade'):
+    folder = stage / 'crtsim-renderer'
+    subprocess.run([cli, f'export-{args.platform}', '--output-dir', str(folder)], check=True,
+                   stdout=subprocess.DEVNULL)
+    zip_port(folder)
+if args.platform == 'obs-linux-x86_64':
+    # Laid out as OBS finds a user's plugins: <name>/bin/64bit beside <name>/data.
+    folder = stage / 'crtsim-renderer'
+    (folder / 'bin' / '64bit').mkdir(parents=True)
+    shutil.copy2(root / 'build' / 'obs' / 'crtsim-renderer.so', folder / 'bin' / '64bit')
+    subprocess.run([cli, 'obs-plugin-data', '--output-dir', str(folder / 'data')], check=True)
+    shutil.copy2(root / 'ports' / 'obs' / 'README.md', folder)
+    zip_port(folder)
 web = args.platform == 'web'
 exe = '.exe' if args.platform.startswith('windows') else ''
 if web:

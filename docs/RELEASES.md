@@ -1,5 +1,23 @@
 # Portable releases (Phase 4)
 
+## Unreleased
+
+The CRT runs in ReShade, over almost any PC game, and in OBS Studio, as a filter that keeps the glow between frames.
+
+- `CRTSim-Renderer-<version>-reshade.zip` holds the ReShade effect and presets for the shipped looks: copy its
+  `reshade-shaders` folder into the game's folder and pick a preset in ReShade's overlay. **Export → ReShade effect…**
+  and `crtsim export-reshade` write any look as a preset. The effect resizes the game's picture to the signal itself;
+  the signal's size, linear light and a look's colour table are preprocessor definitions the preset sets.
+- `CRTSim-Renderer-<version>-obs-linux-x86_64.zip` holds the OBS filter built for OBS 30 on Linux, with its data and
+  the shipped looks; elsewhere it builds from `ports/obs`. Add **CRTSim Renderer** to a source's filters and apply a
+  look. **Export → OBS filter…** and `crtsim export-obs` write any look for it.
+- RetroArch, ReShade and OBS run one translation of the passes, `ports/passes`
+  ([ADR 5](adr/0005-the-ports-share-one-translation-of-the-passes.md)). RetroArch presets draw as before: the parity
+  test measures the same differences from the renderer, case for case. RetroArch's **Mask columns** and **Mask rows**
+  say they follow the signal, which is what they always followed.
+- The OBS filter is tested against the renderer in OBS itself, and the ReShade effect compiled with ReShade's own
+  compiler as each shipped look sets it.
+
 ## v1.2.0
 
 The app tells you when a release is out and package managers install and update it, looks travel as links, two looks

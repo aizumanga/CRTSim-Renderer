@@ -7,7 +7,7 @@
 //! `WGPU_BACKEND` picks the backend; the input is the renderer's test card at 60 frames a second.
 
 use anyhow::{bail, Context, Result};
-use crtsim_ports::{Port, RetroArch};
+use crtsim_ports::retroarch::{Port, RetroArch};
 use std::path::PathBuf;
 use std::time::Duration;
 

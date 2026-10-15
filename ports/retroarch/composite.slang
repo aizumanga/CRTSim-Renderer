@@ -50,9 +50,9 @@ layout(set = 0, binding = 4) uniform sampler2D CRTSIM_ARTIFACT_PATTERN;
 #define HOST_ARTIFACT_SIZE vec2(textureSize(CRTSIM_ARTIFACT_PATTERN, 0))
 #define HOST_FRAME_COUNT int(global.FrameCount)
 #ifdef _HAS_FRAMETIME_UNIFORMS
-#define HOST_FRAME_MICROSECONDS float(global.FrameTimeDelta)
+#define HOST_FRAME_TICKS float(60.0 * float(global.FrameTimeDelta) / 1000000.0)
 #else
-#define HOST_FRAME_MICROSECONDS 0.0
+#define HOST_FRAME_TICKS 0.0
 #endif
 #include "passes/common.inc"
 #include "passes/composite.inc"

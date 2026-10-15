@@ -179,14 +179,27 @@ python3 -m http.server --directory web/dist 8000            # then open http://l
 Browsers without WebGPU get a page that says how to turn it on. Firefox and LibreWolf on Linux
 need `dom.webgpu.enabled` set to `true` in `about:config`.
 
-## In games: RetroArch
+## In games and streams: RetroArch, ReShade and OBS
 
-The CRT also runs in RetroArch, over any core as it plays, as a shader port of the same passes
-(see [the decision](docs/adr/0003-games-get-shader-ports-not-the-renderer.md)). Each release has
-a `-retroarch.zip` of presets for the shipped looks; **Export → RetroArch shader…** in the app,
-or `crtsim export-retroarch`, writes any look as one. The shaders are in
-[`ports/retroarch`](ports/retroarch), with instructions for using them. The glass and its bezel
+The CRT also runs in other programs, as shader ports of the same passes (see
+[the decision](docs/adr/0003-games-get-shader-ports-not-the-renderer.md)), which every port shares
+([ADR 5](docs/adr/0005-the-ports-share-one-translation-of-the-passes.md)). The glass and its bezel
 draw as the app draws them, from the same baked bezel.
+
+- **RetroArch**, over any core as it plays. Each release has a `-retroarch.zip` of presets for the
+  shipped looks; **Export → RetroArch shader…**, or `crtsim export-retroarch`, writes any look as
+  one. See [`ports/retroarch`](ports/retroarch).
+- **ReShade**, over almost any PC game. Each release has a `-reshade.zip` of the effect and
+  presets for the shipped looks; **Export → ReShade effect…**, or `crtsim export-reshade`, writes
+  any look as one. See [`ports/reshade`](ports/reshade).
+- **OBS Studio**, as a filter on any source, keeping the glow between frames. Each release has
+  an `-obs-linux-x86_64.zip` of the plugin built for Linux; elsewhere it builds from
+  [`ports/obs`](ports/obs). **Export → OBS filter…**, or `crtsim export-obs`, writes any look for
+  it.
+
+Every port is checked against the renderer: the RetroArch port through librashader and the OBS
+filter in OBS itself, picture for picture, and the ReShade effect compiled by ReShade's own
+compiler as each shipped look sets it.
 
 ## Build and try
 

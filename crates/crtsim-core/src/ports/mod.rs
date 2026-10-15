@@ -7,6 +7,7 @@
 //! parameters a look becomes, the images the passes read, the looks a release ships, and
 //! writing an export's files. Each host's module writes its own files around them.
 
+pub mod obs;
 pub mod reshade;
 pub mod retroarch;
 
@@ -225,7 +226,7 @@ pub fn export(host: Host, looks: &[(&str, &Config)]) -> Result<Vec<File>> {
     match host {
         Host::RetroArch => retroarch::export(looks),
         Host::ReShade => reshade::export(looks),
-        Host::Obs => anyhow::bail!("not yet"),
+        Host::Obs => obs::export(looks),
     }
 }
 

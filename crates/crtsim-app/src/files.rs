@@ -290,6 +290,22 @@ mod tests {
     }
 
     #[test]
+    fn every_ports_export_holds_the_look_named_for_its_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = Config::general();
+        for (host, preset) in [
+            (Host::ReShade, "Warm_Tube-reshade/Warm_Tube.ini"),
+            (Host::Obs, "Warm_Tube-obs/Warm_Tube.json"),
+        ] {
+            let path = dir.path().join(format!("Warm Tube-{}.zip", host.slug()));
+            save_port(&path, host, &c).unwrap();
+            let bytes = std::fs::read(&path).unwrap();
+            let named = |name: &str| bytes.windows(name.len()).any(|w| w == name.as_bytes());
+            assert!(named(preset), "{preset} in the {} export", host.name());
+        }
+    }
+
+    #[test]
     fn included_lut_survives_preset_and_png_metadata_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let mut c = Config::general();

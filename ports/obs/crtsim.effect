@@ -1,0 +1,137 @@
+// CC0. CRTSim Renderer's CRT as an OBS effect: a technique for each pass of the passes every
+// port shares, which the filter runs in turn over a source's picture. A port of J. Kyle
+// Pittman's CRTSim, from https://github.com/aizumanga/CRTSim-Renderer.
+
+// Every parameter, as a float; written by the exporter.
+#include "parameters.inc"
+
+uniform float4x4 ViewProj;
+// What the pass reads: the source's picture, its resized rows, the picture at the signal's
+// size, the prepared signal, the signal, the surface, or the first bloom.
+uniform texture2d pass_input;
+// The surface again, for present, whose input is the bloom.
+uniform texture2d surface_image;
+// The last frame's signal, when crtsim_has_previous says there is one.
+uniform texture2d previous_signal;
+uniform texture2d table_image;
+uniform texture2d artifacts_image;
+uniform texture2d mask_image;
+uniform texture2d bezel_shape_image;
+// The same image again, filtered, for the depth's high byte a ray steps on: a texture of its
+// own, since OpenGL filters a texture as the last sampler it was read with says.
+uniform texture2d bezel_shape_filtered;
+uniform texture2d bezel_uv_image;
+uniform texture2d bezel_normal_image;
+uniform texture2d glass_image;
+
+uniform int crtsim_frame_count;
+uniform float crtsim_frame_ticks;
+uniform float crtsim_has_previous;
+uniform float crtsim_table_size;
+uniform float2 crtsim_original_size;
+uniform float2 crtsim_signal_size;
+uniform float2 crtsim_output_size;
+uniform float2 crtsim_artifacts_size;
+uniform float2 crtsim_mask_size;
+uniform float2 crtsim_bezel_size;
+uniform float2 crtsim_glass_size;
+
+sampler_state point_clamp {
+    Filter = Point;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+sampler_state linear_clamp {
+    Filter = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+sampler_state linear_repeat {
+    Filter = Linear;
+    AddressU = Wrap;
+    AddressV = Wrap;
+};
+
+struct VertInOut {
+    float4 pos : POSITION;
+    float2 uv : TEXCOORD0;
+};
+
+VertInOut VSDefault(VertInOut v)
+{
+    VertInOut o;
+    o.pos = mul(float4(v.pos.xyz, 1.0), ViewProj);
+    o.uv = v.uv;
+    return o;
+}
+
+// Texels are read through a point sampler at their centres: OBS draws Load with OpenGL by
+// sampling the texture as its sampler filters it, which lands exactly on a texel only where a
+// float holds its centre exactly.
+#define FETCH(image, xy, size) image.SampleLevel(point_clamp, (float2(xy) + V2(0.5)) / size, 0.0)
+
+#define P(name) name
+#define HOST_LINEAR bool(CRTSIM_LINEAR > 0.5)
+#define HOST_FRAME_COUNT crtsim_frame_count
+#define HOST_FRAME_TICKS crtsim_frame_ticks
+#define HOST_PICTURE_ASPECT float(crtsim_signal_size.x / crtsim_signal_size.y * CRTSIM_PIXEL_ASPECT)
+#define HOST_SIGNAL_SIZE crtsim_signal_size
+#define HOST_OUTPUT_SIZE crtsim_output_size
+#define HOST_ORIGINAL_SIZE crtsim_original_size
+#define HOST_RESIZE_NEAREST bool(CRTSIM_RESIZE < 0.5)
+#define HOST_FETCH_ORIGINAL(xy) FETCH(pass_input, xy, crtsim_original_size)
+#define HOST_FETCH_ROWS(xy) FETCH(pass_input, xy, float2(crtsim_original_size.x, crtsim_signal_size.y))
+#define HOST_FETCH_PICTURE(xy) FETCH(pass_input, xy, crtsim_signal_size)
+#define HOST_TABLE_SIZE crtsim_table_size
+#define HOST_FETCH_TABLE(xy) FETCH(table_image, xy, float2(crtsim_table_size * crtsim_table_size, crtsim_table_size))
+#define HOST_FETCH_PREPARED(xy) FETCH(pass_input, xy, crtsim_signal_size)
+#define HOST_HAS_PREVIOUS bool(crtsim_has_previous > 0.5)
+#define HOST_FETCH_PREVIOUS(xy) FETCH(previous_signal, xy, crtsim_signal_size)
+#define HOST_ARTIFACT_SIZE crtsim_artifacts_size
+#define HOST_FETCH_ARTIFACTS(xy) FETCH(artifacts_image, xy, crtsim_artifacts_size)
+#define HOST_FETCH_SIGNAL(xy) FETCH(pass_input, xy, crtsim_signal_size)
+#define HOST_MASK_SIZE crtsim_mask_size
+#define HOST_SAMPLE_MASK(uv, lod) mask_image.SampleLevel(linear_repeat, uv, lod)
+#define HOST_BEZEL_SIZE crtsim_bezel_size
+#define HOST_FETCH_BEZEL_SHAPE(xy) FETCH(bezel_shape_image, xy, crtsim_bezel_size)
+#define HOST_SAMPLE_BEZEL_SHAPE(uv) bezel_shape_filtered.SampleLevel(linear_clamp, uv, 0.0)
+#define HOST_FETCH_BEZEL_UV(xy) FETCH(bezel_uv_image, xy, crtsim_bezel_size)
+#define HOST_FETCH_BEZEL_NORMAL(xy) FETCH(bezel_normal_image, xy, crtsim_bezel_size)
+#define HOST_GLASS_SIZE crtsim_glass_size
+#define HOST_FETCH_GLASS(xy) FETCH(glass_image, xy, crtsim_glass_size)
+#define HOST_SAMPLE_BLOOM_INPUT(uv, second) pass_input.SampleLevel(linear_clamp, uv, 0.0)
+#define HOST_SAMPLE_SURFACE(uv) surface_image.SampleLevel(linear_clamp, uv, 0.0)
+#define HOST_SAMPLE_BLOOM(uv) pass_input.SampleLevel(linear_clamp, uv, 0.0)
+
+#include "passes/common.inc"
+#include "passes/resize.inc"
+#include "passes/prepare.inc"
+#include "passes/composite.inc"
+#include "passes/surface.inc"
+#include "passes/bloom.inc"
+#include "passes/present.inc"
+
+// The first resize's output has the picture's columns and the signal's rows.
+float4 PSRows(VertInOut v) : TARGET
+{
+    return crtsim_resize_rows(int2(v.uv * float2(crtsim_original_size.x, crtsim_signal_size.y)));
+}
+
+float4 PSColumns(VertInOut v) : TARGET { return crtsim_resize_columns(int2(v.uv * crtsim_signal_size)); }
+float4 PSPrepare(VertInOut v) : TARGET { return crtsim_prepare(int2(v.uv * crtsim_signal_size)); }
+float4 PSComposite(VertInOut v) : TARGET { return crtsim_composite(int2(v.uv * crtsim_signal_size)); }
+float4 PSSurface(VertInOut v) : TARGET { return crtsim_surface(v.uv); }
+float4 PSBloomDown(VertInOut v) : TARGET { return crtsim_bloom(v.uv, false); }
+float4 PSBloomUp(VertInOut v) : TARGET { return crtsim_bloom(v.uv, true); }
+float4 PSPresent(VertInOut v) : TARGET { return crtsim_present(v.uv); }
+
+technique Rows { pass { vertex_shader = VSDefault(v); pixel_shader = PSRows(v); } }
+technique Columns { pass { vertex_shader = VSDefault(v); pixel_shader = PSColumns(v); } }
+technique Prepare { pass { vertex_shader = VSDefault(v); pixel_shader = PSPrepare(v); } }
+technique Composite { pass { vertex_shader = VSDefault(v); pixel_shader = PSComposite(v); } }
+technique Surface { pass { vertex_shader = VSDefault(v); pixel_shader = PSSurface(v); } }
+technique BloomDown { pass { vertex_shader = VSDefault(v); pixel_shader = PSBloomDown(v); } }
+technique BloomUp { pass { vertex_shader = VSDefault(v); pixel_shader = PSBloomUp(v); } }
+technique Present { pass { vertex_shader = VSDefault(v); pixel_shader = PSPresent(v); } }

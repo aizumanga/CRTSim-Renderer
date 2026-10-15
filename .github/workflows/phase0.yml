@@ -73,7 +73,29 @@ jobs:
       - name: RetroArch port against the renderer, through librashader
         run: |
           cargo clippy --locked -p crtsim-ports --all-targets -- -D warnings
-          cargo test --locked -p crtsim-ports -- --ignored --nocapture
+          cargo test --locked -p crtsim-ports --test harness --test retroarch_parity -- --ignored --nocapture
+      # OBS's development files, and the source of vkBasalt, whose package carries ReShade's own
+      # effect compiler.
+      - name: Install OBS and ReShade's compiler
+        run: |
+          sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
+          sudo apt-get update -qq
+          sudo apt-get install -y libobs-dev libgl1-mesa-dri spirv-headers spirv-tools
+          mkdir -p build/vkbasalt
+          (cd build/vkbasalt && apt-get source -qq vkbasalt)
+      - name: ReShade port compiles as every shipped look sets it, with ReShade's compiler
+        run: |
+          tools/reshadefx/build.sh build/vkbasalt/vkbasalt-*/ build/reshadefx-check
+          cargo run --locked -p crtsim-cli -- export-reshade --output-dir build/reshade
+          python3 tools/reshadefx/check_presets.py build/reshadefx-check build/reshade
+      - name: OBS filter against the renderer, in OBS itself
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          CRTSIM_OBS_BUILD: ${{ github.workspace }}/build/obs
+        run: |
+          cmake -S ports/obs -B build/obs -DCRTSIM_OBS_TEST=ON -DCMAKE_COMPILE_WARNING_AS_ERROR=ON
+          cmake --build build/obs
+          xvfb-run -a cargo test --locked -p crtsim-ports --test obs_parity -- --ignored --nocapture
       - name: Video history, FFmpeg and audio integration
         run: |
           cargo test --locked -p crtsim-core video_history -- --ignored --nocapture

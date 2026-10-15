@@ -17,7 +17,7 @@
 #define GLASS_RADIUS 4.0
 #define GLASS_EDGE 0.015625
 #define BEZEL_HALF float2(1.6533334, 1.32)
-#define BEZEL_NEAR (-0.1)
+#define BEZEL_NEAR float(-0.1)
 #define BEZEL_FAR 0.33
 #define BEZEL_OPENING_Y 1.24
 #define BEZEL_OPENING_Z 0.95
@@ -95,7 +95,7 @@ struct Surface {
     float3 light;
 };
 
-float4 lit(Surface v, float2 across, float2 down, bool bezel) {
+float4 light_surface(Surface v, float2 across, float2 down, bool bezel) {
     float3 n = safe_normalize(v.normal);
     float3 cam = safe_normalize(v.camera);
     float3 light = safe_normalize(v.light);
@@ -287,9 +287,9 @@ float4 crtsim_surface(float2 uv) {
         bezel.reflection = bytes.y;
         bezel.camera = camera - bezel_at;
         bezel.light = light_at - bezel_at;
-        return lit(bezel, bezel_across, bezel_down, true);
+        return light_surface(bezel, bezel_across, bezel_down, true);
     }
-    if (glass_depth < NOTHING) return lit(glass, glass_across, glass_down, false);
+    if (glass_depth < NOTHING) return light_surface(glass, glass_across, glass_down, false);
     float3 backdrop = float3(P(CRTSIM_BACKDROP_R), P(CRTSIM_BACKDROP_G), P(CRTSIM_BACKDROP_B));
     return float4(HOST_LINEAR ? srgb_decode(backdrop) : backdrop, 1.0);
 }
