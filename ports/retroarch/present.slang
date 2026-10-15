@@ -1,5 +1,5 @@
 #version 450
-// CC0. The glass and bezel with their bloom added, encoded for the display.
+// CC0. The glass and bezel with their bloom added, encoded for the display: passes/present.inc.
 
 #include "parameters.inc"
 
@@ -20,18 +20,16 @@ void main() {
 }
 
 #pragma stage fragment
-#include "common.inc"
 layout(location = 0) in vec2 vTexCoord;
 layout(location = 0) out vec4 FragColor;
 layout(set = 0, binding = 2) uniform sampler2D Source;
 layout(set = 0, binding = 3) uniform sampler2D CRTSIM_SURFACE;
 
-void main() {
-    bool linear = global.CRTSIM_LINEAR > 0.5;
-    vec3 base = textureLod(CRTSIM_SURFACE, vTexCoord, 0.0).rgb;
-    vec3 blurred = textureLod(Source, vTexCoord, 0.0).rgb;
-    float lum = display_luma(blurred, linear);
-    vec3 colored = blurred / max(lum, 0.000001) * pow(max(lum, 0.0), global.CRTSIM_BLOOM_POWER);
-    vec3 result = base + colored * global.CRTSIM_BLOOM;
-    FragColor = vec4(linear ? srgb_encode(result) : result, 1.0);
-}
+#include "dialect.inc"
+#define HOST_LINEAR (global.CRTSIM_LINEAR > 0.5)
+#define HOST_SAMPLE_SURFACE(uv) textureLod(CRTSIM_SURFACE, uv, 0.0)
+#define HOST_SAMPLE_BLOOM(uv) textureLod(Source, uv, 0.0)
+#include "passes/common.inc"
+#include "passes/present.inc"
+
+void main() { FragColor = crtsim_present(vTexCoord); }

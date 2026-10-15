@@ -18,11 +18,12 @@ use std::ops::Bound;
 /// Where a preset finds the port's shaders and textures, relative to it.
 const SHADERS: &str = "shaders/crtsim-renderer";
 
-/// The port's sources, as `ports/retroarch` holds them.
+/// The port's sources, as `ports/retroarch` holds them, and the passes every port shares, as
+/// `ports/passes` holds them, which the shaders include from `passes/`.
 const SOURCES: &[(&str, &str)] = &[
     (
-        "common.inc",
-        include_str!("../../../ports/retroarch/common.inc"),
+        "dialect.inc",
+        include_str!("../../../ports/retroarch/dialect.inc"),
     ),
     (
         "bloom.inc",
@@ -51,6 +52,30 @@ const SOURCES: &[(&str, &str)] = &[
     (
         "present.slang",
         include_str!("../../../ports/retroarch/present.slang"),
+    ),
+    (
+        "passes/common.inc",
+        include_str!("../../../ports/passes/common.inc"),
+    ),
+    (
+        "passes/prepare.inc",
+        include_str!("../../../ports/passes/prepare.inc"),
+    ),
+    (
+        "passes/composite.inc",
+        include_str!("../../../ports/passes/composite.inc"),
+    ),
+    (
+        "passes/surface.inc",
+        include_str!("../../../ports/passes/surface.inc"),
+    ),
+    (
+        "passes/bloom.inc",
+        include_str!("../../../ports/passes/bloom.inc"),
+    ),
+    (
+        "passes/present.inc",
+        include_str!("../../../ports/passes/present.inc"),
     ),
 ];
 
