@@ -1,10 +1,11 @@
 // CC0. The bloom's blur: seven taps in a hexagon, turned a quarter between its two passes.
 //
-// Reads: HOST_SAMPLE_BLOOM_INPUT(uv), the pass's input filtered; HOST_OUTPUT_SIZE.
+// Reads: HOST_SAMPLE_BLOOM_INPUT(uv, second), the pass's input filtered: the surface, or for the
+// second pass the first's output; HOST_OUTPUT_SIZE.
 
 float3 bloom_tap(float2 uv, float2 offset, bool swap, float2 scale) {
     float2 turned = swap ? offset.yx : offset;
-    return HOST_SAMPLE_BLOOM_INPUT(uv + turned * scale).rgb;
+    return HOST_SAMPLE_BLOOM_INPUT(uv + turned * scale, swap).rgb;
 }
 
 // The blur's pixel at uv; the second pass swaps the hexagon's axes.

@@ -22,6 +22,6 @@ layout(set = 0, binding = 2) uniform sampler2D Source;
 
 #include "dialect.inc"
 #define HOST_OUTPUT_SIZE global.FinalViewportSize.xy
-#define HOST_SAMPLE_BLOOM_INPUT(uv) textureLod(Source, uv, 0.0)
+#define HOST_SAMPLE_BLOOM_INPUT(uv, second) textureLod(Source, uv, 0.0)
 #include "passes/common.inc"
 #include "passes/bloom.inc"

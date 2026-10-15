@@ -15,7 +15,7 @@
 //! case's margin.
 
 use crtsim_core::config::{self, ColorMode, Config, Phase};
-use crtsim_core::{nes_luts, retroarch, Renderer, Sequence};
+use crtsim_core::{nes_luts, Renderer, Sequence};
 use crtsim_ports::{Port, RetroArch};
 use image::RgbaImage;
 use std::path::PathBuf;
@@ -276,9 +276,9 @@ fn aspect(case: &Case) -> f32 {
 }
 
 fn port(case: &Case, dir: &std::path::Path) -> RgbaImage {
-    let files = retroarch::export(&[("look", &case.config)]).expect("export");
+    let files = crtsim_core::ports::retroarch::export(&[("look", &case.config)]).expect("export");
     let folder = dir.join(case.name);
-    retroarch::write(&folder, &files).expect("write the preset");
+    crtsim_core::ports::write(&folder, &files).expect("write the preset");
     let (retroarch, frame_time_us) = match case.timing {
         Timing::Ticks => (RetroArch::Older, 0),
         Timing::Video(fps) => (RetroArch::Newer, (1e6 / fps).round() as u32),

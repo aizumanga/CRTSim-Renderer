@@ -4,6 +4,7 @@
 use crate::export_ui::ExportFormat;
 use crate::worker::Export;
 use crate::*;
+use crtsim_core::ports::Host;
 #[cfg(not(target_arch = "wasm32"))]
 use std::panic::AssertUnwindSafe;
 
@@ -18,7 +19,8 @@ pub(crate) enum Dialog {
     LoadPreset,
     SavePreset,
     Export,
-    RetroArch,
+    /// A look as a preset of a shader port.
+    Port(Host),
     ContactSheet,
 }
 
@@ -119,7 +121,19 @@ impl Dialog {
             Self::LoadPreset => ("CRT preset", vec!["json"], None),
             Self::SavePreset => ("CRT preset", vec!["json"], Some("my-crt")),
             Self::Export => ("PNG image", vec!["png"], Some("rendered")),
-            Self::RetroArch => ("RetroArch shader", vec!["zip"], Some("my-crt-retroarch")),
+            Self::Port(host) => (
+                match host {
+                    Host::RetroArch => "RetroArch shader",
+                    Host::ReShade => "ReShade effect",
+                    Host::Obs => "OBS filter",
+                },
+                vec!["zip"],
+                Some(match host {
+                    Host::RetroArch => "my-crt-retroarch",
+                    Host::ReShade => "my-crt-reshade",
+                    Host::Obs => "my-crt-obs",
+                }),
+            ),
             Self::ContactSheet => ("PNG image", vec!["png"], Some("contact-sheet")),
         };
         Chooser {
@@ -225,12 +239,12 @@ impl App {
             }
             Dialog::Export => self.export(path),
             Dialog::ContactSheet => self.export_contact_sheet(path),
-            Dialog::RetroArch => match files::save_retroarch(&path, &self.config) {
+            Dialog::Port(host) => match files::save_port(&path, host, &self.config) {
                 Ok(()) => {
-                    self.status = format!("Exported RetroArch shader {}", path.display());
+                    self.status = format!("Exported {} preset {}", host.name(), path.display());
                     self.error = None;
                 }
-                Err(e) => self.error = Some(format!("Cannot export RetroArch shader: {e:#}")),
+                Err(e) => self.error = Some(format!("Cannot export {} preset: {e:#}", host.name())),
             },
         }
     }

@@ -1,5 +1,5 @@
 use anyhow::{ensure, Context, Result};
-use crtsim_core::config::Config;
+use crtsim_core::{config::Config, ports::Host};
 use image::{DynamicImage, ImageOutputFormat, RgbaImage};
 use std::{
     io::{Cursor, Write},
@@ -154,11 +154,12 @@ fn crc32(bytes: &[u8]) -> u32 {
     }
     !crc
 }
-/// `c` as a RetroArch shader preset, zipped in a folder of its own with the port's shaders.
-/// The look is named after the file, less any `-retroarch`.
-pub fn save_retroarch(path: &Path, c: &Config) -> Result<()> {
+/// `c` as a preset of `host`'s shader port, zipped in a folder of its own with the port. The
+/// look is named after the file, less any `-retroarch` or the like.
+pub fn save_port(path: &Path, host: Host, c: &Config) -> Result<()> {
+    let suffix = format!("-{}", host.slug());
     let stem = crate::file_stem(path);
-    let stem = stem.strip_suffix("-retroarch").unwrap_or(&stem);
+    let stem = stem.strip_suffix(suffix.as_str()).unwrap_or(&stem);
     let name: String = stem
         .chars()
         .map(|c| {
@@ -170,8 +171,8 @@ pub fn save_retroarch(path: &Path, c: &Config) -> Result<()> {
         })
         .collect();
     let bytes = zip(
-        &format!("{name}-retroarch"),
-        &crtsim_core::retroarch::export(&[(&name, c)])?,
+        &format!("{name}{suffix}"),
+        &crtsim_core::ports::export(host, &[(&name, c)])?,
     );
     #[cfg(not(target_arch = "wasm32"))]
     return save_atomic(path, |f| Ok(f.write_all(&bytes)?));
@@ -182,7 +183,7 @@ pub fn save_retroarch(path: &Path, c: &Config) -> Result<()> {
 
 /// `files` in a zip archive under `folder`, stored uncompressed: the PNGs are compressed
 /// already and the shaders are small, so storing keeps this short and free of dependencies.
-fn zip(folder: &str, files: &[crtsim_core::retroarch::File]) -> Vec<u8> {
+fn zip(folder: &str, files: &[crtsim_core::ports::File]) -> Vec<u8> {
     let mut archive = Vec::new();
     let mut directory = Vec::new();
     for file in files {
@@ -252,7 +253,7 @@ mod tests {
         let path = dir.path().join("Warm Tube-retroarch.zip");
         let mut c = Config::general();
         c.lut = Some(std::sync::Arc::new(crtsim_core::nes_luts::load(0).unwrap()));
-        save_retroarch(&path, &c).unwrap();
+        save_port(&path, Host::RetroArch, &c).unwrap();
         let bytes = std::fs::read(&path).unwrap();
         // The end record: how many files, and where the directory listing them starts.
         let end = bytes.len() - 22;

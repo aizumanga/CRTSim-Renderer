@@ -2,7 +2,7 @@ use anyhow::{ensure, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use crtsim_core::{
     config::{self, Config, Phase},
-    mesh, presets, retroarch, sheet, PrepareOn, Renderer, Sequence,
+    mesh, ports, presets, sheet, PrepareOn, Renderer, Sequence,
 };
 use image::{DynamicImage, ImageOutputFormat};
 use std::{
@@ -92,19 +92,24 @@ enum Command {
         #[arg(long)]
         general: bool,
     },
-    /// Write looks as RetroArch shader presets into a NEW directory: the shipped looks, or
-    /// your own, each given as NAME=SETTINGS.json.
-    ExportRetroarch {
-        #[arg(short, long)]
-        output_dir: PathBuf,
-        #[arg(long = "look", value_name = "NAME=SETTINGS.json")]
-        looks: Vec<String>,
-    },
+    /// Write looks as RetroArch shader presets into a NEW directory.
+    ExportRetroarch(PortExport),
+    /// Write looks as ReShade presets, with the effect, into a NEW directory.
+    ExportReshade(PortExport),
     /// Validate original meshes or export all attributes to portable JSON.
     InspectMeshes {
         #[arg(long)]
         export_dir: Option<PathBuf>,
     },
+}
+/// Looks to write as a shader port's presets.
+#[derive(clap::Args)]
+struct PortExport {
+    #[arg(short, long)]
+    output_dir: PathBuf,
+    /// A look, as NAME=SETTINGS.json; the shipped looks when none is given.
+    #[arg(long = "look", value_name = "NAME=SETTINGS.json")]
+    looks: Vec<String>,
 }
 /// How a video or animation is made.
 #[derive(clap::Args)]
@@ -228,6 +233,22 @@ fn looks_from_files(looks: &[String]) -> Result<Vec<(String, Config)>> {
             Ok((name.to_string(), Config::from_json_slice(&bytes)?))
         })
         .collect()
+}
+
+/// Writes looks as `host`'s presets and prints each preset's path.
+fn export_port(host: ports::Host, PortExport { output_dir, looks }: PortExport) -> Result<()> {
+    let looks = if looks.is_empty() {
+        ports::shipped()
+    } else {
+        looks_from_files(&looks)?
+    };
+    let looks: Vec<_> = looks.iter().map(|(name, c)| (name.as_str(), c)).collect();
+    ports::write(&output_dir, &ports::export(host, &looks)?)?;
+    for (name, _) in &looks {
+        let preset = format!("{name}.{}", host.preset_extension());
+        println!("{}", output_dir.join(preset).display());
+    }
+    Ok(())
 }
 
 fn renderer(backend: Backend) -> Result<Renderer> {
@@ -388,18 +409,8 @@ fn main() -> Result<()> {
             let mut file = new_file(&output)?;
             file.write_all(serde_json::to_string_pretty(&c)?.as_bytes())?;
         }
-        Command::ExportRetroarch { output_dir, looks } => {
-            let looks = if looks.is_empty() {
-                retroarch::shipped()
-            } else {
-                looks_from_files(&looks)?
-            };
-            let looks: Vec<_> = looks.iter().map(|(name, c)| (name.as_str(), c)).collect();
-            retroarch::write(&output_dir, &retroarch::export(&looks)?)?;
-            for (name, _) in &looks {
-                println!("{}", output_dir.join(format!("{name}.slangp")).display());
-            }
-        }
+        Command::ExportRetroarch(export) => export_port(ports::Host::RetroArch, export)?,
+        Command::ExportReshade(export) => export_port(ports::Host::ReShade, export)?,
         Command::ContactSheet {
             input,
             output,
