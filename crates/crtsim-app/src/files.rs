@@ -1,10 +1,7 @@
 use anyhow::{ensure, Context, Result};
 use crtsim_core::{config::Config, ports::Host};
 use image::{DynamicImage, ImageOutputFormat, RgbaImage};
-use std::{
-    io::{Cursor, Write},
-    path::Path,
-};
+use std::{io::Cursor, path::Path};
 
 const PRESET_KEYWORD: &[u8] = b"CRTSim-Renderer-Preset";
 
@@ -41,14 +38,28 @@ pub fn save_atomic(
         .map_err(|e| anyhow::anyhow!("Cannot save {}: {}", path.display(), e.error))?;
     Ok(())
 }
+/// Delivers a finished file to where a save dialog said: on the desktop written whole, in one
+/// step, over any file there; in a browser downloaded under the name the path gives. Every
+/// export ends here, so this is the one place that tells the two apart.
+pub fn deliver(path: &Path, bytes: &[u8], mime: &str) -> Result<()> {
+    #[cfg(target_arch = "wasm32")]
+    return crate::web::download(&crate::file_name(path), bytes, mime);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::io::Write as _;
+        let _ = mime;
+        save_atomic(path, |file| Ok(file.write_all(bytes)?))
+    }
+}
+
+/// `image` delivered as a PNG, carrying `preset` when there is one.
 pub fn save_png(path: &Path, image: RgbaImage, preset: Option<&Config>) -> Result<()> {
     ensure!(
         path.extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("png")),
         "Export filename must end in .png"
     );
-    let bytes = png_bytes(image, preset)?;
-    save_atomic(path, |file| Ok(file.write_all(&bytes)?))
+    deliver(path, &png_bytes(image, preset)?, "image/png")
 }
 
 /// `image` as a PNG, carrying `preset` when there is one.
@@ -174,11 +185,7 @@ pub fn save_port(path: &Path, host: Host, c: &Config) -> Result<()> {
         &format!("{name}{suffix}"),
         &crtsim_core::ports::export(host, &[(&name, c)])?,
     );
-    #[cfg(not(target_arch = "wasm32"))]
-    return save_atomic(path, |f| Ok(f.write_all(&bytes)?));
-    // A browser saves by downloading, under the name the path gives.
-    #[cfg(target_arch = "wasm32")]
-    return crate::web::download(&crate::file_name(path), &bytes, "application/zip");
+    deliver(path, &bytes, "application/zip")
 }
 
 /// `files` in a zip archive under `folder`, stored uncompressed: the PNGs are compressed
@@ -229,12 +236,7 @@ fn zip(folder: &str, files: &[crtsim_core::ports::File]) -> Vec<u8> {
 }
 
 pub fn save_preset(path: &Path, c: &Config) -> Result<()> {
-    let bytes = preset_json(c)?;
-    #[cfg(not(target_arch = "wasm32"))]
-    return save_atomic(path, |f| Ok(f.write_all(&bytes)?));
-    // A browser saves by downloading, under the name the path gives.
-    #[cfg(target_arch = "wasm32")]
-    return crate::web::download(&crate::file_name(path), &bytes, "application/json");
+    deliver(path, &preset_json(c)?, "application/json")
 }
 
 /// `c` as a preset file's JSON.
@@ -246,6 +248,7 @@ pub fn preset_json(c: &Config) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write as _;
 
     #[test]
     fn a_retroarch_export_is_a_zip_of_one_folder_named_for_its_look() {

@@ -448,14 +448,7 @@ impl Export {
                     fraction: 0.97,
                     stage: "Encoding and saving PNG".into(),
                 });
-                #[cfg(not(target_arch = "wasm32"))]
-                return files::save_png(path, sheet, None);
-                #[cfg(target_arch = "wasm32")]
-                return crate::web::download(
-                    &file_name(path),
-                    &files::png_bytes(sheet, None)?,
-                    "image/png",
-                );
+                files::save_png(path, sheet, None)
             }
             Self::Video {
                 video,
@@ -1031,15 +1024,7 @@ async fn export_image(
         fraction: 0.95,
         stage: "Encoding and saving PNG".into(),
     });
-    #[cfg(not(target_arch = "wasm32"))]
-    return files::save_png(path, image, Some(config));
-    // A browser saves by downloading, under the name the path gives.
-    #[cfg(target_arch = "wasm32")]
-    return crate::web::download(
-        &file_name(path),
-        &files::png_bytes(image, Some(config))?,
-        "image/png",
-    );
+    files::save_png(path, image, Some(config))
 }
 
 /// An animated GIF or WebP of `video`: encoded by FFmpeg on the desktop, and in a browser
@@ -1096,7 +1081,7 @@ async fn export_animation_here(
         crtsim_media::AnimationFormat::Webp => "image/webp",
         crtsim_media::AnimationFormat::Apng => "image/png",
     };
-    save(path, &bytes, mime)
+    files::deliver(path, &bytes, mime)
 }
 
 /// A whole video exported in a browser without FFmpeg, and downloaded. Its frames and sound
@@ -1134,7 +1119,7 @@ async fn export_video(
         crtsim_media::Container::Webm => "video/webm",
         _ => "video/mp4",
     };
-    save(path, &bytes, mime)
+    files::deliver(path, &bytes, mime)
 }
 
 /// A frame as a lossy still WebP, which only a browser's own encoder writes here.
@@ -1145,19 +1130,6 @@ async fn lossy_webp(frame: &RgbaImage, quality: u8) -> Result<Vec<u8>> {
     {
         let _ = (frame, quality);
         anyhow::bail!("Lossy WebP is written by FFmpeg on the desktop")
-    }
-}
-
-/// Saves a finished file: written to `path`, or in a browser downloaded under its name.
-fn save(path: &Path, bytes: &[u8], mime: &str) -> Result<()> {
-    #[cfg(target_arch = "wasm32")]
-    return crate::web::download(&file_name(path), bytes, mime);
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let _ = mime;
-        let partial = path.with_extension("partial");
-        std::fs::write(&partial, bytes)?;
-        Ok(std::fs::rename(partial, path)?)
     }
 }
 
