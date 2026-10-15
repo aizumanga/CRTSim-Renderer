@@ -74,7 +74,7 @@ pub fn export(looks: &[(&str, &Config)]) -> Result<Vec<File>> {
                 files.push(file);
                 path
             }
-            None => format!("{SHADERS}/no-table.png"),
+            None => format!("{SHADERS}/{}", super::NO_TABLE),
         };
         files.push(super::text(
             &format!("{name}.slangp"),

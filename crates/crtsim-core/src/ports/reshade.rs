@@ -8,7 +8,7 @@
 //! every other setting is a uniform. ReShade compiles every `.fx` in its shader folders, so
 //! the effect's own files sit in a folder of their own beside it.
 
-use super::{File, Host, Kind, Parameter};
+use super::{File, Host, Kind, Parameter, Reading};
 use crate::config::Config;
 use anyhow::Result;
 
@@ -87,7 +87,10 @@ fn header() -> Result<String> {
     let parameters = super::parameters(Host::ReShade);
     let definitions = parameters.iter().filter(|p| DEFINITIONS.contains(&p.name));
     let table = [
-        ("CRTSIM_TABLE_FILE", format!("\"{OWN}/no-table.png\"")),
+        (
+            "CRTSIM_TABLE_FILE",
+            format!("\"{OWN}/{}\"", super::NO_TABLE),
+        ),
         ("CRTSIM_TABLE_SIZE", super::NO_TABLE_SIZE.to_string()),
     ];
     let defaults = definitions
@@ -111,25 +114,25 @@ struct Declared {
     mipmapped: bool,
 }
 
+/// The images whose sizes the effect declares; the bezel's three share one size.
 fn declared_images() -> Result<Vec<Declared>> {
-    let images = super::images()?;
-    let size = |file: &str| {
-        images
+    let images: Vec<_> = super::IMAGES.iter().zip(super::pictures()?).collect();
+    let declared = |prefix, file| {
+        let (image, picture) = images
             .iter()
-            .find(|(name, _)| *name == file)
-            .map(|(_, image)| image.dimensions())
-            .expect("an image the ports read")
-    };
-    let declared = |prefix, file, mipmapped| Declared {
-        prefix,
-        size: size(file),
-        mipmapped,
+            .find(|(image, _)| image.file == file)
+            .expect("an image the ports read");
+        Declared {
+            prefix,
+            size: picture.dimensions(),
+            mipmapped: image.reading == Reading::Mipmapped,
+        }
     };
     Ok(vec![
-        declared("CRTSIM_ARTIFACTS", "artifacts.png", false),
-        declared("CRTSIM_MASK", "mask.png", true),
-        declared("CRTSIM_BEZEL", "bezel-shape.png", false),
-        declared("CRTSIM_GLASS", "glass.png", false),
+        declared("CRTSIM_ARTIFACTS", "artifacts.png"),
+        declared("CRTSIM_MASK", "mask.png"),
+        declared("CRTSIM_BEZEL", "bezel-shape.png"),
+        declared("CRTSIM_GLASS", "glass.png"),
     ])
 }
 

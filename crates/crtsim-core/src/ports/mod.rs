@@ -119,26 +119,85 @@ fn png(path: &str, image: &RgbaImage) -> Result<File> {
     })
 }
 
-/// The images the passes read, by file name: the artifact pattern, the shadow mask, the table
-/// a look without one is given, the bezel's three and the glass's.
-fn images() -> Result<Vec<(&'static str, RgbaImage)>> {
-    let bezel = crate::bezel::maps()?;
-    Ok(vec![
-        ("artifacts.png", crate::gpu::artifacts_image()?),
-        ("mask.png", crate::gpu::mask_image()?),
-        ("no-table.png", strip(&identity_table())),
-        ("bezel-shape.png", bezel.shape),
-        ("bezel-uv.png", bezel.uv),
-        ("bezel-normal.png", bezel.normal),
-        ("glass.png", crate::glass::map()?),
-    ])
+/// How the passes read one of the images.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Reading {
+    /// Texel by texel.
+    Texels,
+    /// Texel by texel, and filtered too: the bezel's shape, for its depth's high byte.
+    AlsoFiltered,
+    /// Filtered, with mipmaps that each average 2×2 texels of the level above.
+    Mipmapped,
+}
+
+/// An image the passes read, as a file every port's export holds.
+pub struct Image {
+    pub file: &'static str,
+    pub reading: Reading,
+}
+
+/// The images the passes read: the artifact pattern, the shadow mask, the table a look without
+/// one is given, the bezel's three and the glass's.
+pub const IMAGES: [Image; 7] = [
+    Image {
+        file: "artifacts.png",
+        reading: Reading::Texels,
+    },
+    Image {
+        file: "mask.png",
+        reading: Reading::Mipmapped,
+    },
+    Image {
+        file: NO_TABLE,
+        reading: Reading::Texels,
+    },
+    Image {
+        file: "bezel-shape.png",
+        reading: Reading::AlsoFiltered,
+    },
+    Image {
+        file: "bezel-uv.png",
+        reading: Reading::Texels,
+    },
+    Image {
+        file: "bezel-normal.png",
+        reading: Reading::Texels,
+    },
+    Image {
+        file: "glass.png",
+        reading: Reading::Texels,
+    },
+];
+
+/// The table a look without one is given, so every look binds the same textures.
+const NO_TABLE: &str = "no-table.png";
+
+/// The pictures of `IMAGES`, in order.
+fn pictures() -> Result<Vec<RgbaImage>> {
+    let mut bezel = Some(crate::bezel::maps()?);
+    IMAGES
+        .iter()
+        .map(|image| {
+            Ok(match image.file {
+                "artifacts.png" => crate::gpu::artifacts_image()?,
+                "mask.png" => crate::gpu::mask_image()?,
+                NO_TABLE => strip(&identity_table()),
+                "bezel-shape.png" => std::mem::take(&mut bezel.as_mut().expect("baked").shape),
+                "bezel-uv.png" => std::mem::take(&mut bezel.as_mut().expect("baked").uv),
+                "bezel-normal.png" => std::mem::take(&mut bezel.as_mut().expect("baked").normal),
+                "glass.png" => crate::glass::map()?,
+                other => unreachable!("{other} is in IMAGES but has no picture"),
+            })
+        })
+        .collect()
 }
 
 /// The images, written into `dir`.
 fn image_files(dir: &str) -> Result<Vec<File>> {
-    images()?
+    IMAGES
         .iter()
-        .map(|(name, image)| png(&format!("{dir}/{name}"), image))
+        .zip(pictures()?)
+        .map(|(image, picture)| png(&format!("{dir}/{}", image.file), &picture))
         .collect()
 }
 
@@ -166,7 +225,6 @@ fn strip(lut: &Lut) -> RgbaImage {
     })
 }
 
-/// The table a look without one is given, so every look binds the same textures.
 fn identity_table() -> Lut {
     Lut {
         name: "identity".into(),

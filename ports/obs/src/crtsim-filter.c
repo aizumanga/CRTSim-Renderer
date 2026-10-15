@@ -17,7 +17,7 @@
 #include <math.h>
 #include <string.h>
 
-#include "parameters.h"
+#include "port.h"
 
 OBS_DECLARE_MODULE()
 
@@ -31,41 +31,12 @@ MODULE_EXPORT const char *obs_module_description(void)
 #define TABLE_FILE "table_file"
 #define LOOK_FILE "look_file"
 
-/* The images the passes read, in the data folder's images/. */
-enum image {
-	IMAGE_ARTIFACTS,
-	IMAGE_MASK,
-	IMAGE_NO_TABLE,
-	IMAGE_BEZEL_SHAPE,
-	/* The same image, read filtered for the depth's high byte a ray steps on. OpenGL filters a
-	 * texture as its last sampler says, so filtered reads need a texture of their own. */
-	IMAGE_BEZEL_SHAPE_FILTERED,
-	IMAGE_BEZEL_UV,
-	IMAGE_BEZEL_NORMAL,
-	IMAGE_GLASS,
-	IMAGE_COUNT,
-};
-
-static const char *const image_files[IMAGE_COUNT] = {
-	"images/artifacts.png",   "images/mask.png",        "images/no-table.png",
-	"images/bezel-shape.png", "images/bezel-shape.png", "images/bezel-uv.png",
-	"images/bezel-normal.png", "images/glass.png",
-};
-
-/* The effect's texture for each image; the colour table's is set apart, since a look may
- * replace it. */
-static const char *const image_params[IMAGE_COUNT] = {
-	"artifacts_image", "mask_image",     NULL,
-	"bezel_shape_image", "bezel_shape_filtered", "bezel_uv_image",
-	"bezel_normal_image", "glass_image",
-};
-
 struct crtsim {
 	obs_source_t *context;
 	gs_effect_t *effect;
 	gs_eparam_t *parameters[CRTSIM_PARAMETER_COUNT];
 	float values[CRTSIM_PARAMETER_COUNT];
-	gs_texture_t *images[IMAGE_COUNT];
+	gs_texture_t *images[CRTSIM_IMAGE_COUNT];
 	/* The look's colour table, or NULL for none. */
 	gs_texture_t *table;
 	struct dstr table_path;
@@ -94,20 +65,6 @@ struct crtsim {
 	/* Whether a frame has begun since the last simulated one. */
 	bool ticked;
 };
-
-static int parameter_index(const char *name)
-{
-	for (int i = 0; i < CRTSIM_PARAMETER_COUNT; i++)
-		if (strcmp(crtsim_parameters[i].name, name) == 0)
-			return i;
-	return -1;
-}
-
-static float value_of(const struct crtsim *f, const char *name)
-{
-	int i = parameter_index(name);
-	return i < 0 ? 0.0f : f->values[i];
-}
 
 static const char *crtsim_name(void *unused)
 {
@@ -238,7 +195,7 @@ static void crtsim_destroy(void *data)
 	struct crtsim *f = data;
 	obs_enter_graphics();
 	free_targets(f);
-	for (int i = 0; i < IMAGE_COUNT; i++)
+	for (int i = 0; i < CRTSIM_IMAGE_COUNT; i++)
 		gs_texture_destroy(f->images[i]);
 	gs_texture_destroy(f->table);
 	gs_effect_destroy(f->effect);
@@ -259,9 +216,9 @@ static void *crtsim_create(obs_data_t *settings, obs_source_t *context)
 		blog(LOG_ERROR, "[crtsim-renderer] cannot load %s: %s",
 		     effect_path ? effect_path : "crtsim.effect", errors ? errors : "not found");
 	bfree(errors);
-	for (int i = 0; i < IMAGE_COUNT; i++) {
-		char *path = obs_module_file(image_files[i]);
-		f->images[i] = path ? load_image(path, i == IMAGE_MASK) : NULL;
+	for (int i = 0; i < CRTSIM_IMAGE_COUNT; i++) {
+		char *path = obs_module_file(crtsim_images[i].file);
+		f->images[i] = path ? load_image(path, crtsim_images[i].mipmapped) : NULL;
 		bfree(path);
 	}
 	if (f->effect)
@@ -384,10 +341,9 @@ static void set_values(struct crtsim *f)
 		if (f->parameters[i])
 			gs_effect_set_float(f->parameters[i], f->values[i]);
 	/* A look whose table did not load is drawn without one. */
-	int table = parameter_index("CRTSIM_TABLE");
-	if (!f->table && table >= 0 && f->parameters[table])
-		gs_effect_set_float(f->parameters[table], 0.0f);
-	gs_texture_t *table_image = f->table ? f->table : f->images[IMAGE_NO_TABLE];
+	if (!f->table && f->parameters[CRTSIM_TABLE_INDEX])
+		gs_effect_set_float(f->parameters[CRTSIM_TABLE_INDEX], 0.0f);
+	gs_texture_t *table_image = f->table ? f->table : f->images[CRTSIM_IMAGE_NO_TABLE];
 	gs_effect_set_int(gs_effect_get_param_by_name(f->effect, "crtsim_frame_count"),
 			  f->frame_count);
 	/* In sixtieths of a second, worked in doubles, so a frame of 1/60 s, as a float holds
@@ -401,14 +357,14 @@ static void set_values(struct crtsim *f)
 	set_size(f, "crtsim_original_size", (float)f->cx, (float)f->cy);
 	set_size(f, "crtsim_signal_size", (float)f->signal_cx, (float)f->signal_cy);
 	set_size(f, "crtsim_output_size", (float)f->cx, (float)f->cy);
-	set_texture_size(f, "crtsim_artifacts_size", f->images[IMAGE_ARTIFACTS]);
-	set_texture_size(f, "crtsim_mask_size", f->images[IMAGE_MASK]);
-	set_texture_size(f, "crtsim_bezel_size", f->images[IMAGE_BEZEL_SHAPE]);
-	set_texture_size(f, "crtsim_glass_size", f->images[IMAGE_GLASS]);
+	set_texture_size(f, "crtsim_artifacts_size", f->images[CRTSIM_IMAGE_ARTIFACTS]);
+	set_texture_size(f, "crtsim_mask_size", f->images[CRTSIM_IMAGE_MASK]);
+	set_texture_size(f, "crtsim_bezel_size", f->images[CRTSIM_IMAGE_BEZEL_SHAPE]);
+	set_texture_size(f, "crtsim_glass_size", f->images[CRTSIM_IMAGE_GLASS]);
 	set_texture(f, "table_image", table_image);
-	for (int i = 0; i < IMAGE_COUNT; i++)
-		if (image_params[i])
-			set_texture(f, image_params[i], f->images[i]);
+	for (int i = 0; i < CRTSIM_IMAGE_COUNT; i++)
+		if (crtsim_images[i].param)
+			set_texture(f, crtsim_images[i].param, f->images[i]);
 	set_texture(f, "previous_signal", gs_texrender_get_texture(f->signals[!f->current]));
 	set_texture(f, "surface_image", gs_texrender_get_texture(f->surface));
 }
@@ -458,8 +414,8 @@ static bool capture(struct crtsim *f, uint32_t cx, uint32_t cy)
 static void signal_size(const struct crtsim *f, uint32_t cx, uint32_t cy, uint32_t *signal_cx,
 			uint32_t *signal_cy)
 {
-	float rows = value_of(f, "CRTSIM_SIGNAL_HEIGHT");
-	float columns = value_of(f, "CRTSIM_SIGNAL_WIDTH");
+	float rows = f->values[CRTSIM_SIGNAL_HEIGHT_INDEX];
+	float columns = f->values[CRTSIM_SIGNAL_WIDTH_INDEX];
 	*signal_cy = rows >= 1.0f ? (uint32_t)rows : cy;
 	*signal_cx = columns >= 1.0f ? (uint32_t)columns
 				     : (uint32_t)fmax(1.0, round((double)cx * *signal_cy / cy));
@@ -468,7 +424,7 @@ static void signal_size(const struct crtsim *f, uint32_t cx, uint32_t cy, uint32
 /* Runs one frame of the CRT over the source's picture, into f->output. */
 static bool simulate(struct crtsim *f, uint32_t cx, uint32_t cy)
 {
-	bool linear = value_of(f, "CRTSIM_LINEAR") > 0.5f;
+	bool linear = f->values[CRTSIM_LINEAR_INDEX] > 0.5f;
 	if (linear != f->linear)
 		make_targets(f, linear);
 	if (!capture(f, cx, cy))

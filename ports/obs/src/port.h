@@ -1,9 +1,10 @@
 /* CC0. Written by CRTSim Renderer's exporter from its settings table; edit that, not
  * this. `cargo test -p crtsim-core obs` says when it is out of date, and
- * CRTSIM_WRITE_OBS_PARAMETERS=1 rewrites it. */
+ * CRTSIM_WRITE_OBS_HEADER=1 rewrites it. */
 
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 
 /* A setting: a number in a range, or a choice of the items, numbered from 0. */
@@ -27,7 +28,59 @@ static const char *const CRTSIM_SCREEN_ONLY_ITEMS[] = {"off", "on", NULL};
 static const char *const CRTSIM_REFLECTION_AS_SCREEN_ITEMS[] = {"as the public source", "as the screen", NULL};
 static const char *const CRTSIM_MASK_ANTIALIAS_ITEMS[] = {"off", "on", NULL};
 
-#define CRTSIM_PARAMETER_COUNT 50
+enum crtsim_parameter_index {
+	CRTSIM_SIGNAL_WIDTH_INDEX,
+	CRTSIM_SIGNAL_HEIGHT_INDEX,
+	CRTSIM_RESIZE_INDEX,
+	CRTSIM_TABLE_INDEX,
+	CRTSIM_TABLE_NEAREST_INDEX,
+	CRTSIM_LINEAR_INDEX,
+	CRTSIM_PHASE_INDEX,
+	CRTSIM_FLIP_ARTIFACTS_INDEX,
+	CRTSIM_INTERLACE_INDEX,
+	CRTSIM_FIT_INDEX,
+	CRTSIM_SCREEN_ONLY_INDEX,
+	CRTSIM_REFLECTION_AS_SCREEN_INDEX,
+	CRTSIM_MASK_ANTIALIAS_INDEX,
+	CRTSIM_MASK_COLUMNS_INDEX,
+	CRTSIM_MASK_ROWS_INDEX,
+	CRTSIM_PIXEL_ASPECT_INDEX,
+	CRTSIM_LUT_STRENGTH_INDEX,
+	CRTSIM_HUE_INDEX,
+	CRTSIM_CHROMA_INDEX,
+	CRTSIM_SATURATION_INDEX,
+	CRTSIM_SHARPNESS_INDEX,
+	CRTSIM_BLEED_INDEX,
+	CRTSIM_ARTIFACTS_INDEX,
+	CRTSIM_NTSC_BLENDING_INDEX,
+	CRTSIM_BARREL_INDEX,
+	CRTSIM_OVERSCAN_INDEX,
+	CRTSIM_DIMMING_INDEX,
+	CRTSIM_FOV_INDEX,
+	CRTSIM_MASK_OPACITY_INDEX,
+	CRTSIM_MASK_BRIGHTNESS_INDEX,
+	CRTSIM_BLOOM_INDEX,
+	CRTSIM_BLOOM_POWER_INDEX,
+	CRTSIM_BLOOM_SPREAD_INDEX,
+	CRTSIM_DIFFUSE_INDEX,
+	CRTSIM_SPECULAR_INDEX,
+	CRTSIM_SPECULAR_POWER_INDEX,
+	CRTSIM_RIM_INDEX,
+	CRTSIM_REFLECTION_INDEX,
+	CRTSIM_BEZEL_R_INDEX,
+	CRTSIM_BEZEL_G_INDEX,
+	CRTSIM_BEZEL_B_INDEX,
+	CRTSIM_BACKDROP_R_INDEX,
+	CRTSIM_BACKDROP_G_INDEX,
+	CRTSIM_BACKDROP_B_INDEX,
+	CRTSIM_LIGHT_X_INDEX,
+	CRTSIM_LIGHT_Y_INDEX,
+	CRTSIM_LIGHT_Z_INDEX,
+	CRTSIM_PERSISTENCE_R_INDEX,
+	CRTSIM_PERSISTENCE_G_INDEX,
+	CRTSIM_PERSISTENCE_B_INDEX,
+	CRTSIM_PARAMETER_COUNT,
+};
 
 static const struct crtsim_parameter crtsim_parameters[CRTSIM_PARAMETER_COUNT] = {
 	{"CRTSIM_SIGNAL_WIDTH", "Signal columns (0 keeps the picture's shape)", 0.0f, 4096.0f, 1.0f, 0.0f, NULL},
@@ -80,4 +133,34 @@ static const struct crtsim_parameter crtsim_parameters[CRTSIM_PARAMETER_COUNT] =
 	{"CRTSIM_PERSISTENCE_R", "Red persistence", 0.0f, 0.999f, 0.01f, 0.7f, NULL},
 	{"CRTSIM_PERSISTENCE_G", "Green persistence", 0.0f, 0.999f, 0.01f, 0.525f, NULL},
 	{"CRTSIM_PERSISTENCE_B", "Blue persistence", 0.0f, 0.999f, 0.01f, 0.42f, NULL},
+};
+
+/* An image the passes read, from the data folder, and the effect's texture for it. */
+struct crtsim_image {
+	const char *file;
+	const char *param;
+	bool mipmapped;
+};
+
+enum crtsim_image_index {
+	CRTSIM_IMAGE_ARTIFACTS,
+	CRTSIM_IMAGE_MASK,
+	CRTSIM_IMAGE_NO_TABLE,
+	CRTSIM_IMAGE_BEZEL_SHAPE,
+	CRTSIM_IMAGE_BEZEL_SHAPE_FILTERED,
+	CRTSIM_IMAGE_BEZEL_UV,
+	CRTSIM_IMAGE_BEZEL_NORMAL,
+	CRTSIM_IMAGE_GLASS,
+	CRTSIM_IMAGE_COUNT,
+};
+
+static const struct crtsim_image crtsim_images[CRTSIM_IMAGE_COUNT] = {
+	{"images/artifacts.png", "artifacts_image", false},
+	{"images/mask.png", "mask_image", true},
+	{"images/no-table.png", NULL, false},
+	{"images/bezel-shape.png", "bezel_shape_image", false},
+	{"images/bezel-shape.png", "bezel_shape_filtered", false},
+	{"images/bezel-uv.png", "bezel_uv_image", false},
+	{"images/bezel-normal.png", "bezel_normal_image", false},
+	{"images/glass.png", "glass_image", false},
 };
