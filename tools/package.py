@@ -27,10 +27,20 @@ stage.mkdir()  # Refuse stale/reused staging folders.
 cli = str(root / 'target' / 'release' / 'crtsim')
 
 
-def zip_port(folder):
-    """One folder to copy where its host looks. The shaders, textures and plugin are CC0 and hold no
-    dependency's code; the plugin links OBS's own library only as OBS loads it. So the package
-    carries only the original assets' sources."""
+if args.platform in ('retroarch', 'reshade', 'obs-linux-x86_64'):
+    # One folder to copy where its host looks. The shaders, textures and plugin are CC0 and hold
+    # no dependency's code; the plugin links OBS's own library only as OBS loads it. So the
+    # package carries only the original assets' sources.
+    folder = stage / 'crtsim-renderer'
+    if args.platform == 'obs-linux-x86_64':
+        # Laid out as OBS finds a user's plugins: <name>/bin/64bit beside <name>/data.
+        (folder / 'bin' / '64bit').mkdir(parents=True)
+        shutil.copy2(root / 'build' / 'obs' / 'crtsim-renderer.so', folder / 'bin' / '64bit')
+        subprocess.run([cli, 'obs-plugin-data', '--output-dir', str(folder / 'data')], check=True)
+        shutil.copy2(root / 'ports' / 'obs' / 'README.md', folder)
+    else:
+        subprocess.run([cli, f'export-{args.platform}', '--output-dir', str(folder)], check=True,
+                       stdout=subprocess.DEVNULL)
     shutil.copy2(root / 'LICENSE', folder)
     shutil.copy2(root / 'assets/original-crtsim/SOURCES.md', folder / 'ORIGINAL_ASSETS.md')
     archive = dist / (name + '.zip')
@@ -40,21 +50,6 @@ def zip_port(folder):
                 output.write(path, path.relative_to(stage))
     print(archive)
     raise SystemExit
-
-
-if args.platform in ('retroarch', 'reshade'):
-    folder = stage / 'crtsim-renderer'
-    subprocess.run([cli, f'export-{args.platform}', '--output-dir', str(folder)], check=True,
-                   stdout=subprocess.DEVNULL)
-    zip_port(folder)
-if args.platform == 'obs-linux-x86_64':
-    # Laid out as OBS finds a user's plugins: <name>/bin/64bit beside <name>/data.
-    folder = stage / 'crtsim-renderer'
-    (folder / 'bin' / '64bit').mkdir(parents=True)
-    shutil.copy2(root / 'build' / 'obs' / 'crtsim-renderer.so', folder / 'bin' / '64bit')
-    subprocess.run([cli, 'obs-plugin-data', '--output-dir', str(folder / 'data')], check=True)
-    shutil.copy2(root / 'ports' / 'obs' / 'README.md', folder)
-    zip_port(folder)
 web = args.platform == 'web'
 exe = '.exe' if args.platform.startswith('windows') else ''
 if web:

@@ -8,7 +8,7 @@
 //! every other setting is a uniform. ReShade compiles every `.fx` in its shader folders, so
 //! the effect's own files sit in a folder of their own beside it.
 
-use super::{File, Host, Kind, Parameter, Reading};
+use super::{File, Host, Kind, Parameter, Reading, Table};
 use crate::config::Config;
 use anyhow::Result;
 
@@ -20,7 +20,7 @@ const OWN: &str = "crtsim-renderer";
 const EFFECT: &str = "CRTSimRenderer.fx";
 const TECHNIQUE: &str = "CRTSimRenderer";
 
-const SOURCE: &str = include_str!("../../../../ports/reshade/CRTSimRenderer.fx");
+pub(super) const SOURCE: &str = include_str!("../../../../ports/reshade/CRTSimRenderer.fx");
 const README: &str = include_str!("../../../../ports/reshade/README.md");
 
 /// The parameters ReShade reads as preprocessor definitions, since textures depend on them.
@@ -42,15 +42,14 @@ pub fn export(looks: &[(&str, &Config)]) -> Result<Vec<File>> {
     files.extend(super::passes(&format!("{SHADERS}/{OWN}/passes")));
     files.extend(super::image_files(&format!("{TEXTURES}/{OWN}"))?);
     for (name, config) in looks {
-        let table = format!("{OWN}/{name}-table.png");
-        let table = match super::table_file(config, &format!("{TEXTURES}/{table}"))? {
-            Some((file, size)) => {
-                files.push(file);
-                Some((table, size))
-            }
-            None => None,
-        };
-        files.push(super::text(&format!("{name}.ini"), &preset(config, table)));
+        let table = Table::of(config, name)?;
+        if let Some(table) = &table {
+            files.push(table.at(&format!("{TEXTURES}/{OWN}")));
+        }
+        files.push(super::text(
+            &format!("{name}.ini"),
+            &preset(config, table.as_ref()),
+        ));
     }
     Ok(files)
 }
@@ -116,24 +115,26 @@ struct Declared {
 
 /// The images whose sizes the effect declares; the bezel's three share one size.
 fn declared_images() -> Result<Vec<Declared>> {
-    let images: Vec<_> = super::IMAGES.iter().zip(super::pictures()?).collect();
-    let declared = |prefix, file| {
-        let (image, picture) = images
+    let declared = |prefix, file| -> Result<Declared> {
+        let image = super::IMAGES
             .iter()
-            .find(|(image, _)| image.file == file)
+            .find(|image| image.file == file)
             .expect("an image the ports read");
-        Declared {
+        Ok(Declared {
             prefix,
-            size: picture.dimensions(),
+            size: (image.picture)()?.dimensions(),
             mipmapped: image.reading == Reading::Mipmapped,
-        }
+        })
     };
-    Ok(vec![
-        declared("CRTSIM_ARTIFACTS", "artifacts.png"),
-        declared("CRTSIM_MASK", "mask.png"),
-        declared("CRTSIM_BEZEL", "bezel-shape.png"),
-        declared("CRTSIM_GLASS", "glass.png"),
-    ])
+    [
+        ("CRTSIM_ARTIFACTS", "artifacts.png"),
+        ("CRTSIM_MASK", "mask.png"),
+        ("CRTSIM_BEZEL", "bezel-shape.png"),
+        ("CRTSIM_GLASS", "glass.png"),
+    ]
+    .into_iter()
+    .map(|(prefix, file)| declared(prefix, file))
+    .collect()
 }
 
 /// A parameter as a uniform: a choice is an int its menu names the values of.
@@ -160,18 +161,17 @@ fn uniform(p: &Parameter, value: f32) -> String {
     }
 }
 
-/// A look's preset, reading its colour table, when it has one, from the texture path `table`
-/// of a table of that size.
-fn preset(c: &Config, table: Option<(String, usize)>) -> String {
+/// A look's preset, reading its colour table, when it has one, from the effect's textures.
+fn preset(c: &Config, table: Option<&Table>) -> String {
     let parameters = super::parameters(Host::ReShade);
     let mut definitions: Vec<String> = parameters
         .iter()
         .filter(|p| DEFINITIONS.contains(&p.name))
         .map(|p| format!("{}={}", p.name, p.of(c) as i32))
         .collect();
-    if let Some((path, size)) = table {
-        definitions.push(format!("CRTSIM_TABLE_FILE=\"{path}\""));
-        definitions.push(format!("CRTSIM_TABLE_SIZE={size}"));
+    if let Some(table) = table {
+        definitions.push(format!("CRTSIM_TABLE_FILE=\"{OWN}/{}\"", table.name));
+        definitions.push(format!("CRTSIM_TABLE_SIZE={}", table.size));
     }
     let mut out = String::new();
     let mut line = |text: String| out.push_str(&(text + "\n"));

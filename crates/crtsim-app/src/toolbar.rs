@@ -119,26 +119,24 @@ impl App {
                         self.show_contact_sheet();
                         ui.close();
                     }
-                    for (host, label, hover) in [
+                    for (host, hover) in [
                         (
                             Host::RetroArch,
-                            "RetroArch shader…",
                             "These settings as a shader preset for RetroArch, drawn over an \
                              emulated game as it plays.",
                         ),
                         (
                             Host::ReShade,
-                            "ReShade effect…",
                             "These settings as a ReShade preset, drawn over almost any PC game \
                              as it plays.",
                         ),
                         (
                             Host::Obs,
-                            "OBS filter…",
                             "These settings as a look for the CRTSim Renderer filter in OBS \
                              Studio, drawn over a source as it streams or records.",
                         ),
                     ] {
+                        let label = format!("{}…", host.port_name());
                         if ui.button(label).on_hover_text(hover).clicked() {
                             self.dialog(Dialog::Port(host), ctx);
                             ui.close();

@@ -304,7 +304,7 @@ mod tests {
             save_port(&path, host, &c).unwrap();
             let bytes = std::fs::read(&path).unwrap();
             let named = |name: &str| bytes.windows(name.len()).any(|w| w == name.as_bytes());
-            assert!(named(preset), "{preset} in the {} export", host.name());
+            assert!(named(preset), "{preset} in the {} export", host.port_name());
         }
     }
 

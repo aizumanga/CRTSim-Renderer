@@ -11,7 +11,7 @@ pub mod obs;
 pub mod reshade;
 pub mod retroarch;
 
-use crate::config::{ColorMode, Config, Filter, Fit, MaskRepeats, Phase};
+use crate::config::{ColorMode, Config, Filter, Fit, MaskRepeats, Phase, Signal};
 use crate::settings::{Control, SETTINGS};
 use crate::workflow::{Lut, Sampling};
 use anyhow::{ensure, Result};
@@ -99,6 +99,8 @@ fn check_looks(looks: &[(&str, &Config)]) -> Result<()> {
             "A look's name must be letters, digits, - and _: {name:?}"
         );
         config.validate()?;
+        // The renderer reads the signal's name only as it sizes a picture; a port reads it now.
+        config.signal()?;
     }
     Ok(())
 }
@@ -111,12 +113,16 @@ fn text(path: &str, text: &str) -> File {
 }
 
 fn png(path: &str, image: &RgbaImage) -> Result<File> {
-    let mut bytes = std::io::Cursor::new(Vec::new());
-    image.write_to(&mut bytes, ImageFormat::Png)?;
     Ok(File {
         path: path.into(),
-        bytes: bytes.into_inner(),
+        bytes: encode_png(image)?,
     })
+}
+
+fn encode_png(image: &RgbaImage) -> Result<Vec<u8>> {
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut bytes, ImageFormat::Png)?;
+    Ok(bytes.into_inner())
 }
 
 /// How the passes read one of the images.
@@ -134,6 +140,7 @@ pub enum Reading {
 pub struct Image {
     pub file: &'static str,
     pub reading: Reading,
+    picture: fn() -> Result<RgbaImage>,
 }
 
 /// The images the passes read: the artifact pattern, the shadow mask, the table a look without
@@ -142,71 +149,91 @@ pub const IMAGES: [Image; 7] = [
     Image {
         file: "artifacts.png",
         reading: Reading::Texels,
+        picture: crate::gpu::artifacts_image,
     },
     Image {
         file: "mask.png",
         reading: Reading::Mipmapped,
+        picture: crate::gpu::mask_image,
     },
     Image {
         file: NO_TABLE,
         reading: Reading::Texels,
+        picture: || Ok(strip(&identity_table())),
     },
     Image {
         file: "bezel-shape.png",
         reading: Reading::AlsoFiltered,
+        picture: || Ok(crate::bezel::maps()?.shape),
     },
     Image {
         file: "bezel-uv.png",
         reading: Reading::Texels,
+        picture: || Ok(crate::bezel::maps()?.uv),
     },
     Image {
         file: "bezel-normal.png",
         reading: Reading::Texels,
+        picture: || Ok(crate::bezel::maps()?.normal),
     },
     Image {
         file: "glass.png",
         reading: Reading::Texels,
+        picture: crate::glass::map,
     },
 ];
 
 /// The table a look without one is given, so every look binds the same textures.
 const NO_TABLE: &str = "no-table.png";
 
-/// The pictures of `IMAGES`, in order.
-fn pictures() -> Result<Vec<RgbaImage>> {
-    let mut bezel = Some(crate::bezel::maps()?);
-    IMAGES
-        .iter()
-        .map(|image| {
-            Ok(match image.file {
-                "artifacts.png" => crate::gpu::artifacts_image()?,
-                "mask.png" => crate::gpu::mask_image()?,
-                NO_TABLE => strip(&identity_table()),
-                "bezel-shape.png" => std::mem::take(&mut bezel.as_mut().expect("baked").shape),
-                "bezel-uv.png" => std::mem::take(&mut bezel.as_mut().expect("baked").uv),
-                "bezel-normal.png" => std::mem::take(&mut bezel.as_mut().expect("baked").normal),
-                "glass.png" => crate::glass::map()?,
-                other => unreachable!("{other} is in IMAGES but has no picture"),
-            })
-        })
-        .collect()
-}
-
 /// The images, written into `dir`.
 fn image_files(dir: &str) -> Result<Vec<File>> {
     IMAGES
         .iter()
-        .zip(pictures()?)
-        .map(|(image, picture)| png(&format!("{dir}/{}", image.file), &picture))
+        .map(|image| png(&join(dir, image.file), &(image.picture)()?))
         .collect()
 }
 
-/// A look's colour table, as the file `path`, or none.
-fn table_file(config: &Config, path: &str) -> Result<Option<(File, usize)>> {
-    config
-        .lut_in_use()
-        .map(|lut| Ok((png(path, &strip(&lut))?, lut.size)))
-        .transpose()
+/// `name` in the folder `dir` of an export, or at its top when `dir` is empty.
+fn join(dir: &str, name: &str) -> String {
+    if dir.is_empty() {
+        name.into()
+    } else {
+        format!("{dir}/{name}")
+    }
+}
+
+/// A look's colour table as the ports carry it: a strip of its lattice's slices, in a file
+/// named for the look.
+struct Table {
+    name: String,
+    file: Vec<u8>,
+    /// Lattice points along each axis, which is how many slices there are.
+    size: usize,
+}
+
+impl Table {
+    /// The table of the look `look`, which `config` holds, when it holds one.
+    fn of(config: &Config, look: &str) -> Result<Option<Self>> {
+        config
+            .lut_in_use()
+            .map(|lut| {
+                Ok(Self {
+                    name: format!("{look}-table.png"),
+                    file: encode_png(&strip(&lut))?,
+                    size: lut.size,
+                })
+            })
+            .transpose()
+    }
+
+    /// The table, written into `dir`.
+    fn at(&self, dir: &str) -> File {
+        File {
+            path: join(dir, &self.name),
+            bytes: self.file.clone(),
+        }
+    }
 }
 
 /// A table's lattice as an image of `size` slices side by side: red across each slice, green
@@ -250,12 +277,12 @@ pub enum Host {
 }
 
 impl Host {
-    /// Its name, as people know it.
-    pub fn name(self) -> &'static str {
+    /// What its port is called: what a look is exported as for it.
+    pub fn port_name(self) -> &'static str {
         match self {
-            Self::RetroArch => "RetroArch",
-            Self::ReShade => "ReShade",
-            Self::Obs => "OBS",
+            Self::RetroArch => "RetroArch shader",
+            Self::ReShade => "ReShade effect",
+            Self::Obs => "OBS filter",
         }
     }
 
@@ -386,16 +413,15 @@ const OFF_ON: &[&str] = &["off", "on"];
 /// picture, the columns then keeping its shape. A look made for any picture's rows (`auto`)
 /// takes 480, the most it would.
 fn signal(c: &Config) -> [f32; 2] {
-    match c.signal.as_str() {
-        "native" => [0., 0.],
-        "original" => [256., 224.],
-        "auto" => [0., 480.],
-        other => match other.strip_suffix('p').and_then(|rows| rows.parse().ok()) {
-            Some(rows) => [0., rows],
-            None => crate::config::dimensions(other)
-                .map(|(w, h)| [w as f32, h as f32])
-                .unwrap_or([0., 0.]),
-        },
+    match c
+        .signal()
+        .expect("a look's signal is checked as it is exported")
+    {
+        Signal::Native => [0., 0.],
+        Signal::Original => [256., 224.],
+        Signal::Auto => [0., 480.],
+        Signal::Rows(rows) => [0., rows as f32],
+        Signal::Size(width, height) => [width as f32, height as f32],
     }
 }
 
@@ -663,6 +689,68 @@ mod tests {
         words
     }
 
+    /// `text` with every include it names among `sources` written in its place, and its
+    /// comments taken out. Includes the exporter writes, which no source holds, are left out.
+    fn expand(text: &str, sources: &[(String, &str)]) -> String {
+        let mut out = String::new();
+        for line in text.lines() {
+            let code = line.split("//").next().unwrap_or_default();
+            let included = code
+                .trim()
+                .strip_prefix("#include \"")
+                .and_then(|rest| rest.strip_suffix('"'))
+                .map(|path| path.trim_start_matches("crtsim-renderer/"));
+            match included {
+                Some(path) => {
+                    if let Some((_, source)) = sources.iter().find(|(name, _)| name == path) {
+                        out.push_str(&expand(source, sources));
+                    }
+                }
+                None => {
+                    out.push_str(code);
+                    out.push('\n');
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn every_shell_defines_the_host_macros_its_passes_read() {
+        let sources: Vec<(String, &str)> = PASSES
+            .iter()
+            .map(|(name, source)| (format!("passes/{name}"), *source))
+            .chain(
+                retroarch::SOURCES
+                    .iter()
+                    .map(|(name, source)| (name.to_string(), *source)),
+            )
+            .collect();
+        let shells = retroarch::SOURCES
+            .iter()
+            .filter(|(name, _)| name.ends_with(".slang"))
+            .copied()
+            .chain([
+                ("CRTSimRenderer.fx", reshade::SOURCE),
+                ("crtsim.effect", obs::EFFECT),
+            ]);
+        for (shell, source) in shells {
+            let code = expand(source, &sources);
+            let defined: Vec<&str> = code
+                .lines()
+                .filter_map(|line| line.trim().strip_prefix("#define "))
+                .map(|rest| rest.split(['(', ' ']).next().unwrap_or_default())
+                .collect();
+            let words = code.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'));
+            for word in words.filter(|word| word.starts_with("HOST_")) {
+                assert!(
+                    defined.contains(&word),
+                    "{shell} reads {word}, which it never defines"
+                );
+            }
+        }
+    }
+
     #[test]
     fn every_host_declares_each_parameter_once() {
         for host in ALL {
@@ -744,5 +832,10 @@ mod tests {
         assert!(check_looks(&[("../escape", &c)]).is_err());
         assert!(check_looks(&[]).is_err());
         assert!(check_looks(&[("my-look_2", &c)]).is_ok());
+        let unknown = Config {
+            signal: "1080i".into(),
+            ..Config::default()
+        };
+        assert!(check_looks(&[("look", &unknown)]).is_err());
     }
 }

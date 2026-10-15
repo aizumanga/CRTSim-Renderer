@@ -78,6 +78,21 @@ impl<'de> Deserialize<'de> for MaskRepeats {
     }
 }
 
+/// The signal a picture is prepared at, as a look names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Signal {
+    /// 256x224, the original's.
+    Original,
+    /// The source's own size.
+    Native,
+    /// The source's rows, at most 480, keeping its shape.
+    Auto,
+    /// These rows, keeping the source's shape.
+    Rows(u32),
+    /// This size, whatever the source's shape.
+    Size(u32, u32),
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum ColorMode {
@@ -361,20 +376,33 @@ impl Config {
             color_mode: self.color_mode,
         })
     }
+    /// What the signal is, as its saved name says.
+    pub fn signal(&self) -> Result<Signal> {
+        Ok(match self.signal.as_str() {
+            "original" => Signal::Original,
+            "native" => Signal::Native,
+            "auto" => Signal::Auto,
+            "240p" => Signal::Rows(240),
+            "288p" => Signal::Rows(288),
+            "360p" => Signal::Rows(360),
+            "480p" => Signal::Rows(480),
+            "576p" => Signal::Rows(576),
+            v if v.contains('x') => {
+                let (width, height) = dimensions(v)?;
+                Signal::Size(width, height)
+            }
+            v => bail!("unknown signal preset: {v}"),
+        })
+    }
     pub fn signal_size(&self, input: (u32, u32)) -> Result<(u32, u32)> {
         validate_size(input)?;
         let input = self.source.size(input);
-        let height = match self.signal.as_str() {
-            "original" => return Ok((256, 224)),
-            "native" => return Ok(input),
-            "auto" => input.1.min(480),
-            "240p" => 240,
-            "288p" => 288,
-            "360p" => 360,
-            "480p" => 480,
-            "576p" => 576,
-            v if v.contains('x') => return dimensions(v),
-            v => bail!("unknown signal preset: {v}"),
+        let height = match self.signal()? {
+            Signal::Original => return Ok((256, 224)),
+            Signal::Native => return Ok(input),
+            Signal::Auto => input.1.min(480),
+            Signal::Rows(rows) => rows,
+            Signal::Size(width, height) => return Ok((width, height)),
         };
         let w =
             ((f64::from(input.0) * f64::from(height) / f64::from(input.1)).round() as u32).max(1);

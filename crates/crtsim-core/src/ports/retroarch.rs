@@ -5,7 +5,7 @@
 //! core's own picture is the signal, and the screen is the viewport. What the port leaves to
 //! RetroArch -- resizing, source edits, the export size and warm-up -- a preset does not hold.
 
-use super::{File, Host, Kind, Parameter};
+use super::{File, Host, Kind, Parameter, Table};
 use crate::config::{ColorMode, Config};
 use anyhow::Result;
 use std::fmt::Write as _;
@@ -15,7 +15,7 @@ const SHADERS: &str = "shaders/crtsim-renderer";
 
 /// The port's own sources, as `ports/retroarch` holds them. The shaders include the passes
 /// every port shares from `passes/`.
-const SOURCES: &[(&str, &str)] = &[
+pub(super) const SOURCES: &[(&str, &str)] = &[
     (
         "dialect.inc",
         include_str!("../../../../ports/retroarch/dialect.inc"),
@@ -68,11 +68,10 @@ pub fn export(looks: &[(&str, &Config)]) -> Result<Vec<File>> {
     );
     files.extend(super::passes(&format!("{SHADERS}/passes")));
     for (name, config) in looks {
-        let table = match super::table_file(config, &format!("{name}-table.png"))? {
-            Some((file, _)) => {
-                let path = file.path.clone();
-                files.push(file);
-                path
+        let table = match Table::of(config, name)? {
+            Some(table) => {
+                files.push(table.at(""));
+                table.name
             }
             None => format!("{SHADERS}/{}", super::NO_TABLE),
         };

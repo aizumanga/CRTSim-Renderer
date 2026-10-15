@@ -32,9 +32,10 @@ effect:
 **Pixel aspect** says how wide each of the game's pixels is shown; a game drawn for square
 pixels wants 1. The glow fades by real time, so it looks the same at any frame rate.
 
-The effect is made for games on Direct3D 10 and later, OpenGL and Vulkan. Each release compiles it
-with ReShade's own compiler; it shares its passes, line for line, with the RetroArch port and the
-OBS filter, which are tested against the app's renderer.
+The effect is made for games on Direct3D 10 and later, OpenGL and Vulkan. Every change to it is
+compiled with ReShade's own compiler as each shipped look sets it, and it shares its passes, line
+for line, with the RetroArch port and the OBS filter, which are tested against the app's
+renderer.
 
 ## Making your own
 

@@ -102,7 +102,7 @@ struct Chooser {
     filter: &'static str,
     extensions: Vec<&'static str>,
     /// For a save dialog, the suggested file name before its extension, the filter's only one.
-    save_as: Option<&'static str>,
+    save_as: Option<String>,
 }
 
 impl Dialog {
@@ -121,25 +121,19 @@ impl Dialog {
             Self::LoadPreset => ("CRT preset", vec!["json"], None),
             Self::SavePreset => ("CRT preset", vec!["json"], Some("my-crt")),
             Self::Export => ("PNG image", vec!["png"], Some("rendered")),
-            Self::Port(host) => (
-                match host {
-                    Host::RetroArch => "RetroArch shader",
-                    Host::ReShade => "ReShade effect",
-                    Host::Obs => "OBS filter",
-                },
-                vec!["zip"],
-                Some(match host {
-                    Host::RetroArch => "my-crt-retroarch",
-                    Host::ReShade => "my-crt-reshade",
-                    Host::Obs => "my-crt-obs",
-                }),
-            ),
+            Self::Port(host) => {
+                return Chooser {
+                    filter: host.port_name(),
+                    extensions: vec!["zip"],
+                    save_as: Some(format!("my-crt-{}", host.slug())),
+                }
+            }
             Self::ContactSheet => ("PNG image", vec!["png"], Some("contact-sheet")),
         };
         Chooser {
             filter,
             extensions,
-            save_as,
+            save_as: save_as.map(String::from),
         }
     }
 }
@@ -241,10 +235,10 @@ impl App {
             Dialog::ContactSheet => self.export_contact_sheet(path),
             Dialog::Port(host) => match files::save_port(&path, host, &self.config) {
                 Ok(()) => {
-                    self.status = format!("Exported {} preset {}", host.name(), path.display());
+                    self.status = format!("Exported {} {}", host.port_name(), path.display());
                     self.error = None;
                 }
-                Err(e) => self.error = Some(format!("Cannot export {} preset: {e:#}", host.name())),
+                Err(e) => self.error = Some(format!("Cannot export {}: {e:#}", host.port_name())),
             },
         }
     }
@@ -314,7 +308,7 @@ impl App {
             Dialog::OpenProject | Dialog::SaveProject => return self.not_yet("Projects"),
             _ => {}
         }
-        if let Some(name) = chooser.save_as {
+        if let Some(name) = &chooser.save_as {
             let file = format!("{name}.{}", chooser.extensions[0]);
             return self.chosen(kind, PathBuf::from(file));
         }

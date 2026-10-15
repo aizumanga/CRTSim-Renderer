@@ -8,13 +8,13 @@
 //! is a JSON file of those settings, with its colour table beside it, which the filter's
 //! properties load.
 
-use super::{File, Host, Kind, Reading};
+use super::{File, Host, Kind, Reading, Table};
 use crate::config::Config;
 use anyhow::Result;
 use serde_json::{json, Map, Value};
 use std::fmt::Write as _;
 
-const EFFECT: &str = include_str!("../../../../ports/obs/crtsim.effect");
+pub(super) const EFFECT: &str = include_str!("../../../../ports/obs/crtsim.effect");
 const README: &str = include_str!("../../../../ports/obs/README.md");
 /// The key of a look's colour table, a path relative to the look; empty when it has none.
 const TABLE_FILE: &str = "table_file";
@@ -37,11 +37,10 @@ pub fn export(looks: &[(&str, &Config)]) -> Result<Vec<File>> {
 fn look_files(dir: &str, looks: &[(&str, &Config)]) -> Result<Vec<File>> {
     let mut files = vec![];
     for (name, config) in looks {
-        let table = format!("{name}-table.png");
-        let table = match super::table_file(config, &format!("{dir}{table}"))? {
-            Some((file, _)) => {
-                files.push(file);
-                table
+        let table = match Table::of(config, name)? {
+            Some(table) => {
+                files.push(table.at(dir));
+                table.name
             }
             None => String::new(),
         };
@@ -51,7 +50,10 @@ fn look_files(dir: &str, looks: &[(&str, &Config)]) -> Result<Vec<File>> {
         }
         settings.insert(TABLE_FILE.into(), Value::String(table));
         let text = serde_json::to_string_pretty(&Value::Object(settings))? + "\n";
-        files.push(super::text(&format!("{dir}{name}.json"), &text));
+        files.push(super::text(
+            &super::join(dir, &format!("{name}.json")),
+            &text,
+        ));
     }
     Ok(files)
 }
@@ -75,7 +77,7 @@ pub fn plugin_data() -> Result<Vec<File>> {
     files.extend(super::image_files("images")?);
     let shipped = super::shipped();
     let looks: Vec<_> = shipped.iter().map(|(name, c)| (name.as_str(), c)).collect();
-    files.extend(look_files("looks/", &looks)?);
+    files.extend(look_files("looks", &looks)?);
     Ok(files)
 }
 
