@@ -7,3 +7,4 @@ __pycache__/
 /linuxdeploy.AppImage
 /formatting.patch
 /web/dist/
+/build/

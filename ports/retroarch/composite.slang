@@ -1,6 +1,6 @@
 #version 450
-// CC0. The composite signal: artifacts, ringing and bleed on the picture, over the glow of the
-// ticks before it, which this pass reads back as its own feedback.
+// CC0. The composite signal over the glow of the ticks before it, which this pass reads back as
+// its own feedback: passes/composite.inc.
 
 #include "parameters.inc"
 
@@ -34,83 +34,27 @@ void main() {
 }
 
 #pragma stage fragment
-#include "common.inc"
 layout(location = 0) in vec2 vTexCoord;
 layout(location = 0) out vec4 FragColor;
 layout(set = 0, binding = 2) uniform sampler2D Source;
 layout(set = 0, binding = 3) uniform sampler2D CRTSIM_SIGNALFeedback;
 layout(set = 0, binding = 4) uniform sampler2D CRTSIM_ARTIFACT_PATTERN;
 
-vec3 source_at(ivec2 xy) {
-    ivec2 last = ivec2(global.SourceSize.xy) - ivec2(1);
-    return texelFetch(Source, clamp(xy, ivec2(0), last), 0).rgb;
-}
-
-// The last tick's signal, or black when there is none at this size: a new signal size starts
-// the glow again.
-vec3 previous_at(ivec2 xy) {
-    if (global.CRTSIM_SIGNALFeedbackSize.xy != global.SourceSize.xy) return vec3(0.0);
-    ivec2 last = ivec2(global.SourceSize.xy) - ivec2(1);
-    return texelFetch(CRTSIM_SIGNALFeedback, clamp(xy, ivec2(0), last), 0).rgb;
-}
-
-// How far this tick shows the second artifact pattern over the first: stable phase shows their
-// average; A and B one each, moved towards it by the blending as Super Win the Game's NTSC
-// Blending does, so 1 is the average; alternating swaps them every tick, as an NTSC set's did.
-float phase() {
-    float a = 0.5 * global.CRTSIM_NTSC_BLENDING, b = 1.0 - a;
-    int mode = int(global.CRTSIM_PHASE + 0.5);
-    if (mode == 1) return a;
-    if (mode == 2) return b;
-    if (mode == 3) return (global.FrameCount % 2u) == 0u ? a : b;
-    return 0.5;
-}
-
-// The persistence settings are how much glow survives a tick at 60 a second. A frame lasting
-// longer or shorter keeps that much for its own length, when RetroArch says how long it was.
-vec3 persistence() {
-    vec3 per_tick = vec3(global.CRTSIM_PERSISTENCE_R, global.CRTSIM_PERSISTENCE_G,
-        global.CRTSIM_PERSISTENCE_B);
+#include "dialect.inc"
+#define HOST_SIGNAL_SIZE global.SourceSize.xy
+#define HOST_FETCH_PREPARED(xy) texelFetch(Source, xy, 0)
+// Feedback of another size is a signal size that has changed.
+#define HOST_HAS_PREVIOUS (global.CRTSIM_SIGNALFeedbackSize.xy == global.SourceSize.xy)
+#define HOST_FETCH_PREVIOUS(xy) texelFetch(CRTSIM_SIGNALFeedback, xy, 0)
+#define HOST_FETCH_ARTIFACTS(xy) texelFetch(CRTSIM_ARTIFACT_PATTERN, xy, 0)
+#define HOST_ARTIFACT_SIZE vec2(textureSize(CRTSIM_ARTIFACT_PATTERN, 0))
+#define HOST_FRAME_COUNT int(global.FrameCount)
 #ifdef _HAS_FRAMETIME_UNIFORMS
-    if (global.FrameTimeDelta > 0u)
-        return pow(per_tick, vec3(60.0 * float(global.FrameTimeDelta) / 1000000.0));
+#define HOST_FRAME_TICKS float(60.0 * float(global.FrameTimeDelta) / 1000000.0)
+#else
+#define HOST_FRAME_TICKS 0.0
 #endif
-    return per_tick;
-}
+#include "passes/common.inc"
+#include "passes/composite.inc"
 
-void main() {
-    ivec2 xy = ivec2(vTexCoord * global.SourceSize.xy);
-    // Flipped, the pattern runs from the bottom up, so the second sample is the row above.
-    ivec2 at = global.CRTSIM_FLIP_ARTIFACTS > 0.5
-        ? ivec2(xy.x, int(global.SourceSize.y) - 1 - xy.y) : xy;
-    vec2 auv = (vec2(at) + vec2(0.5)) / vec2(256.0, 224.0);
-    vec2 tile = vec2(textureSize(CRTSIM_ARTIFACT_PATTERN, 0));
-    vec3 a = mix(texelFetch(CRTSIM_ARTIFACT_PATTERN, ivec2(floor(fract(auv) * tile)), 0).rgb,
-        texelFetch(CRTSIM_ARTIFACT_PATTERN, ivec2(floor(fract(auv + vec2(0.0, 1.0 / 224.0)) * tile)), 0).rgb,
-        phase());
-    vec3 left = source_at(xy - ivec2(1, 0));
-    vec3 right = source_at(xy + ivec2(1, 0));
-    vec3 cur = source_at(xy);
-    vec3 color = clamp(cur + (left + right - 2.0 * cur) * a * global.CRTSIM_ARTIFACTS, 0.0, 1.0);
-    float brt = luma(color);
-    float offset = 0.0;
-    float weights[3] = float[3](1.0, -0.3162277, 0.1);
-    for (int i = 0; i < 3; i++) {
-        float lb = luma(source_at(xy - ivec2(i + 1, 0)));
-        float rb = luma(source_at(xy + ivec2(i + 1, 0)));
-        offset += (2.0 * brt - lb - rb) * weights[i];
-    }
-    color = clamp(color + offset * global.CRTSIM_SHARPNESS * mix(vec3(1.0), a, global.CRTSIM_ARTIFACTS),
-        0.0, 1.0);
-    // Interlaced: the beam skips the other field's rows this tick; they only decay below. Auto
-    // interlaces a picture of 400 rows or more, as a set drew a 480- or 576-line one.
-    int interlace = int(global.CRTSIM_INTERLACE + 0.5);
-    bool interlaced = interlace == 1 || (interlace == 2 && global.SourceSize.y >= 400.0);
-    if (interlaced && uint(xy.y) % 2u != global.FrameCount % 2u) color = vec3(0.0);
-    vec3 pl = previous_at(xy - ivec2(1, 0));
-    vec3 pr = previous_at(xy + ivec2(1, 0));
-    vec3 pc = previous_at(xy);
-    float bleed = global.CRTSIM_BLEED;
-    color = max(color, persistence() * (pc + (pl + pr) * bleed) / (1.0 + 2.0 * bleed));
-    FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
-}
+void main() { FragColor = crtsim_composite(ivec2(vTexCoord * global.SourceSize.xy)); }

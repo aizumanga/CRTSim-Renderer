@@ -4,6 +4,7 @@
 use crate::export_ui::ExportFormat;
 use crate::worker::Export;
 use crate::*;
+use crtsim_core::ports::Host;
 #[cfg(not(target_arch = "wasm32"))]
 use std::panic::AssertUnwindSafe;
 
@@ -18,7 +19,8 @@ pub(crate) enum Dialog {
     LoadPreset,
     SavePreset,
     Export,
-    RetroArch,
+    /// A look as a preset of a shader port.
+    Port(Host),
     ContactSheet,
 }
 
@@ -100,7 +102,7 @@ struct Chooser {
     filter: &'static str,
     extensions: Vec<&'static str>,
     /// For a save dialog, the suggested file name before its extension, the filter's only one.
-    save_as: Option<&'static str>,
+    save_as: Option<String>,
 }
 
 impl Dialog {
@@ -119,13 +121,19 @@ impl Dialog {
             Self::LoadPreset => ("CRT preset", vec!["json"], None),
             Self::SavePreset => ("CRT preset", vec!["json"], Some("my-crt")),
             Self::Export => ("PNG image", vec!["png"], Some("rendered")),
-            Self::RetroArch => ("RetroArch shader", vec!["zip"], Some("my-crt-retroarch")),
+            Self::Port(host) => {
+                return Chooser {
+                    filter: host.port_name(),
+                    extensions: vec!["zip"],
+                    save_as: Some(format!("my-crt-{}", host.slug())),
+                }
+            }
             Self::ContactSheet => ("PNG image", vec!["png"], Some("contact-sheet")),
         };
         Chooser {
             filter,
             extensions,
-            save_as,
+            save_as: save_as.map(String::from),
         }
     }
 }
@@ -225,12 +233,12 @@ impl App {
             }
             Dialog::Export => self.export(path),
             Dialog::ContactSheet => self.export_contact_sheet(path),
-            Dialog::RetroArch => match files::save_retroarch(&path, &self.config) {
+            Dialog::Port(host) => match files::save_port(&path, host, &self.config) {
                 Ok(()) => {
-                    self.status = format!("Exported RetroArch shader {}", path.display());
+                    self.status = format!("Exported {} {}", host.port_name(), path.display());
                     self.error = None;
                 }
-                Err(e) => self.error = Some(format!("Cannot export RetroArch shader: {e:#}")),
+                Err(e) => self.error = Some(format!("Cannot export {}: {e:#}", host.port_name())),
             },
         }
     }
@@ -300,7 +308,7 @@ impl App {
             Dialog::OpenProject | Dialog::SaveProject => return self.not_yet("Projects"),
             _ => {}
         }
-        if let Some(name) = chooser.save_as {
+        if let Some(name) = &chooser.save_as {
             let file = format!("{name}.{}", chooser.extensions[0]);
             return self.chosen(kind, PathBuf::from(file));
         }

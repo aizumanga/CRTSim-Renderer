@@ -1,3 +1,4 @@
+use crate::chrome::Fitted;
 use crate::{
     widgets::{choice, Keyed},
     App, Dialog,
@@ -198,8 +199,8 @@ impl App {
         .open(&mut open)
         .collapsible(false)
         .resizable(true)
-        .default_width(540.)
         .default_height(680.)
+        .fitted(ctx, 540.)
         .show(ctx, |ui| {
             ui.label(if draft.batch {
                 "These settings apply to videos added next. Existing jobs \

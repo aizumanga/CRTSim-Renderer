@@ -6,6 +6,7 @@
 //! A look is the preset JSON, deflated and written in URL-safe Base64. An included NES LUT goes
 //! by its name rather than its 262,144 colours; a LUT imported from a file is too large for a
 //! link, which is refused, so that look is shared as a JSON preset instead.
+use crate::chrome::Fitted;
 use anyhow::{bail, ensure, Context, Result};
 use crtsim_core::{config::Config, nes_luts};
 use std::{io::Read, sync::Arc};
@@ -196,7 +197,7 @@ impl crate::App {
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
-            .default_width(460.)
+            .fitted(ctx, 460.)
             .show(ctx, |ui| {
                 ui.label("Paste a link to a look, made with Presets → Copy link to this look.");
                 let field = ui.add(

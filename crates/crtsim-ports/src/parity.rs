@@ -1,40 +1,36 @@
-//! The RetroArch port against the renderer it was ported from: each case is a look the golden
-//! images already hold, exported as a preset, run through librashader for as many frames as
-//! the renderer's still ticks, and compared with the renderer's own picture.
+//! The looks every port is held to the renderer with, and the measure of how far a port's
+//! picture is from the renderer's. Each case is a look the golden images already hold, run
+//! through the port for as many frames as the renderer's still ticks, or a few frames of
+//! changing pictures for the glow between them.
 //!
-//! ```text
-//! cargo test -p crtsim-ports --test renderer_parity -- --ignored --nocapture
-//! ```
-//!
-//! The renderer is held to its goldens bit for bit; this only guards the translation. The port
-//! cannot be exact everywhere: its colour tables are 8-bit strips, and RetroArch builds the
-//! mask's mipmaps itself, rounding each texel its own way, which moves a third of a filtered
-//! frame's pixels by a step or two. So every case samples the mask unfiltered, where only a
-//! real translation error can move a pixel, and one case keeps the mipmaps under a limit of its
-//! own. The limits were set from the first measurement and frozen; `--nocapture` prints each
-//! case's margin.
+//! The renderer is held to its goldens bit for bit; this only guards the translations. A port
+//! cannot be exact everywhere: its colour tables are 8-bit strips, and its host builds the
+//! mask's mipmaps its own way, rounding each texel its own way, which moves a third of a
+//! filtered frame's pixels by a step or two. So every case samples the mask unfiltered, where
+//! only a real translation error can move a pixel, and one case keeps the mipmaps under a limit
+//! of its own. The limits were set from the first measurement and frozen; `--nocapture`
+//! prints each case's margin.
 
 use crtsim_core::config::{self, ColorMode, Config, Phase};
-use crtsim_core::{nes_luts, retroarch, Renderer, Sequence};
-use crtsim_ports::{Port, RetroArch};
+use crtsim_core::{nes_luts, Renderer, Sequence};
 use image::RgbaImage;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// The goldens' size.
-const OUTPUT: (u32, u32) = (320, 180);
+pub const OUTPUT: (u32, u32) = (320, 180);
 /// The largest channel difference allowed on any pixel, and the mean over the frame, in 8-bit
 /// steps: with the mask unfiltered, and with its mipmaps.
-const UNFILTERED: Limits = Limits {
+pub const UNFILTERED: Limits = Limits {
     worst: 2,
     mean: 0.01,
 };
-const MIPMAPPED: Limits = Limits {
+pub const MIPMAPPED: Limits = Limits {
     worst: 4,
     mean: 0.3,
 };
-/// A colour table computed in floats, as the NES palette is, which the port reads as an 8-bit
+/// A colour table computed in floats, as the NES palette is, which the ports read as an 8-bit
 /// strip.
-const FLOAT_TABLE: Limits = Limits {
+pub const FLOAT_TABLE: Limits = Limits {
     worst: 3,
     mean: 0.08,
 };
@@ -44,12 +40,13 @@ const FLOAT_TABLE: Limits = Limits {
 const SEAM_PIXELS: usize = 4;
 
 #[derive(Clone, Copy)]
-struct Limits {
-    worst: u8,
-    mean: f64,
+pub struct Limits {
+    pub worst: u8,
+    pub mean: f64,
 }
 
-fn base() -> Config {
+/// The reference look at the goldens' size, its mask unfiltered.
+pub fn base() -> Config {
     Config {
         output: format!("{}x{}", OUTPUT.0, OUTPUT.1),
         mask_antialias: false,
@@ -57,60 +54,73 @@ fn base() -> Config {
     }
 }
 
-struct Case {
-    name: &'static str,
-    config: Config,
+#[derive(Clone)]
+pub struct Case {
+    pub name: &'static str,
+    pub config: Config,
     /// What reaches the renderer: resized by its prepare step to the signal.
-    source: RgbaImage,
-    /// What a core would hand RetroArch, in turn, and for how many frames: the source already
+    pub source: RgbaImage,
+    /// What a host would hand the port, in turn, and for how many frames: the source already
     /// at signal size, before any colour table, since the port applies the table itself.
-    steps: Vec<(RgbaImage, u32)>,
-    limits: Limits,
-    /// How the renderer paces its frames, and how long RetroArch says each one lasts. Newer
-    /// RetroArch decays glow by that time; older by a tick a frame, which is exactly the
-    /// renderer's 60 a second.
-    timing: Timing,
+    pub steps: Vec<(RgbaImage, u32)>,
+    pub limits: Limits,
+    /// How the renderer paces its frames, and how long the host says each one lasts.
+    pub timing: Timing,
 }
 
 #[derive(Clone, Copy)]
-enum Timing {
-    /// A still's ticks, on RetroArch without frame times.
+pub enum Timing {
+    /// A still's ticks, each a sixtieth of a second, as a host that does not say how long a
+    /// frame lasts decays the glow.
     Ticks,
-    /// A video at this many frames a second, on RetroArch that reports each frame's length.
+    /// A video at this many frames a second, from a host that says how long each lasts.
     Video(f64),
 }
 
-fn cases() -> Vec<Case> {
-    let card = config::test_card();
-    let still = |name, config: Config| {
-        let signal = config::prepare(
-            &card,
-            &Config {
-                lut: None,
-                palette: None,
-                hue: 0.,
-                chroma: 1.,
-                ..config.clone()
-            },
-        )
-        .expect("the signal");
-        let frames = config.warmup + 1;
-        let limits = if config.mask_antialias {
-            MIPMAPPED
-        } else if config.palette.is_some() {
-            FLOAT_TABLE
-        } else {
-            UNFILTERED
-        };
-        Case {
-            name,
-            config,
-            source: card.clone(),
-            steps: vec![(signal, frames)],
-            limits,
-            timing: Timing::Ticks,
+impl Timing {
+    /// How long a frame lasts, in seconds.
+    pub fn frame_seconds(self) -> f64 {
+        match self {
+            Self::Ticks => 1. / 60.,
+            Self::Video(fps) => 1. / fps,
         }
+    }
+}
+
+/// A still of `config` from the test card, handed over at the signal's size.
+pub fn still(name: &'static str, config: Config) -> Case {
+    let card = config::test_card();
+    let signal = config::prepare(
+        &card,
+        &Config {
+            lut: None,
+            palette: None,
+            hue: 0.,
+            chroma: 1.,
+            ..config.clone()
+        },
+    )
+    .expect("the signal");
+    let frames = config.warmup + 1;
+    let limits = if config.mask_antialias {
+        MIPMAPPED
+    } else if config.palette.is_some() {
+        FLOAT_TABLE
+    } else {
+        UNFILTERED
     };
+    Case {
+        name,
+        config,
+        source: card,
+        steps: vec![(signal, frames)],
+        limits,
+        timing: Timing::Ticks,
+    }
+}
+
+/// The cases every port draws.
+pub fn cases() -> Vec<Case> {
     let mut cases = vec![
         still("reference", base()),
         still(
@@ -250,7 +260,7 @@ fn cases() -> Vec<Case> {
 }
 
 /// The renderer's picture: a frame of the source, then one of each later step's input.
-fn render(renderer: &Renderer, case: &Case) -> RgbaImage {
+pub fn render(renderer: &Renderer, case: &Case) -> RgbaImage {
     pollster::block_on(async {
         let mut sequence = match case.timing {
             Timing::Ticks => Sequence::still(),
@@ -269,40 +279,15 @@ fn render(renderer: &Renderer, case: &Case) -> RgbaImage {
     .expect("render")
 }
 
-/// The picture's shape as a core would report it: its signal widened by its pixel aspect.
-fn aspect(case: &Case) -> f32 {
+/// The picture's shape as a host would report it: its signal widened by its pixel aspect.
+pub fn aspect(case: &Case) -> f32 {
     let (width, height) = case.steps[0].0.dimensions();
     width as f32 / height as f32 * case.config.pixel_aspect
 }
 
-fn port(case: &Case, dir: &std::path::Path) -> RgbaImage {
-    let files = retroarch::export(&[("look", &case.config)]).expect("export");
-    let folder = dir.join(case.name);
-    retroarch::write(&folder, &files).expect("write the preset");
-    let (retroarch, frame_time_us) = match case.timing {
-        Timing::Ticks => (RetroArch::Older, 0),
-        Timing::Video(fps) => (RetroArch::Newer, (1e6 / fps).round() as u32),
-    };
-    let mut port = Port::load(&folder.join("look.slangp"), retroarch).expect("load");
-    // Older RetroArch has no `OriginalAspect`, so the preset's own aspect stands in for it.
-    if retroarch == RetroArch::Older {
-        port.set("CRTSIM_ASPECT", aspect(case))
-            .expect("the aspect parameter");
-    }
-    let mut picture = None;
-    for (input, frames) in &case.steps {
-        picture = Some(
-            port.render(input, OUTPUT, *frames, frame_time_us, aspect(case))
-                .expect("port render"),
-        );
-    }
-    picture.expect("a step")
-}
-
-/// The worst channel difference and the mean, in 8-bit steps.
 /// The worst channel difference once the `SEAM_PIXELS` worst pixels are set aside, the mean
 /// over every pixel, and how many pixels differ by more than `worst`, all in 8-bit steps.
-fn compare(a: &RgbaImage, b: &RgbaImage, worst: u8) -> (u8, f64, usize) {
+pub fn compare(a: &RgbaImage, b: &RgbaImage, worst: u8) -> (u8, f64, usize) {
     assert_eq!(a.dimensions(), b.dimensions());
     let mut differences: Vec<u8> = a
         .pixels()
@@ -324,25 +309,26 @@ fn compare(a: &RgbaImage, b: &RgbaImage, worst: u8) -> (u8, f64, usize) {
     )
 }
 
-fn output_dir() -> PathBuf {
-    match std::env::var_os("CRTSIM_TEST_OUTPUT") {
-        Some(dir) => PathBuf::from(dir).join("port-parity"),
-        None => std::env::temp_dir().join(format!("crtsim-port-parity-{}", std::process::id())),
-    }
-}
-
-#[test]
-#[ignore = "requires an explicitly provisioned GPU or software Vulkan driver"]
-fn the_port_draws_what_the_renderer_draws() {
-    let renderer =
-        pollster::block_on(Renderer::new(wgpu::Backends::VULKAN)).expect("Vulkan renderer");
-    let dir = output_dir();
+/// Where a port's test leaves its work, and the pictures of any case that drifted.
+pub fn output_dir(port: &str) -> PathBuf {
+    let dir = match std::env::var_os("CRTSIM_TEST_OUTPUT") {
+        Some(dir) => PathBuf::from(dir).join(format!("{port}-parity")),
+        None => std::env::temp_dir().join(format!("crtsim-{port}-parity-{}", std::process::id())),
+    };
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("output folder");
+    dir
+}
+
+/// Draws each case through the renderer and through `port`, which draws it in a folder of its
+/// own under `dir`, and fails naming every case past its limits, saving both pictures of each.
+pub fn check(cases: Vec<Case>, dir: &Path, mut port: impl FnMut(&Case, &Path) -> RgbaImage) {
+    let renderer =
+        pollster::block_on(Renderer::new(wgpu::Backends::VULKAN)).expect("Vulkan renderer");
     let mut failures = vec![];
-    for case in cases() {
+    for case in cases {
         let expected = render(&renderer, &case);
-        let got = port(&case, &dir);
+        let got = port(&case, &dir.join(case.name));
         let limits = case.limits;
         let (worst, mean, past) = compare(&expected, &got, limits.worst);
         eprintln!(

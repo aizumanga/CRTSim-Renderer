@@ -1,5 +1,6 @@
 //! The session: the project the app saves every two seconds and offers to recover on the next
 //! start, and the project files opened and saved during it.
+use crate::chrome::Fitted;
 use crate::{app_data, project, source, App, Dialog};
 use anyhow::Result;
 use app_data::Store;
@@ -206,6 +207,7 @@ impl App {
         egui::Window::new("Recover last session?")
             .collapsible(false)
             .resizable(false)
+            .fitted(ctx, 420.)
             .show(ctx, |ui| {
                 ui.label("Restore the last source, edits, video options and paused export queue.");
                 ui.horizontal(|ui| {

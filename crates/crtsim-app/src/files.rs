@@ -1,10 +1,7 @@
 use anyhow::{ensure, Context, Result};
-use crtsim_core::config::Config;
+use crtsim_core::{config::Config, ports::Host};
 use image::{DynamicImage, ImageOutputFormat, RgbaImage};
-use std::{
-    io::{Cursor, Write},
-    path::Path,
-};
+use std::{io::Cursor, path::Path};
 
 const PRESET_KEYWORD: &[u8] = b"CRTSim-Renderer-Preset";
 
@@ -41,14 +38,28 @@ pub fn save_atomic(
         .map_err(|e| anyhow::anyhow!("Cannot save {}: {}", path.display(), e.error))?;
     Ok(())
 }
+/// Delivers a finished file to where a save dialog said: on the desktop written whole, in one
+/// step, over any file there; in a browser downloaded under the name the path gives. Every
+/// export ends here, so this is the one place that tells the two apart.
+pub fn deliver(path: &Path, bytes: &[u8], mime: &str) -> Result<()> {
+    #[cfg(target_arch = "wasm32")]
+    return crate::web::download(&crate::file_name(path), bytes, mime);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::io::Write as _;
+        let _ = mime;
+        save_atomic(path, |file| Ok(file.write_all(bytes)?))
+    }
+}
+
+/// `image` delivered as a PNG, carrying `preset` when there is one.
 pub fn save_png(path: &Path, image: RgbaImage, preset: Option<&Config>) -> Result<()> {
     ensure!(
         path.extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("png")),
         "Export filename must end in .png"
     );
-    let bytes = png_bytes(image, preset)?;
-    save_atomic(path, |file| Ok(file.write_all(&bytes)?))
+    deliver(path, &png_bytes(image, preset)?, "image/png")
 }
 
 /// `image` as a PNG, carrying `preset` when there is one.
@@ -154,11 +165,12 @@ fn crc32(bytes: &[u8]) -> u32 {
     }
     !crc
 }
-/// `c` as a RetroArch shader preset, zipped in a folder of its own with the port's shaders.
-/// The look is named after the file, less any `-retroarch`.
-pub fn save_retroarch(path: &Path, c: &Config) -> Result<()> {
+/// `c` as a preset of `host`'s shader port, zipped in a folder of its own with the port. The
+/// look is named after the file, less any `-retroarch` or the like.
+pub fn save_port(path: &Path, host: Host, c: &Config) -> Result<()> {
+    let suffix = format!("-{}", host.slug());
     let stem = crate::file_stem(path);
-    let stem = stem.strip_suffix("-retroarch").unwrap_or(&stem);
+    let stem = stem.strip_suffix(suffix.as_str()).unwrap_or(&stem);
     let name: String = stem
         .chars()
         .map(|c| {
@@ -170,19 +182,15 @@ pub fn save_retroarch(path: &Path, c: &Config) -> Result<()> {
         })
         .collect();
     let bytes = zip(
-        &format!("{name}-retroarch"),
-        &crtsim_core::retroarch::export(&[(&name, c)])?,
+        &format!("{name}{suffix}"),
+        &crtsim_core::ports::export(host, &[(&name, c)])?,
     );
-    #[cfg(not(target_arch = "wasm32"))]
-    return save_atomic(path, |f| Ok(f.write_all(&bytes)?));
-    // A browser saves by downloading, under the name the path gives.
-    #[cfg(target_arch = "wasm32")]
-    return crate::web::download(&crate::file_name(path), &bytes, "application/zip");
+    deliver(path, &bytes, "application/zip")
 }
 
 /// `files` in a zip archive under `folder`, stored uncompressed: the PNGs are compressed
 /// already and the shaders are small, so storing keeps this short and free of dependencies.
-fn zip(folder: &str, files: &[crtsim_core::retroarch::File]) -> Vec<u8> {
+fn zip(folder: &str, files: &[crtsim_core::ports::File]) -> Vec<u8> {
     let mut archive = Vec::new();
     let mut directory = Vec::new();
     for file in files {
@@ -228,12 +236,7 @@ fn zip(folder: &str, files: &[crtsim_core::retroarch::File]) -> Vec<u8> {
 }
 
 pub fn save_preset(path: &Path, c: &Config) -> Result<()> {
-    let bytes = preset_json(c)?;
-    #[cfg(not(target_arch = "wasm32"))]
-    return save_atomic(path, |f| Ok(f.write_all(&bytes)?));
-    // A browser saves by downloading, under the name the path gives.
-    #[cfg(target_arch = "wasm32")]
-    return crate::web::download(&crate::file_name(path), &bytes, "application/json");
+    deliver(path, &preset_json(c)?, "application/json")
 }
 
 /// `c` as a preset file's JSON.
@@ -245,6 +248,7 @@ pub fn preset_json(c: &Config) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write as _;
 
     #[test]
     fn a_retroarch_export_is_a_zip_of_one_folder_named_for_its_look() {
@@ -252,7 +256,7 @@ mod tests {
         let path = dir.path().join("Warm Tube-retroarch.zip");
         let mut c = Config::general();
         c.lut = Some(std::sync::Arc::new(crtsim_core::nes_luts::load(0).unwrap()));
-        save_retroarch(&path, &c).unwrap();
+        save_port(&path, Host::RetroArch, &c).unwrap();
         let bytes = std::fs::read(&path).unwrap();
         // The end record: how many files, and where the directory listing them starts.
         let end = bytes.len() - 22;
@@ -285,6 +289,22 @@ mod tests {
                 names.contains(&format!("Warm_Tube-retroarch/{expected}")),
                 "{names:?}"
             );
+        }
+    }
+
+    #[test]
+    fn every_ports_export_holds_the_look_named_for_its_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = Config::general();
+        for (host, preset) in [
+            (Host::ReShade, "Warm_Tube-reshade/Warm_Tube.ini"),
+            (Host::Obs, "Warm_Tube-obs/Warm_Tube.json"),
+        ] {
+            let path = dir.path().join(format!("Warm Tube-{}.zip", host.slug()));
+            save_port(&path, host, &c).unwrap();
+            let bytes = std::fs::read(&path).unwrap();
+            let named = |name: &str| bytes.windows(name.len()).any(|w| w == name.as_bytes());
+            assert!(named(preset), "{preset} in the {} export", host.port_name());
         }
     }
 

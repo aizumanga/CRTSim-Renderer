@@ -7,7 +7,7 @@
 //! With `CRTSIM_SLANG_SHADERS` set to a checkout of libretro's slang-shaders, it also renders
 //! their port of the original CRTSim, and with `CRTSIM_TEST_OUTPUT` set it saves that render.
 
-use crtsim_ports::{Port, RetroArch};
+use crtsim_ports::retroarch::{Port, RetroArch};
 use image::{Rgba, RgbaImage};
 use std::path::{Path, PathBuf};
 use std::time::Instant;

@@ -1,11 +1,15 @@
 //! The toolbar along the top of the window, and its menus.
 use crate::*;
+use crtsim_core::ports::Host;
 
 impl App {
     pub(crate) fn toolbar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.horizontal_wrapped(|ui| {
             chrome::monitor(ui);
-            ui.label(egui::RichText::new("CRTSim Renderer").strong().size(17.));
+            // A phone's screen has room for the menus or the name, not both.
+            if !chrome::narrow(ctx) {
+                ui.label(egui::RichText::new("CRTSim Renderer").strong().size(17.));
+            }
             ui.separator();
             ui.add_enabled_ui(self.can_start_work(), |ui| {
                 ui.menu_button("File", |ui| {
@@ -118,16 +122,28 @@ impl App {
                         self.show_contact_sheet();
                         ui.close();
                     }
-                    if ui
-                        .button("RetroArch shader…")
-                        .on_hover_text(
-                            "These settings as a shader preset for RetroArch, drawn over a \
-                             game as it plays.",
-                        )
-                        .clicked()
-                    {
-                        self.dialog(Dialog::RetroArch, ctx);
-                        ui.close();
+                    for (host, hover) in [
+                        (
+                            Host::RetroArch,
+                            "These settings as a shader preset for RetroArch, drawn over an \
+                             emulated game as it plays.",
+                        ),
+                        (
+                            Host::ReShade,
+                            "These settings as a ReShade preset, drawn over almost any PC game \
+                             as it plays.",
+                        ),
+                        (
+                            Host::Obs,
+                            "These settings as a look for the CRTSim Renderer filter in OBS \
+                             Studio, drawn over a source as it streams or records.",
+                        ),
+                    ] {
+                        let label = format!("{}…", host.port_name());
+                        if ui.button(label).on_hover_text(hover).clicked() {
+                            self.dialog(Dialog::Port(host), ctx);
+                            ui.close();
+                        }
                     }
                     ui.separator();
                     if ui.button("Batch queue…").clicked() {

@@ -590,15 +590,23 @@ impl eframe::App for App {
                 });
             }
         });
-        egui::Panel::left("settings")
-            .default_size(310.)
-            .min_size(280.)
-            .resizable(true)
-            .show(ui, |ui| {
-                ui.add_enabled_ui(!self.modal_open(), |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| self.settings(ui));
-                });
+        // Beside the picture, or below it on a phone, where the picture still shows each change.
+        let settings = if chrome::narrow(ctx) {
+            let height = ctx.content_rect().height();
+            egui::Panel::bottom("settings below")
+                .default_size(height * 0.45)
+                .min_size(120.)
+                .max_size(height * 0.75)
+        } else {
+            egui::Panel::left("settings")
+                .default_size(310.)
+                .min_size(280.)
+        };
+        settings.resizable(true).show(ui, |ui| {
+            ui.add_enabled_ui(!self.modal_open(), |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| self.settings(ui));
             });
+        });
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::NONE
