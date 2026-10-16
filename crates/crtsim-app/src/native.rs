@@ -20,12 +20,19 @@ pub fn run(launch: Launch) -> eframe::Result<()> {
         backend,
         smoke,
     } = launch;
+    // A smoke run may ask for a screen of any size, as small as a phone's.
+    let viewport = match smoke.as_ref().and_then(|smoke| smoke.size) {
+        Some(size) => egui::ViewportBuilder::default()
+            .with_inner_size(size)
+            .with_min_inner_size(size),
+        None => egui::ViewportBuilder::default()
+            .with_inner_size([1280., 850.])
+            .with_min_inner_size([900., 620.]),
+    };
     eframe::run_native(
         "CRTSim Renderer",
         eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default()
-                .with_inner_size([1280., 850.])
-                .with_min_inner_size([900., 620.]),
+            viewport,
             // wgpu, so the interface draws on the same device the CRT frames are rendered on.
             renderer: eframe::Renderer::Wgpu,
             wgpu_options: eframe::egui_wgpu::WgpuConfiguration {

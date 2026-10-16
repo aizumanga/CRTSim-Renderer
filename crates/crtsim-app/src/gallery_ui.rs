@@ -1,4 +1,5 @@
 //! The preset gallery and credits windows.
+use crate::chrome::Fitted;
 use crate::gallery::Confirm;
 use crate::{chrome, gallery, model, thumbnails, App, Dialog};
 use crtsim_core::config::Config;
@@ -43,7 +44,8 @@ impl App {
                     "Save your current settings here to find them again after restarting the \
                      app.",
                 );
-                ui.horizontal(|ui| {
+                // Wrapped, so the button goes below the name on a phone's screen.
+                ui.horizontal_wrapped(|ui| {
                     ui.label("Name");
                     // A replacement asked about is for the name it was asked about.
                     if ui.text_edit_singleline(&mut self.presets.name).changed()
@@ -256,8 +258,7 @@ impl App {
             egui::Window::new(format!("Description — {name}"))
                 .open(&mut editing)
                 .collapsible(false)
-                .default_width(400.)
-                .constrain_to(ctx.content_rect())
+                .fitted(ctx, 400.)
                 .show(ctx, |ui| {
                     ui.add(
                         egui::TextEdit::multiline(&mut description)
@@ -344,7 +345,7 @@ impl App {
                 .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
                 .collapsible(false)
                 .resizable(false)
-                .default_width(560.)
+                .fitted(ctx, 560.)
                 .show(ctx, |ui| {
                     Self::credit_text(ui);
                     ui.add_space(12.);

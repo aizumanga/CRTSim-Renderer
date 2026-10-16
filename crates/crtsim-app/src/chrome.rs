@@ -1,6 +1,36 @@
 //! Native workbench chrome; all decoration stays outside rendered media.
 use eframe::egui::{self, Color32, Rect, Stroke};
 
+/// Narrower than this, in points, a screen holds the settings below the picture rather than
+/// beside it: a phone held upright.
+const NARROW: f32 = 640.;
+
+/// Whether the screen is too narrow for the settings beside the picture.
+pub fn narrow(ctx: &egui::Context) -> bool {
+    ctx.content_rect().width() < NARROW
+}
+
+/// The room a window has on the screen, less a margin around it.
+fn room(ctx: &egui::Context) -> egui::Vec2 {
+    (ctx.content_rect().size() - egui::Vec2::splat(16.)).max(egui::Vec2::splat(120.))
+}
+
+/// A window that opens no wider than the screen, as on a phone, and as wide as it asks
+/// elsewhere.
+pub trait Fitted {
+    fn fitted(self, ctx: &egui::Context, width: f32) -> Self;
+}
+
+impl Fitted for egui::Window<'_> {
+    fn fitted(self, ctx: &egui::Context, width: f32) -> Self {
+        let room = room(ctx);
+        self.default_width(width.min(room.x))
+            .max_width(room.x)
+            .max_height(room.y)
+            .constrain_to(ctx.content_rect())
+    }
+}
+
 pub fn gradient(painter: &egui::Painter, rect: Rect, top: Color32, bottom: Color32) {
     let mut mesh = egui::Mesh::default();
     for (pos, color) in [
@@ -220,8 +250,8 @@ pub fn tool_window(
                 let mut open = true;
                 egui::Window::new(title)
                     .open(&mut open)
-                    .default_size(default_size)
-                    .constrain_to(ctx.content_rect())
+                    .default_height(default_size[1].min(room(&ctx).y))
+                    .fitted(&ctx, default_size[0])
                     .show(&ctx, |ui| contents.take().map(|contents| contents(ui)));
                 open
             } else {

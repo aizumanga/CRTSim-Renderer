@@ -17,6 +17,8 @@ The CRT runs in ReShade, over almost any PC game, and in OBS Studio, as a filter
   say they follow the signal, which is what they always followed.
 - The OBS filter is tested against the renderer in OBS itself, and the ReShade effect compiled with ReShade's own
   compiler as each shipped look sets it.
+- The web app fits a phone: under 640 points wide the settings sit below the picture, in a panel you can drag taller,
+  and every window fits the screen. The desktop app does the same in a narrow window.
 
 ## v1.2.0
 

@@ -6,7 +6,10 @@ impl App {
     pub(crate) fn toolbar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.horizontal_wrapped(|ui| {
             chrome::monitor(ui);
-            ui.label(egui::RichText::new("CRTSim Renderer").strong().size(17.));
+            // A phone's screen has room for the menus or the name, not both.
+            if !chrome::narrow(ctx) {
+                ui.label(egui::RichText::new("CRTSim Renderer").strong().size(17.));
+            }
             ui.separator();
             ui.add_enabled_ui(self.can_start_work(), |ui| {
                 ui.menu_button("File", |ui| {

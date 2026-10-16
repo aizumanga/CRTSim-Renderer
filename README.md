@@ -167,7 +167,8 @@ formats offered are those it can write), GIF, animated WebP and animated PNG exp
 its settings, presets and session stay in the browser. Its MP4 and WebM exports embed the
 preset as the desktop's do, and **Import preset from Image/Video…** reads one back from a PNG,
 MP4 or WebM, made by either app. Projects and batch export are
-desktop-only for now (see [the web plan](docs/WEB_PLAN.md)).
+desktop-only for now (see [the web plan](docs/WEB_PLAN.md)). On a phone, or any screen under 640
+points wide, the settings sit below the picture.
 
 ```sh
 rustup target add wasm32-unknown-unknown

@@ -134,6 +134,7 @@ jobs:
           mkdir -p "$CRTSIM_DATA_DIR"
           echo 'sky-diary' > "$CRTSIM_DATA_DIR/theme-v1.txt"
           xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-app -- --smoke-test output/welcome.png --smoke-welcome
+          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-app -- --backend vulkan --smoke-test output/phone.png --smoke-size 390x844
           mkdir -p "$CRTSIM_DATA_DIR/presets"
           cp output/general.json "$CRTSIM_DATA_DIR/presets/Animation CRT.json"
           echo 'A personal description for animation, with a soft mask and gentle bloom.' > "$CRTSIM_DATA_DIR/presets/Animation CRT.txt"

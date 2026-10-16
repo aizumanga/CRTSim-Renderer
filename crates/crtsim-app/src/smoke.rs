@@ -13,6 +13,8 @@ pub struct Smoke {
     pub gallery: bool,
     /// Open the LUT gallery, and wait for its thumbnails.
     pub lut_gallery: bool,
+    /// The window's size, in points, to see the layout of a phone's or a tablet's screen.
+    pub size: Option<[f32; 2]>,
     requested: bool,
     started: Instant,
 }
@@ -25,6 +27,7 @@ impl Smoke {
             export: false,
             gallery: false,
             lut_gallery: false,
+            size: None,
             requested: false,
             started: Instant::now(),
         }

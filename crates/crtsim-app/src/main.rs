@@ -20,6 +20,7 @@ fn main() -> eframe::Result<()> {
     let mut smoke_gallery = false;
     let mut smoke_lut_gallery = false;
     let mut smoke_export = false;
+    let mut smoke_size = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -27,6 +28,17 @@ fn main() -> eframe::Result<()> {
             "--smoke-gallery" => smoke_gallery = true,
             "--smoke-lut-gallery" => smoke_lut_gallery = true,
             "--smoke-export" => smoke_export = true,
+            "--smoke-size" => {
+                let size = args.next().and_then(|size| {
+                    let (w, h) = size.split_once('x')?;
+                    Some([w.parse().ok()?, h.parse().ok()?])
+                });
+                if size.is_none() {
+                    eprintln!("Expected --smoke-size WIDTHxHEIGHT, in points");
+                    std::process::exit(2);
+                }
+                smoke_size = size;
+            }
             "--backend" => {
                 backend = match args.next().as_deref() {
                     Some("vulkan") => Some(wgpu::Backends::VULKAN),
@@ -70,6 +82,7 @@ fn main() -> eframe::Result<()> {
         smoke.export = smoke_export;
         smoke.gallery = smoke_gallery;
         smoke.lut_gallery = smoke_lut_gallery;
+        smoke.size = smoke_size;
         smoke
     });
     native::run(Launch {
