@@ -18,6 +18,7 @@ It is not an official product or an exact reconstruction of a commercial game's 
 - Logical signal and output resolution presets; custom dimensions; JSON settings.
 - Clean/signal/full-CRT debugging and mesh validation/export without a GPU.
 - Native wgpu backends: Vulkan on Linux, DX12 on Windows and Metal on macOS.
+- A web app on WebGPU that lays itself out for phones, and the CRT in RetroArch, ReShade and OBS Studio, each look exported for them.
 
 Installers and files from Super Win the Game are not included; its NTSC palette is made by the app, as the game makes it. A separate CC0 collection of 38 NES LUTs from MAME Goodies is included under **Color & LUT → LUT gallery…**. Platform compilation does not prove visual parity between drivers.
 See [the implementation plan](docs/PLAN.md) and [validation notes](docs/VALIDATION.md).
@@ -79,7 +80,7 @@ the game's own output bit for bit, and recolours art drawn in the NES palette th
 **From the composite signal** decodes the NES's measured signal levels instead, fitted to FirebrandX's Composite Direct
 capture, and recolours art drawn in MAME's NES palette, as the included NES LUTs expect. **LUT strength**, the game's NTSC
 Palette slider, mixes any LUT or the palette with the original colours. The game's table is read as the game reads it,
-nearest in red and green and blended in blue, here and in RetroArch; other tables blend in all three.
+nearest in red and green and blended in blue, here and in every shader port; other tables blend in all three.
 **Optional color grade** rotates hue and changes chroma in YIQ before the composite simulation. Neutral values leave the prepared signal unchanged.
 It is an artistic grade, not the private NES palette LUT or a full NTSC decoder.
 **Linear light (experimental)** decodes the SDR signal for glass sampling, performs lighting and bloom with RGBA16Float intermediates,
@@ -348,11 +349,11 @@ Export directories must be new. Sixteen warm-up ticks means 17 total ticks; it i
 `alternating` advances phase once per tick; the final phase depends on warm-up parity. Stable mode is recommended for still images.
 
 **Interlaced fields** (`"interlace": true`) makes each tick scan every other signal row, alternating fields, while the rows it skips only fade by persistence, as on an interlaced set. Use it with a 480- or 576-row signal. On a still, the last tick's field is the bright one, so warm-up parity picks which; in a video each frame is one field.
-**Flip artifact pattern** (`"flip_artifacts": true`) turns the composite artifact pattern upside down against the picture, each tick blending in the row above rather than the one below, as Super Win the Game's Linux build draws it; compared with that build's own frames, the composite signal then matches within 2 steps. Off, the default, is the public CRTSim source's orientation, which the game's Windows build, on Direct3D 9, also draws; the **Super Win the Game** preset leaves it off. The Mac build draws through OpenGL as the Linux build does, so it likely flips too; turn this on to match those. RetroArch presets carry it.
+**Flip artifact pattern** (`"flip_artifacts": true`) turns the composite artifact pattern upside down against the picture, each tick blending in the row above rather than the one below, as Super Win the Game's Linux build draws it; compared with that build's own frames, the composite signal then matches within 2 steps. Off, the default, is the public CRTSim source's orientation, which the game's Windows build, on Direct3D 9, also draws; the **Super Win the Game** preset leaves it off. The Mac build draws through OpenGL as the Linux build does, so it likely flips too; turn this on to match those. The shader ports carry it.
 
-**Backdrop color** (`"backdrop_color"`, under Frame & lighting) fills what neither the glass nor the bezel covers, at the sides of an output wider than 4:3; black by default. Super Win the Game draws a grey backdrop there at 1/16, which its preset uses. RetroArch presets carry it.
+**Backdrop color** (`"backdrop_color"`, under Frame & lighting) fills what neither the glass nor the bezel covers, at the sides of an output wider than 4:3; black by default. Super Win the Game draws a grey backdrop there at 1/16, which its preset uses. The shader ports carry it.
 
-**Reflection as on the screen** (`"reflection_as_screen": true`, under Bloom & reflections) has the bezel reflect the picture with the screen's overscan and mask density, as Super Win the Game's monitor pass does. Off, the default, is the public CRTSim source, which reflects it with the overscan the other way round and half the mask's rows. At an overscan of 1 the two differ only faintly; with the overscan changed, the bezel's reflection then matches the game's within a fraction of a step. The **Super Win the Game** preset turns it on, and RetroArch presets carry it.
+**Reflection as on the screen** (`"reflection_as_screen": true`, under Bloom & reflections) has the bezel reflect the picture with the screen's overscan and mask density, as Super Win the Game's monitor pass does. Off, the default, is the public CRTSim source, which reflects it with the overscan the other way round and half the mask's rows. At an overscan of 1 the two differ only faintly; with the overscan changed, the bezel's reflection then matches the game's within a fraction of a step. The **Super Win the Game** preset turns it on, and the shader ports carry it.
 
 ### GPU troubleshooting
 

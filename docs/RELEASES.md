@@ -1,8 +1,9 @@
 # Portable releases (Phase 4)
 
-## Unreleased
+## v1.3.0
 
-The CRT runs in ReShade, over almost any PC game, and in OBS Studio, as a filter that keeps the glow between frames.
+The CRT runs in ReShade, over almost any PC game, and in OBS Studio, as a filter that keeps the glow between frames,
+and the web app fits a phone.
 
 - `CRTSim-Renderer-<version>-reshade.zip` holds the ReShade effect and presets for the shipped looks: copy its
   `reshade-shaders` folder into the game's folder and pick a preset in ReShade's overlay. **Export → ReShade effect…**
@@ -176,8 +177,10 @@ looked. The research behind it, and how to reproduce it from a copy of the game,
 The preset schema remains version 1 and is compatible with v0.1.0 files.
 
 The **Portable packages** workflow builds downloadable Actions artifacts for each manual workflow run, and for pull requests that change packaging: the workflow itself, `tools/package.py`, `tools/build_web.py`, `packaging/`, `ports/`, `web/` or `Cargo.lock`.
-The Linux job also writes `CRTSim-Renderer-vX.Y.Z-retroarch.zip`, the RetroArch presets its CLI exports. Other pull requests are built and tested by the validation workflow only.
-A `v*` tag builds the same packages and creates a **draft** GitHub release after all three packaging jobs succeed.
+The Linux job also writes `CRTSim-Renderer-vX.Y.Z-retroarch.zip` and `CRTSim-Renderer-vX.Y.Z-reshade.zip`, the RetroArch
+and ReShade presets its CLI exports, and the OBS job builds the filter into `CRTSim-Renderer-vX.Y.Z-obs-linux-x86_64.zip`.
+Other pull requests are built and tested by the validation workflow only.
+A `v*` tag builds the same packages and creates a **draft** GitHub release after every packaging job succeeds.
 Review and publish the draft manually. This workflow does not create tags or merge pull requests.
 The same workflow builds the web app into `CRTSim-Renderer-vX.Y.Z-web.zip` and `SHA256SUMS-web.txt`. Running it by
 hand with `release_tag` set, such as `v0.7.0`, adds those two files to that existing release without rebuilding the
@@ -194,6 +197,8 @@ brings the web app and the new version to the site.
 | macOS Apple Silicon | tar.gz with `.app`, desktop and CLI | Extract, open `CRTSim Renderer.app` |
 | Web | ZIP of the web app, for a website to serve | Serve the files over HTTPS in a browser with WebGPU; the site does this at `aizumanga.neocities.org/crtsim/` |
 | RetroArch | ZIP of shader presets for the shipped looks | Copy its `crtsim-renderer` folder into RetroArch's `shaders` folder; see the README inside |
+| ReShade | ZIP of the effect and presets for the shipped looks | Copy its `reshade-shaders` folder into the game's folder and pick a preset in ReShade's overlay; see the README inside |
+| OBS Studio 30, Linux x86_64 | ZIP of the filter plugin, its data and the shipped looks | Install it as the README inside says, then add **CRTSim Renderer** to a source's filters |
 
 ### With a package manager
 
