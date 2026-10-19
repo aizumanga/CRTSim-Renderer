@@ -28,9 +28,12 @@ pub(crate) enum Dialog {
 pub(crate) enum Request {
     /// One file, as `Dialog` says.
     File(Dialog),
-    /// Files for new batch jobs, then the folder their exports go to. The jobs keep these
-    /// settings, the ones on screen when the dialog opened.
-    Batch(Box<batch::Settings>),
+    /// Files for new batch jobs, unless they were dropped on the window, then the folder their
+    /// exports go to. The jobs keep these settings, the ones on screen when it was asked.
+    Batch {
+        settings: Box<batch::Settings>,
+        sources: Option<Vec<PathBuf>>,
+    },
 }
 
 /// What a dialog answered.
@@ -73,18 +76,21 @@ impl Request {
                 };
                 path.map_or(Answer::Cancelled, |path| Answer::File(kind, path))
             }
-            Self::Batch(settings) => {
-                let Some(sources) = rfd::FileDialog::new()
-                    .add_filter("Images and videos", &files::media_extensions())
-                    .pick_files()
-                else {
+            Self::Batch { settings, sources } => {
+                let Some(sources) = sources.or_else(|| {
+                    rfd::FileDialog::new()
+                        .add_filter("Images and videos", &files::media_extensions())
+                        .pick_files()
+                }) else {
                     return Answer::Cancelled;
                 };
-                // The destination is asked for only once there are files to send to it.
-                match rfd::FileDialog::new()
-                    .set_title("Batch export destination")
-                    .pick_folder()
-                {
+                // The destination is asked for only once there are files to send to it, and
+                // starts where the first of them is.
+                let mut folder = rfd::FileDialog::new();
+                if let Some(beside) = sources[0].parent() {
+                    folder = folder.set_directory(beside);
+                }
+                match folder.set_title("Batch export destination").pick_folder() {
                     Some(folder) => Answer::Batch {
                         settings,
                         sources,
@@ -193,7 +199,9 @@ impl App {
                     sources,
                     folder,
                 } => self.add_batch_jobs(&settings, sources, &folder),
-                Answer::Failed => self.error = Some("File chooser closed unexpectedly".into()),
+                Answer::Failed => self
+                    .notices
+                    .failed(Topic::Opening, "File chooser closed unexpectedly"),
                 #[cfg(target_arch = "wasm32")]
                 Answer::Picked { kind, name, bytes } => self.picked(kind, name, bytes),
             }
@@ -226,19 +234,24 @@ impl App {
                 {
                     Ok(()) => {
                         self.status = format!("Saved preset {}", path.display());
-                        self.error = None;
+                        self.notices.fixed(Topic::Saving);
                     }
-                    Err(e) => self.error = Some(format!("Cannot save preset: {e:#}")),
+                    Err(e) => self
+                        .notices
+                        .failed(Topic::Saving, format!("Cannot save preset: {e:#}")),
                 }
             }
             Dialog::Export => self.export(path),
             Dialog::ContactSheet => self.export_contact_sheet(path),
             Dialog::Port(host) => match files::save_port(&path, host, &self.config) {
                 Ok(()) => {
-                    self.status = format!("Exported {} {}", host.port_name(), path.display());
-                    self.error = None;
+                    self.status = format!("Exported the {}", host.port_name());
+                    self.notices.saved(path);
                 }
-                Err(e) => self.error = Some(format!("Cannot export {}: {e:#}", host.port_name())),
+                Err(e) => self.notices.failed(
+                    Topic::Saving,
+                    format!("Cannot export {}: {e:#}", host.port_name()),
+                ),
             },
         }
     }
@@ -251,9 +264,10 @@ impl App {
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case(extension))
         {
-            self.error = Some(format!(
-                "Choose a .{extension} filename for the selected format."
-            ));
+            self.notices.failed(
+                Topic::Saving,
+                format!("Choose a .{extension} filename for the selected format."),
+            );
             return;
         }
         let Some(video) = self.source.timeline.as_ref().map(|t| t.video.clone()) else {
@@ -301,7 +315,7 @@ impl App {
         self.stop_playback();
         let kind = match request {
             Request::File(kind) => kind,
-            Request::Batch(_) => return self.not_yet("Batch export"),
+            Request::Batch { .. } => return self.not_yet("Batch export"),
         };
         let chooser = kind.chooser(self.export_format);
         match kind {
@@ -403,9 +417,11 @@ impl App {
                     self.video_options = options;
                 }
                 self.status = brought.status;
-                self.error = None;
+                self.notices.fixed(Topic::Opening);
+                // A look brought in, such as one a link opened, is the look chosen.
+                self.first_look = false;
             }
-            Err(error) => self.error = Some(error),
+            Err(error) => self.notices.failed(Topic::Opening, error),
         }
     }
 }

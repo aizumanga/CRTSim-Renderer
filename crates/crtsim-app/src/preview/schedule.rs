@@ -160,6 +160,11 @@ impl Schedule {
         self.rendering.is_some()
     }
 
+    /// What kind of preview is rendering, if one is.
+    pub fn rendering_kind(&self) -> Option<Kind> {
+        self.rendering
+    }
+
     /// Whether a settled preview is rendering, which the interface shows as busy. Interactive
     /// previews come and go many times a second while a slider is dragged, so showing those
     /// would only flicker.

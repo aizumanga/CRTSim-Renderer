@@ -82,6 +82,9 @@ large embedded LUTs repeated across many jobs can reach this limit. Storage erro
 ## Batch exports
 
 Open **Batch queue → Add files…**, select images/videos, then choose a destination folder.
+Or drop several images or videos on the window: the desktop asks for the destination folder, starting
+where the first file is, and adds them with the settings on screen. One dropped file opens, as before;
+the web app opens the first of several, since it has no batch export yet.
 Each job captures the current render settings and video options. Images use PNG; videos and animated GIFs use MKV for broader
 stream preservation. Animated WebPs still become a PNG of their first frame, as they did before animations could be opened.
 Generated names include `-crt` and a numeric suffix when needed. Existing destinations are refused when a job starts.

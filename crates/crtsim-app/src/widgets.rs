@@ -1,19 +1,65 @@
 //! Small widgets shared by the settings panel and the preview.
 use crtsim_core::{config::Config, settings};
 use eframe::{egui, emath};
-use std::ops::RangeInclusive;
+use std::{collections::HashSet, ops::RangeInclusive};
 
-/// The numeric settings of one section of the panel, in the order `settings::SETTINGS` lists them.
+/// Which settings the panel shows, by their keys in `settings::SETTINGS`: every one, or, with
+/// Changed only on, the ones that differ from the preset the panel names.
+pub(crate) struct Shown(Option<HashSet<&'static str>>);
+
+impl Shown {
+    pub fn all() -> Self {
+        Self(None)
+    }
+    pub fn only(keys: HashSet<&'static str>) -> Self {
+        Self(Some(keys))
+    }
+    /// Whether only changed settings show.
+    pub fn changes(&self) -> bool {
+        self.0.is_some()
+    }
+    /// Whether only changed settings show, and none has changed.
+    pub fn none(&self) -> bool {
+        self.0.as_ref().is_some_and(HashSet::is_empty)
+    }
+    pub fn key(&self, key: &str) -> bool {
+        self.0.as_ref().is_none_or(|keys| keys.contains(key))
+    }
+    /// Whether any of `keys`, or of the numeric settings of `sections`, shows: a section of the
+    /// panel holding them is shown when one does.
+    pub fn any(&self, keys: &[&str], sections: &[settings::Section]) -> bool {
+        keys.iter().any(|key| self.key(key))
+            || settings::SETTINGS.iter().any(|setting| {
+                setting
+                    .numbers
+                    .as_ref()
+                    .is_some_and(|n| sections.contains(&n.section))
+                    && self.key(setting.key)
+            })
+    }
+}
+
+/// Notes that hold whatever the settings are, behind a hover rather than always on screen.
+pub(crate) fn notes(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    ui.small("ℹ Notes").on_hover_text(text)
+}
+
+/// The numeric settings of one section of the panel that `shown` shows, in the order
+/// `settings::SETTINGS` lists them.
 pub(crate) fn numbers(
     ui: &mut egui::Ui,
     config: &mut Config,
     defaults: &Config,
     section: settings::Section,
+    shown: &Shown,
 ) {
     for setting in settings::SETTINGS {
         let Some(numbers) = setting.numbers.as_ref().filter(|n| n.section == section) else {
             continue;
         };
+        if !shown.key(setting.key) {
+            continue;
+        }
         let values = (numbers.access.get_mut)(config);
         match &numbers.control {
             settings::Control::Slider { span, logarithmic } => {

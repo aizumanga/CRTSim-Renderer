@@ -13,6 +13,8 @@ pub struct Smoke {
     pub gallery: bool,
     /// Open the LUT gallery, and wait for its thumbnails.
     pub lut_gallery: bool,
+    /// Offer the first look, as after a first run's welcome, and wait for its thumbnails.
+    pub first_look: bool,
     /// The window's size, in points, to see the layout of a phone's or a tablet's screen.
     pub size: Option<[f32; 2]>,
     requested: bool,
@@ -27,6 +29,7 @@ impl Smoke {
             export: false,
             gallery: false,
             lut_gallery: false,
+            first_look: false,
             size: None,
             requested: false,
             started: Instant::now(),
@@ -49,7 +52,7 @@ impl App {
             return;
         }
         let thumbnails_pending = self.thumbnails_pending();
-        let (error, preview_error) = (&self.error, &self.preview.error);
+        let (error, preview_error) = (&self.notices, &self.preview.error);
         let Some(smoke) = &mut self.smoke else {
             return;
         };

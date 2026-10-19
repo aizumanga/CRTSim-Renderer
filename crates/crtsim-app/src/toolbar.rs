@@ -61,7 +61,8 @@ impl App {
                     if ui
                         .button("Copy link to this look")
                         .on_hover_text(
-                            "A link that opens these settings in the web app, to share them.                              The link holds the whole look.",
+                            "A link that opens these settings in the web app, to share them. \
+                             The link holds the whole look.",
                         )
                         .clicked()
                     {
@@ -85,8 +86,10 @@ impl App {
                         self.theme.apply(ctx);
                         if let Some(store) = &self.store {
                             if let Err(e) = store.set_theme(self.theme) {
-                                self.error =
-                                    Some(format!("Could not remember the selected theme: {e:#}"));
+                                self.notices.failed(
+                                    Topic::AppData,
+                                    format!("Could not remember the selected theme: {e:#}"),
+                                );
                             }
                         }
                         ui.close();

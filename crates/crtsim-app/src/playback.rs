@@ -252,13 +252,14 @@ impl App {
         }
         let (video, time) = (timeline.video.clone(), from.unwrap_or(timeline.time));
         self.stop_playback();
-        let config = match self
-            .config
-            .with_max_output_side(self.source.input().dimensions(), self.preview.quality)
-        {
+        let config = match self.config.with_max_output_side(
+            self.source.input().dimensions(),
+            self.preview.quality.side(),
+        ) {
             Ok(c) => c,
             Err(e) => {
-                self.error = Some(format!("Cannot play: {e:#}"));
+                self.notices
+                    .failed(Topic::Playback, format!("Cannot play: {e:#}"));
                 return;
             }
         };
@@ -281,9 +282,10 @@ impl App {
         let Some(playback) = &self.playback else {
             return;
         };
-        let config = self
-            .config
-            .with_max_output_side(self.source.input().dimensions(), self.preview.quality);
+        let config = self.config.with_max_output_side(
+            self.source.input().dimensions(),
+            self.preview.quality.side(),
+        );
         if config.is_ok_and(|config| playback.retune(config)) {
             return;
         }
@@ -301,7 +303,7 @@ impl App {
         let tick = playback.tick(Instant::now());
         let failed = playback.failed();
         if let Some(error) = tick.error {
-            self.error = Some(error);
+            self.notices.failed(Topic::Playback, error);
         }
         if let Some(frame) = tick.frame {
             self.show_playing(ctx, frame);
@@ -573,7 +575,7 @@ mod tests {
         feed.frames.send(Err("driver failed".into())).unwrap();
         drop(feed);
         app.tick_playback(&ctx);
-        assert!(app.playback.is_none() && app.error.is_some());
+        assert!(app.playback.is_none() && app.notices.error(Topic::Playback).is_some());
         assert!(jobs.try_iter().next().is_none());
     }
 
@@ -685,7 +687,7 @@ mod tests {
         let input = app.source.input().dimensions();
         let config = app
             .config
-            .with_max_output_side(input, app.preview.quality)
+            .with_max_output_side(input, app.preview.quality.side())
             .unwrap();
         let output = config.output_size(input).unwrap();
         let (playback, feed) = Playback::new(&video(10., input), 0., output, config, false);
@@ -696,7 +698,7 @@ mod tests {
         assert_eq!(feed.settings.get().bloom, 0.);
         // A smaller preview needs a new sequence. Without a video open there is nothing to
         // start again, which leaves it stopped.
-        app.preview.quality = Some(800);
+        app.preview.quality = preview::Quality::new(preview::Choice::Fixed(Some(800)));
         app.changed();
         assert!(app.playback.is_none() && feed.cancel.load(Ordering::Relaxed));
     }
@@ -750,7 +752,7 @@ mod tests {
         let started = Instant::now();
         let waited = |app: &mut App| {
             app.receive(&ctx);
-            assert!(app.error.is_none(), "{:?}", app.error);
+            assert!(!app.notices.any_error(), "{:?}", app.notices);
             assert!(started.elapsed() < Duration::from_secs(120), "stalled");
             std::thread::sleep(5 * MS);
         };
@@ -799,7 +801,7 @@ mod tests {
         let waited = |app: &mut App| {
             app.receive(&ctx);
             app.tick_playback(&ctx);
-            assert!(app.error.is_none(), "{:?}", app.error);
+            assert!(!app.notices.any_error(), "{:?}", app.notices);
             assert!(started.elapsed() < Duration::from_secs(120), "stalled");
             std::thread::sleep(5 * MS);
         };
@@ -858,7 +860,7 @@ mod tests {
         let waited = |app: &mut App| {
             app.receive(&ctx);
             app.tick_playback(&ctx);
-            assert!(app.error.is_none(), "{:?}", app.error);
+            assert!(!app.notices.any_error(), "{:?}", app.notices);
             assert!(started.elapsed() < Duration::from_secs(120), "stalled");
             std::thread::sleep(5 * MS);
         };
@@ -876,7 +878,7 @@ mod tests {
         while time(&app) < 0.6 {
             waited(&mut app);
         }
-        app.preview.quality = Some(320);
+        app.preview.quality = preview::Quality::new(preview::Choice::Fixed(Some(320)));
         app.changed();
         let restarted_at = time(&app);
         assert!(app.playback.is_some(), "a new size starts it again");

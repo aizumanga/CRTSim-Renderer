@@ -187,7 +187,7 @@ impl App {
                                     .label(format!("✔ {}", found.version))
                                     .on_hover_text(found.executable.display().to_string()),
                                 Err(_) => {
-                                    ui.colored_label(ui.visuals().error_fg_color, "✘ Not found")
+                                    ui.colored_label(ui.visuals().error_fg_color, "✖ Not found")
                                 }
                             };
                             ui.end_row();
@@ -204,7 +204,7 @@ impl App {
                                 } else {
                                     ui.colored_label(
                                         ui.visuals().warn_fg_color,
-                                        format!("✘ needs {encoder}"),
+                                        format!("✖ needs {encoder}"),
                                     );
                                 }
                                 ui.end_row();

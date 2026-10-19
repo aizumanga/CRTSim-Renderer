@@ -119,6 +119,15 @@ laid out in a grid with each look's name beneath it in an 8x8 bitmap font
 **Included presets**: the looks the gallery offers and `crtsim render --preset` names
 (`crtsim_core::presets`). Personal presets are the app's own.
 
+**Notice**: what the status bar says failed, or that an export saved a file, about one **topic**:
+opening, saving, playback, the preview, presets, app data or the renderer (`notices.rs`). A
+topic holds one notice at a time; its news replaces it, and a success clears only its own
+topic's error. The status line beside them is passing news, which the next preview replaces.
+
+**First look**: three included presets offered right after the welcome on a first run, each as a
+thumbnail of the picture open, so the person starts from a look they chose (`first_look.rs`).
+Someone with a session to recover has been here before and is not offered it.
+
 **Preset gallery** and **LUT gallery**: the windows offering looks to audition and apply
 (`gallery.rs` and `lut_gallery.rs`). The preset gallery also saves the settings in use as a
 personal preset; the LUT gallery decodes each included LUT once and shares it.

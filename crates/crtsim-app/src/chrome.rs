@@ -126,13 +126,24 @@ pub fn status_light(ui: &mut egui::Ui, busy: bool, error: bool) {
 pub struct Section<'a> {
     title: &'a str,
     open: bool,
+    changes: bool,
 }
 impl<'a> Section<'a> {
     pub fn new(title: &'a str) -> Self {
-        Self { title, open: false }
+        Self {
+            title,
+            open: false,
+            changes: false,
+        }
     }
     pub fn default_open(mut self, open: bool) -> Self {
         self.open = open;
+        self
+    }
+    /// Holding only changed settings: open, and opened or closed apart from the section with
+    /// every setting, so turning Changed only off leaves the sections as they were.
+    pub fn changes(mut self, changes: bool) -> Self {
+        self.changes = changes;
         self
     }
     pub fn show<R>(self, ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui) -> R) {
@@ -143,10 +154,14 @@ impl<'a> Section<'a> {
             .inner_margin(7.)
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
-                egui::CollapsingHeader::new(egui::RichText::new(self.title).strong().size(14.))
-                    .show_background(true)
-                    .default_open(self.open)
-                    .show(ui, contents);
+                let mut header =
+                    egui::CollapsingHeader::new(egui::RichText::new(self.title).strong().size(14.))
+                        .show_background(true)
+                        .default_open(self.open || self.changes);
+                if self.changes {
+                    header = header.id_salt((self.title, "changes"));
+                }
+                header.show(ui, contents);
             });
         bevel(ui, response.response.rect);
     }

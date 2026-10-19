@@ -6,11 +6,13 @@
 mod app_data;
 mod batch;
 mod chrome;
+mod closing;
 mod dialogs;
 mod events;
 mod export_ui;
 mod ffmpeg_setup;
 mod files;
+mod first_look;
 mod frames;
 mod gallery;
 mod gallery_ui;
@@ -21,6 +23,7 @@ mod lut_gallery;
 mod model;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native;
+mod notices;
 mod playback;
 mod preview;
 mod preview_ui;
@@ -50,6 +53,7 @@ use crtsim_core::settings;
 use dialogs::Dialog;
 use eframe::egui::{self, TextureHandle};
 use image::RgbaImage;
+use notices::Topic;
 pub use smoke::Smoke;
 use std::{
     path::{Path, PathBuf},
@@ -83,6 +87,8 @@ struct App {
     store: Option<app_data::Store>,
     theme: theme::Theme,
     show_welcome: bool,
+    /// Whether the looks offered after a first run's welcome are on screen.
+    first_look: bool,
     show_credits: bool,
     show_queue: bool,
     /// The batch export queue.
@@ -101,6 +107,10 @@ struct App {
     tool_windows_saved: app_data::Layout,
     config: Config,
     history: model::History,
+    /// Whether the panel shows only the settings that differ from the preset it names.
+    changed_only: bool,
+    /// The settings Changed only shows, kept while a pointer is down.
+    changes_shown: std::collections::HashSet<&'static str>,
     /// What is open, and the picture it gives.
     source: source::Source,
     /// The CRT picture on screen, and when to render the next one.
@@ -126,7 +136,13 @@ struct App {
     dialog_send: mpsc::Sender<dialogs::Answer>,
     dialog_receive: mpsc::Receiver<dialogs::Answer>,
     status: String,
-    error: Option<String>,
+    /// What failed, and the file the last export saved, by topic: the status bar's notices.
+    notices: notices::Notices,
+    /// Whether the window was asked to close while an export ran, and what was chosen.
+    closing: closing::Closing,
+    /// Whether the browser asks before the page is left, as it does while an export runs.
+    #[cfg(target_arch = "wasm32")]
+    leaving_asks: bool,
     smoke: Option<Smoke>,
 }
 
@@ -208,6 +224,7 @@ impl App {
                 theme::Theme::default()
             }
         };
+        ctx.set_fonts(theme::fonts());
         theme.apply(ctx);
         let tool_windows = match store.as_ref().map(app_data::Store::tool_windows) {
             Some(Ok(windows)) => windows,
@@ -234,6 +251,7 @@ impl App {
             store,
             theme,
             show_welcome,
+            first_look: smoke.as_ref().is_some_and(|smoke| smoke.first_look),
             show_credits: false,
             show_queue: false,
             queue: Default::default(),
@@ -247,6 +265,8 @@ impl App {
             tool_windows_saved: tool_windows.clone(),
             tool_windows,
             history: model::History::new(config.clone()),
+            changed_only: false,
+            changes_shown: Default::default(),
             config,
             source: source::Source::new(ctx),
             preview: preview::Preview::new(jobs.preview_lane(), render_state, Instant::now()),
@@ -265,9 +285,15 @@ impl App {
             dialog_send,
             dialog_receive,
             status: "Preparing preview…".into(),
-            error: storage_error,
+            notices: Default::default(),
+            closing: Default::default(),
+            #[cfg(target_arch = "wasm32")]
+            leaving_asks: false,
             smoke,
         };
+        if let Some(error) = storage_error {
+            app.notices.failed(Topic::AppData, error);
+        }
         app.ffmpeg.start_check(ctx);
         #[cfg(not(target_arch = "wasm32"))]
         app.check_for_updates_at_start(ctx);
@@ -375,8 +401,10 @@ impl App {
         }
     }
     fn worker_stopped(&mut self) {
-        self.error =
-            Some("Render worker stopped. Save your preset and restart the application.".into());
+        self.notices.failed(
+            Topic::Renderer,
+            "Render worker stopped. Save your preset and restart the application.",
+        );
         self.lane.stop();
         self.preview.stop();
     }
@@ -384,7 +412,7 @@ impl App {
     fn export(&mut self, path: PathBuf) {
         self.stop_playback();
         if let Err(e) = self.config.validate_for(self.source.input().dimensions()) {
-            self.error = Some(format!("{e:#}"));
+            self.notices.failed(Topic::Saving, format!("{e:#}"));
             return;
         }
         let status = format!(
@@ -407,6 +435,7 @@ impl App {
         queued: Option<&str>,
     ) {
         let cancel = Arc::new(AtomicBool::new(false));
+        self.notices.forget(Topic::Saving);
         self.start(
             Job::Export {
                 export,
@@ -484,6 +513,56 @@ impl App {
             self.dialog(Dialog::Export, ctx);
         }
     }
+    /// The notices, one row each, newest last, with each one's button and its own Dismiss.
+    fn notices_ui(&mut self, ui: &mut egui::Ui) {
+        self.notices.follow_preview(self.preview.error.as_ref());
+        let mut act = None;
+        let mut dismiss = None;
+        for notice in self.notices.iter() {
+            ui.horizontal_wrapped(|ui| {
+                let text = match notice.severity {
+                    notices::Severity::Error => {
+                        ui.colored_label(ui.visuals().error_fg_color, &notice.text)
+                    }
+                    notices::Severity::Done => ui.label(&notice.text),
+                };
+                if let Some(detail) = &notice.detail {
+                    text.on_hover_text(detail);
+                }
+                let label = match &notice.action {
+                    // A browser downloads what it saves; there is no folder to show.
+                    Some(notices::Action::ShowInFolder(_)) if cfg!(target_arch = "wasm32") => None,
+                    Some(notices::Action::ShowInFolder(_)) => Some("Show in folder"),
+                    Some(notices::Action::FfmpegSetup) => Some("FFmpeg setup…"),
+                    None => None,
+                };
+                if label.is_some_and(|label| ui.small_button(label).clicked()) {
+                    act = notice.action.clone();
+                }
+                if ui.small_button("Dismiss").clicked() {
+                    dismiss = Some(notice.topic);
+                }
+            });
+        }
+        if let Some(topic) = dismiss {
+            self.notices.dismiss(topic);
+            // The preview keeps its own error, which would otherwise come straight back.
+            if topic == Topic::Preview {
+                self.preview.error = None;
+            }
+        }
+        match act {
+            #[cfg(not(target_arch = "wasm32"))]
+            Some(notices::Action::ShowInFolder(path)) => {
+                if let Err(e) = files::show_in_folder(&path) {
+                    self.notices
+                        .failed(Topic::Opening, format!("Cannot show the folder: {e:#}"));
+                }
+            }
+            Some(notices::Action::FfmpegSetup) => self.show_ffmpeg_setup(),
+            _ => {}
+        }
+    }
     /// Remembered placement for one tool window. Copied out so the window's contents can
     /// still borrow `self`; write it back with `store_window_state` after the window runs.
     fn window_state(&self, title: &str) -> chrome::ToolWindow {
@@ -508,7 +587,10 @@ impl App {
         };
         match saved {
             Ok(()) => self.tool_windows_saved = layout,
-            Err(e) => self.error = Some(format!("Window layout could not be saved: {e:#}")),
+            Err(e) => self.notices.failed(
+                Topic::AppData,
+                format!("Window layout could not be saved: {e:#}"),
+            ),
         }
     }
 }
@@ -524,22 +606,27 @@ impl eframe::App for App {
         self.autosave();
         ctx.request_repaint_after(Duration::from_secs(2));
         self.receive(ctx);
+        self.ask_before_closing(ctx);
         if !self.modal_open() && !ctx.egui_wants_keyboard_input() {
             self.shortcuts(ctx);
         }
         if self.can_start_work() {
-            let dropped = ctx.input(|i| i.raw.dropped_files.first().cloned());
             // A browser gives a dropped file's name and bytes; the desktop, its path.
             #[cfg(target_arch = "wasm32")]
-            if let Some(file) = dropped {
+            if let Some(file) = ctx.input(|i| i.raw.dropped_files.first().cloned()) {
                 self.dropped(file);
             }
             #[cfg(not(target_arch = "wasm32"))]
-            if let Some(path) = dropped
-                .map(|f| f.path().to_path_buf())
-                .filter(|path| !path.as_os_str().is_empty())
             {
-                self.load(path);
+                let paths = ctx.input(|i| {
+                    i.raw
+                        .dropped_files
+                        .iter()
+                        .map(|file| file.path().to_path_buf())
+                        .filter(|path| !path.as_os_str().is_empty())
+                        .collect()
+                });
+                self.dropped_paths(paths, ctx);
             }
         }
         // A modal file dialog freezes edits so its eventual result uses the displayed settings.
@@ -559,7 +646,7 @@ impl eframe::App for App {
                 chrome::status_light(
                     ui,
                     self.preview.rendering_settled() || self.lane.is_working(),
-                    self.error.is_some() || self.preview.error.is_some(),
+                    self.notices.any_error() || self.preview.error.is_some(),
                 );
                 ui.label(&self.status);
                 chrome::version(ui);
@@ -577,18 +664,7 @@ impl eframe::App for App {
                     self.status = "Cancelling…".into();
                 }
             }
-            for error in [self.error.clone(), self.preview.error.clone()]
-                .into_iter()
-                .flatten()
-            {
-                ui.horizontal_wrapped(|ui| {
-                    ui.colored_label(ui.visuals().error_fg_color, error);
-                    if ui.button("Dismiss").clicked() {
-                        self.error = None;
-                        self.preview.error = None;
-                    }
-                });
-            }
+            self.notices_ui(ui);
         });
         // Beside the picture, or below it on a phone, where the picture still shows each change.
         let settings = if chrome::narrow(ctx) {
@@ -624,6 +700,7 @@ impl eframe::App for App {
         self.gallery_window(ctx);
         self.lut_gallery_window(ctx);
         self.credits_window(ctx);
+        self.first_look_window(ctx);
         self.ffmpeg_window(ctx);
         self.look_link_window(ctx);
         self.contact_sheet_window(ctx);
@@ -696,6 +773,29 @@ mod tests {
     }
 
     #[test]
+    fn a_saved_file_stays_in_view_until_the_next_export() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(
+            &ctx,
+            worker::Gpu::Own(wgpu::Backends::PRIMARY),
+            Ok(app_data::Store::temporary()),
+            None,
+            None,
+        );
+        let (_work, _previews) = app.capture_jobs();
+        let (events, received) = mpsc::channel();
+        app.events = received;
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.png");
+        app.export(first.clone());
+        events.send(Event::Exported(Ok(first.clone()))).unwrap();
+        app.receive(&ctx);
+        assert_eq!(app.notices.saved_file(), Some(first.as_path()));
+        app.export(dir.path().join("second.png"));
+        assert_eq!(app.notices.saved_file(), None);
+    }
+
+    #[test]
     fn ctrl_s_saves_the_open_project() {
         let ctx = egui::Context::default();
         let mut app = App::new(
@@ -723,7 +823,7 @@ mod tests {
         ctx.run_ui(input, |ui| app.shortcuts(ui.ctx()))
             .textures_delta
             .clear();
-        assert!(project::read(&path).is_ok(), "{:?}", app.error);
+        assert!(project::read(&path).is_ok(), "{:?}", app.notices);
     }
 
     #[test]
@@ -739,7 +839,7 @@ mod tests {
         let (receive, _previews) = app.capture_jobs();
         let dir = tempfile::tempdir().unwrap();
         app.config.output = "4k".into();
-        app.preview.quality = Some(800);
+        app.preview.quality = preview::Quality::new(preview::Choice::Fixed(Some(800)));
         let source = app.source.input().clone();
         let expected = app.config.clone();
         app.export(dir.path().join("rendered.png"));

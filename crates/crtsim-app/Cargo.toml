@@ -29,6 +29,10 @@ flate2 = "1"
 # Instant as std's on the desktop, and one that works in a browser, where std's panics.
 web-time = "1"
 
+[dev-dependencies]
+# Reads which characters the interface's fonts hold, in a test; egui already depends on it.
+skrifa = { version = "0.44", default-features = false, features = ["std"] }
+
 # The desktop's native file dialogs. A browser page shows its own picker instead.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rfd = "0.14.1"

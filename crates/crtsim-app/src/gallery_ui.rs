@@ -1,6 +1,7 @@
 //! The preset gallery and credits windows.
 use crate::chrome::Fitted;
 use crate::gallery::Confirm;
+use crate::notices::Topic;
 use crate::{chrome, gallery, model, thumbnails, App, Dialog};
 use crtsim_core::config::Config;
 use eframe::egui::{self, TextureHandle};
@@ -40,72 +41,9 @@ impl App {
         let mut window = self.window_state("Preset gallery");
         let open = chrome::tool_window(ctx, "Preset gallery", [600., 500.], &mut window, |ui| {
             ui.add_enabled_ui(!self.dialog_open, |ui| {
-                ui.label(
-                    "Save your current settings here to find them again after restarting the \
-                     app.",
-                );
-                // Wrapped, so the button goes below the name on a phone's screen.
-                ui.horizontal_wrapped(|ui| {
-                    ui.label("Name");
-                    // A replacement asked about is for the name it was asked about.
-                    if ui.text_edit_singleline(&mut self.presets.name).changed()
-                        && matches!(self.presets.confirming, Some(Confirm::Replace(_)))
-                    {
-                        self.presets.confirming = None;
-                    }
-                    if ui
-                        .add_enabled(self.store.is_some(), egui::Button::new("Save current"))
-                        .clicked()
-                    {
-                        self.save_to_gallery(false);
-                    }
-                });
-                if let Some(Confirm::Replace(name)) = self.presets.confirming.clone() {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(format!(
-                            "“{name}” is already in My presets. Replace its settings with yours?"
-                        ));
-                        if ui.button("Replace").clicked() {
-                            self.save_to_gallery(true);
-                        }
-                        if ui.button("Cancel").clicked() {
-                            self.presets.confirming = None;
-                        }
-                    });
-                }
-                ui.horizontal(|ui| {
-                    if ui.button("Load JSON…").clicked() {
-                        self.dialog(Dialog::LoadPreset, ctx);
-                    }
-                    if ui.button("Refresh gallery").clicked() {
-                        self.refresh_gallery();
-                    }
-                });
-                ui.small(
-                    "Load an existing JSON, then choose Save current to add it to My presets. \
-                     Saving under a name already there asks before replacing that preset.",
-                );
-                match &self.store {
-                    Some(store) => {
-                        ui.small(format!("Personal presets: {}", store.presets_location()));
-                    }
-                    None => {
-                        ui.colored_label(
-                            ui.visuals().warn_fg_color,
-                            "Personal storage is unavailable. JSON import/export and built-in \
-                             presets still work.",
-                        );
-                    }
-                }
-                if let Some(error) = &self.error {
+                ui.label("Point at a preset to see it on your picture; click to apply it.");
+                if let Some(error) = self.notices.error(Topic::Presets) {
                     ui.colored_label(ui.visuals().error_fg_color, error);
-                }
-                if !self.presets.warnings.is_empty() {
-                    egui::CollapsingHeader::new("Skipped preset files").show(ui, |ui| {
-                        for warning in &self.presets.warnings {
-                            ui.label(warning);
-                        }
-                    });
                 }
                 ui.separator();
                 egui::ScrollArea::vertical()
@@ -117,6 +55,9 @@ impl App {
                             } else {
                                 "Included presets"
                             });
+                            if user {
+                                self.save_form(ui, ctx);
+                            }
                             let mut count = 0;
                             for entry in self.presets.entries.iter().filter(|e| e.user == user) {
                                 count += 1;
@@ -182,6 +123,75 @@ impl App {
     pub(crate) fn refresh_gallery(&mut self) {
         self.presets.refresh(self.store.as_ref());
     }
+    /// Under My presets: saving the settings in use as one, which asks before replacing one of
+    /// the same name, and loading one from a file to save.
+    fn save_form(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        // Wrapped, so the buttons go below the name on a phone's screen.
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Name");
+            // A replacement asked about is for the name it was asked about.
+            if ui.text_edit_singleline(&mut self.presets.name).changed()
+                && matches!(self.presets.confirming, Some(Confirm::Replace(_)))
+            {
+                self.presets.confirming = None;
+            }
+            let saved_in = self.store.as_ref().map_or(String::new(), |store| {
+                format!(
+                    "Keep your settings here to find them after restarting the app. They are \
+                     saved in {}.",
+                    store.presets_location()
+                )
+            });
+            if ui
+                .add_enabled(self.store.is_some(), egui::Button::new("Save current"))
+                .on_hover_text(saved_in)
+                .clicked()
+            {
+                self.save_to_gallery(false);
+            }
+            if ui
+                .button("Load JSON…")
+                .on_hover_text("Load a preset file; Save current then adds it here")
+                .clicked()
+            {
+                self.dialog(Dialog::LoadPreset, ctx);
+            }
+            if ui
+                .button("Refresh gallery")
+                .on_hover_text("Read My presets again from their folder")
+                .clicked()
+            {
+                self.refresh_gallery();
+            }
+        });
+        if let Some(Confirm::Replace(name)) = self.presets.confirming.clone() {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(format!(
+                    "“{name}” is already in My presets. Replace its settings with yours?"
+                ));
+                if ui.button("Replace").clicked() {
+                    self.save_to_gallery(true);
+                }
+                if ui.button("Cancel").clicked() {
+                    self.presets.confirming = None;
+                }
+            });
+        }
+        if self.store.is_none() {
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                "Personal storage is unavailable. JSON import/export and built-in presets still \
+                 work.",
+            );
+        }
+        if !self.presets.warnings.is_empty() {
+            egui::CollapsingHeader::new("Skipped preset files").show(ui, |ui| {
+                for warning in &self.presets.warnings {
+                    ui.label(warning);
+                }
+            });
+        }
+    }
     /// Saves the settings in use as the preset named in the gallery. One already there under
     /// that name is replaced only when `replace` is set, which the person confirms first.
     fn save_to_gallery(&mut self, replace: bool) {
@@ -192,21 +202,25 @@ impl App {
         let name = self.presets.name.clone();
         // Asked before anything else, so no replacement is ever offered for one.
         if gallery::is_included(&name) {
-            self.error = Some(format!(
+            self.notices.failed(
+                Topic::Presets,
+                format!(
                 "“{name}” is an included preset, which cannot be replaced. Choose another name."
-            ));
+            ),
+            );
             return;
         }
         if !replace {
             match store.saved_preset(&name) {
                 Ok(Some(taken)) => {
                     self.presets.confirming = Some(Confirm::Replace(taken));
-                    self.error = None;
+                    self.notices.fixed(Topic::Presets);
                     return;
                 }
                 Ok(None) => {}
                 Err(e) => {
-                    self.error = Some(format!("Cannot save gallery preset: {e:#}"));
+                    self.notices
+                        .failed(Topic::Presets, format!("Cannot save gallery preset: {e:#}"));
                     return;
                 }
             }
@@ -223,10 +237,12 @@ impl App {
                 } else {
                     format!("Saved '{saved}' to My presets")
                 };
-                self.error = None;
+                self.notices.fixed(Topic::Presets);
                 self.refresh_gallery();
             }
-            Err(e) => self.error = Some(format!("Cannot save gallery preset: {e:#}")),
+            Err(e) => self
+                .notices
+                .failed(Topic::Presets, format!("Cannot save gallery preset: {e:#}")),
         }
     }
     fn delete_from_gallery(&mut self, name: &str) {
@@ -237,7 +253,7 @@ impl App {
         match store.delete_preset(name) {
             Ok(()) => {
                 self.status = format!("Deleted '{name}' from My presets");
-                self.error = None;
+                self.notices.fixed(Topic::Presets);
                 if self
                     .presets
                     .editing
@@ -247,7 +263,10 @@ impl App {
                     self.presets.editing = None;
                 }
             }
-            Err(e) => self.error = Some(format!("Cannot delete gallery preset: {e:#}")),
+            Err(e) => self.notices.failed(
+                Topic::Presets,
+                format!("Cannot delete gallery preset: {e:#}"),
+            ),
         }
         self.refresh_gallery();
     }
@@ -267,7 +286,7 @@ impl App {
                     );
                     ui.small("Up to 4096 bytes. Leave blank to remove the description.");
                     save = ui.button("Save description").clicked();
-                    if let Some(error) = &self.error {
+                    if let Some(error) = self.notices.error(Topic::Presets) {
                         ui.colored_label(ui.visuals().error_fg_color, error);
                     }
                 });
@@ -280,10 +299,12 @@ impl App {
                 match result {
                     Ok(()) => {
                         self.refresh_gallery();
-                        self.error = None;
+                        self.notices.fixed(Topic::Presets);
                         editing = false;
                     }
-                    Err(e) => self.error = Some(format!("Cannot save description: {e:#}")),
+                    Err(e) => self
+                        .notices
+                        .failed(Topic::Presets, format!("Cannot save description: {e:#}")),
                 }
             }
             self.presets.editing = editing.then_some((name, description));
@@ -339,6 +360,22 @@ impl App {
             THIRD_PARTY_NOTICES.md in the repository.",
         );
     }
+    /// The welcome was read: it is remembered, and the first look follows it, unless a session
+    /// waits to be recovered, whose owner has been here before.
+    pub(crate) fn welcome_read(&mut self) {
+        if let Some(ref store) = self.store {
+            if let Err(e) = store.acknowledge() {
+                self.notices.failed(
+                    Topic::AppData,
+                    format!(
+                        "Could not remember the welcome message: {e:#}. It may appear next time."
+                    ),
+                );
+            }
+        }
+        self.show_welcome = false;
+        self.first_look = !self.session.recovery_offered();
+    }
     pub(crate) fn credits_window(&mut self, ctx: &egui::Context) {
         if self.show_welcome {
             egui::Window::new("Welcome to CRTSim Renderer")
@@ -350,15 +387,7 @@ impl App {
                     Self::credit_text(ui);
                     ui.add_space(12.);
                     if ui.button("Got it — continue").clicked() {
-                        if let Some(ref store) = self.store {
-                            if let Err(e) = store.acknowledge() {
-                                self.error = Some(format!(
-                                    "Could not remember the welcome message: {e:#}. It may appear \
-                                next time."
-                                ));
-                            }
-                        }
-                        self.show_welcome = false;
+                        self.welcome_read();
                     }
                 });
         } else if self.show_credits {
@@ -514,8 +543,8 @@ mod tests {
             app.save_to_gallery(replace);
             assert_eq!(app.presets.confirming, None, "no replacement is offered");
             assert!(app
-                .error
-                .as_deref()
+                .notices
+                .error(Topic::Presets)
                 .is_some_and(|e| e.contains("included preset")));
         }
         let included = gallery::builtins()
@@ -538,7 +567,7 @@ mod tests {
         // Another name saves as before.
         app.presets.name = "My take on it".into();
         app.save_to_gallery(false);
-        assert_eq!(app.error, None);
+        assert_eq!(app.notices.error(Topic::Presets), None);
         assert!(app
             .presets
             .entries

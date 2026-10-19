@@ -82,6 +82,26 @@ fn lost(message: &str) {
     }
 }
 
+thread_local! {
+    /// Asks the browser to ask before the page is left, as for a page with unsaved work.
+    static ASK_BEFORE_LEAVING: js_sys::Function =
+        Closure::<dyn Fn(web_sys::Event)>::new(|event: web_sys::Event| {
+            event.prevent_default();
+            // What older browsers read instead.
+            let _ = js_sys::Reflect::set(&event, &"returnValue".into(), &"".into());
+        })
+        .into_js_value()
+        .unchecked_into();
+}
+
+/// Whether the browser asks before the page is closed, reloaded or left: while an export runs,
+/// which leaving would lose.
+pub fn ask_before_leaving(ask: bool) {
+    if let Some(window) = web_sys::window() {
+        ASK_BEFORE_LEAVING.with(|ask_first| window.set_onbeforeunload(ask.then_some(ask_first)));
+    }
+}
+
 /// Saves `bytes` as a download called `name`: how a page saves a file.
 pub fn download(name: &str, bytes: &[u8], mime: &str) -> Result<()> {
     let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(bytes));

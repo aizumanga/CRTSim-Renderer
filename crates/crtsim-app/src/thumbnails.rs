@@ -156,10 +156,11 @@ impl App {
         };
     }
 
-    /// Whether a gallery on screen is still waiting for thumbnails, so the smoke screenshot can
-    /// wait for them rather than capture spinners in some places and pictures in others.
+    /// Whether a gallery or the first look on screen is still waiting for thumbnails, so the
+    /// smoke screenshot can wait for them rather than capture spinners in some places and
+    /// pictures in others.
     pub(crate) fn thumbnails_pending(&self) -> bool {
-        (self.presets.open || self.luts.open)
+        (self.presets.open || self.luts.open || self.first_look)
             && self
                 .thumbnails
                 .entries

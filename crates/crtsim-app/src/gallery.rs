@@ -1,4 +1,4 @@
-use crate::app_data;
+use crate::{app_data, model};
 use crtsim_core::config::Config;
 
 #[derive(Clone)]
@@ -52,6 +52,14 @@ pub struct PresetGallery {
     pub editing: Option<(String, String)>,
     /// A change to a personal preset waiting for the person to confirm it.
     pub confirming: Option<Confirm>,
+    /// The preset closest to some settings, and the settings it was found for.
+    closest: Option<(Config, Option<Closest>)>,
+}
+
+/// The preset a look is closest to, and the settings that differ from it.
+pub struct Closest {
+    pub name: String,
+    pub changes: Vec<model::Difference>,
 }
 
 /// A change to a personal preset that cannot be undone, asked about before it is made.
@@ -71,8 +79,27 @@ impl PresetGallery {
         gallery
     }
 
+    /// The preset `config` is closest to, the one it differs from in fewest settings, found
+    /// again only once `config` or the presets change. Of presets as close, the first wins, so
+    /// an included one before a personal one.
+    pub fn closest(&mut self, config: &Config) -> Option<&Closest> {
+        if self.closest.as_ref().is_none_or(|(of, _)| of != config) {
+            let closest = self
+                .entries
+                .iter()
+                .map(|entry| Closest {
+                    name: entry.name.clone(),
+                    changes: model::differences(&entry.config, config),
+                })
+                .min_by_key(|closest| closest.changes.len());
+            self.closest = Some((config.clone(), closest));
+        }
+        self.closest.as_ref()?.1.as_ref()
+    }
+
     /// Reads the personal presets again, which may have changed on disk.
     pub fn refresh(&mut self, store: Option<&app_data::Store>) {
+        self.closest = None;
         self.entries = builtins();
         self.warnings = match store.map(app_data::Store::presets) {
             Some(Ok((personal, warnings))) => {
@@ -104,6 +131,23 @@ mod tests {
     }
 
     #[test]
+    fn the_closest_preset_is_the_one_the_settings_differ_least_from() {
+        let mut gallery = PresetGallery::new(None);
+        let mut config = default_preset().config;
+        let closest = gallery.closest(&config).unwrap();
+        assert_eq!(closest.name, "Super Win the Game");
+        assert!(closest.changes.is_empty());
+        config.bloom += 0.25;
+        let closest = gallery.closest(&config).unwrap();
+        assert_eq!(closest.name, "Super Win the Game");
+        assert_eq!(closest.changes.len(), 1);
+        assert_eq!(
+            gallery.closest(&Config::general()).unwrap().name,
+            "General image"
+        );
+    }
+
+    #[test]
     fn ntsc_and_pal_presets_have_their_line_counts_and_scanning() {
         let presets = builtins();
         for (name, rows, interlaced) in [
@@ -124,12 +168,18 @@ mod tests {
 
     #[test]
     fn the_game_preset_matches_its_options_screen() {
-        let game = builtins()
-            .into_iter()
-            .find(|e| e.name == "Super Win the Game")
-            .unwrap()
-            .config;
-        assert_eq!(game, default_preset().config);
+        let named = |name| builtins().into_iter().find(|e| e.name == name).unwrap();
+        let game = named("Super Win the Game NES palette").config;
+        // The app starts with the game's options without its palette, which recolours only
+        // art drawn in the NES palette.
+        assert_eq!(named("Super Win the Game").config, default_preset().config);
+        assert_eq!(
+            default_preset().config,
+            Config {
+                palette: None,
+                ..game.clone()
+            }
+        );
         // As the game's CRT options show them.
         assert_eq!(game.fov, 30.);
         assert_eq!(game.ntsc_blending, 0.35);
@@ -177,6 +227,7 @@ mod tests {
             let follows = matches!(
                 entry.name.as_str(),
                 "Super Win the Game"
+                    | "Super Win the Game NES palette"
                     | "Pixel art 240p"
                     | "NTSC 240p"
                     | "NTSC 480i"

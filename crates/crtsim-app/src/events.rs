@@ -36,14 +36,16 @@ impl App {
                     match arrived.opened {
                         Ok(status) => {
                             self.status = status.into();
-                            self.error = None;
+                            self.notices.fixed(Topic::Opening);
                         }
                         // Only a video frame can be cancelled.
                         Err(Failure::Cancelled) => {
                             self.status = "Video loading cancelled".into();
-                            self.error = None;
+                            self.notices.fixed(Topic::Opening);
                         }
-                        Err(Failure::Failed(e)) => self.error = Some(format!("{e:#}")),
+                        Err(Failure::Failed(e)) => {
+                            self.notices.failed(Topic::Opening, format!("{e:#}"))
+                        }
                     }
                     // A project waiting for its source applies whether that opened or not.
                     if let Some(project) = arrived.project {
@@ -67,14 +69,16 @@ impl App {
                     self.queue_finished(&result, finished.cancelled);
                     match result {
                         Ok(path) => {
-                            self.status = format!("Saved {}", path.display());
-                            self.error = None;
+                            self.status = "Export finished".into();
+                            self.notices.saved(path);
                         }
                         Err(Failure::Cancelled) => {
                             self.status = "Export cancelled; destination kept unchanged".into();
-                            self.error = None;
+                            self.notices.fixed(Topic::Saving);
                         }
-                        Err(Failure::Failed(e)) => self.error = Some(format!("{e:#}")),
+                        Err(Failure::Failed(e)) => {
+                            self.notices.failed(Topic::Saving, format!("{e:#}"))
+                        }
                     }
                 }
             }

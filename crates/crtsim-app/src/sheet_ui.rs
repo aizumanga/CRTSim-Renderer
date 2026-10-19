@@ -146,7 +146,10 @@ impl App {
                 .err()
                 .map(|e| (look, e))
         }) {
-            self.error = Some(format!("Cannot render {}: {:#}", e.0.name, e.1));
+            self.notices.failed(
+                Topic::Saving,
+                format!("Cannot render {}: {:#}", e.0.name, e.1),
+            );
             return;
         }
         let count = looks.len();

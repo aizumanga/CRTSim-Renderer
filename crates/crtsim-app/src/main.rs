@@ -19,6 +19,7 @@ fn main() -> eframe::Result<()> {
     let mut smoke_welcome = false;
     let mut smoke_gallery = false;
     let mut smoke_lut_gallery = false;
+    let mut smoke_first_look = false;
     let mut smoke_export = false;
     let mut smoke_size = None;
     let mut args = std::env::args().skip(1);
@@ -27,6 +28,7 @@ fn main() -> eframe::Result<()> {
             "--smoke-welcome" => smoke_welcome = true,
             "--smoke-gallery" => smoke_gallery = true,
             "--smoke-lut-gallery" => smoke_lut_gallery = true,
+            "--smoke-first-look" => smoke_first_look = true,
             "--smoke-export" => smoke_export = true,
             "--smoke-size" => {
                 let size = args.next().and_then(|size| {
@@ -82,6 +84,7 @@ fn main() -> eframe::Result<()> {
         smoke.export = smoke_export;
         smoke.gallery = smoke_gallery;
         smoke.lut_gallery = smoke_lut_gallery;
+        smoke.first_look = smoke_first_look;
         smoke.size = smoke_size;
         smoke
     });

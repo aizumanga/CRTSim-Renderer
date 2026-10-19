@@ -17,16 +17,20 @@ fn entry(name: &'static str, description: &'static str, config: Config) -> Prese
         config,
     }
 }
-/// The preset the app starts with, and Reset and each setting's own reset return to.
+/// The preset the app starts with, and Reset and each setting's own reset return to: the game's
+/// CRT options without its NES palette, which recolours only art drawn in the NES palette, so
+/// whatever is opened keeps its colours.
 pub fn default() -> Preset {
     entry(
         "Super Win the Game",
         "The game's own CRT options: the public reference with a 30° field of view, NTSC \
-         blending at 0.35 and its NTSC palette (Tint 5.18, I 1.75, Q 1.00), made as the game \
-         makes it, with the artifact pattern as its Windows build draws it and the bezel \
-         reflecting the picture as the screen shows it. The palette recolours art in the NES \
-         palette the game's is drawn in.",
-        Config::super_win_the_game(),
+         blending at 0.35, the artifact pattern as its Windows build draws it and the bezel \
+         reflecting the picture as the screen shows it. Its NES palette is off, so a picture \
+         keeps its colours.",
+        Config {
+            palette: None,
+            ..Config::super_win_the_game()
+        },
     )
 }
 
@@ -35,6 +39,13 @@ pub fn included() -> Vec<Preset> {
     let general = Config::general();
     vec![
         default(),
+        entry(
+            "Super Win the Game NES palette",
+            "Super Win the Game with its NTSC palette (Tint 5.18, I 1.75, Q 1.00) made as the \
+             game makes it, which recolours art drawn in the NES palette the game's is drawn \
+             in, as the game shows it.",
+            Config::super_win_the_game(),
+        ),
         entry(
             "General image",
             "Square pixels, smooth resizing, balanced CRT effects.",

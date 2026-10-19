@@ -1,5 +1,5 @@
 //! The preview area: the rendered picture, its comparison split and the video controls.
-use crate::widgets::{choice, show_image, Keyed};
+use crate::widgets::{choice, notes, show_image, Keyed};
 use crate::*;
 
 impl App {
@@ -19,7 +19,8 @@ impl App {
             } else if ui
                 .add_enabled(self.preview.can_pin(), egui::Button::new("Pin look"))
                 .on_hover_text(
-                    "Keep this picture and its settings, to compare what you change next with                      them in Compare.",
+                    "Keep this picture and its settings, to compare what you change next with \
+                     them in Compare.",
                 )
                 .on_disabled_hover_text("Wait for the preview to settle, then pin it.")
                 .clicked()
@@ -29,28 +30,36 @@ impl App {
             }
             ui.separator();
             ui.checkbox(self.preview.live_mut(), "Live preview");
-            if ui
-                .add_enabled(
-                    !self.preview.rendering() && !self.lane.is_loading(),
-                    egui::Button::new("Refresh"),
-                )
-                .clicked()
+            // Live, the preview already follows every change; off, Refresh catches it up.
+            if !self.preview.live()
+                && ui
+                    .add_enabled(
+                        !self.preview.rendering() && !self.lane.is_loading(),
+                        egui::Button::new("Refresh"),
+                    )
+                    .clicked()
             {
                 self.refresh_preview();
             }
         });
         ui.horizontal_wrapped(|ui| {
-            let chosen = choice(
+            use preview::{quality, Choice};
+            let auto = format!("Auto ({})", self.preview.quality.auto_name());
+            let mut chosen = self.preview.quality.choice();
+            let fast = format!("Fast ({} px)", quality::FAST);
+            let balanced = format!("Balanced ({} px)", quality::BALANCED);
+            if choice(
                 ui,
                 "Preview quality",
-                &mut self.preview.quality,
+                &mut chosen,
                 &[
-                    (Some(800), "Fast (800 px)"),
-                    (Some(1280), "Balanced (1280 px)"),
-                    (None, "Export resolution"),
+                    (Choice::Auto, &auto),
+                    (Choice::Fixed(Some(quality::FAST)), &fast),
+                    (Choice::Fixed(Some(quality::BALANCED)), &balanced),
+                    (Choice::Fixed(None), "Export resolution"),
                 ],
-            );
-            if chosen {
+            ) {
+                self.preview.quality.choose(chosen);
                 self.changed();
             }
             ui.checkbox(&mut self.fit_preview, "Fit view");
@@ -60,15 +69,16 @@ impl App {
                     .show(ui, &mut self.zoom, |s| s.text("Zoom"));
             }
         });
-        ui.small("Preview monitor").on_hover_text(
+        notes(
+            ui,
             "Drag the divider in Compare. Preview quality never changes \
             export resolution. Inspect mask detail at Export resolution \
             and 1× zoom.",
         );
-        if let Ok(c) = self
-            .config
-            .with_max_output_side(self.source.input().dimensions(), self.preview.quality)
-        {
+        if let Ok(c) = self.config.with_max_output_side(
+            self.source.input().dimensions(),
+            self.preview.quality.side(),
+        ) {
             let input = self.source.input().dimensions();
             if let (Ok((w, h)), Ok(signal)) = (c.output_size(input), c.signal_size(input)) {
                 let [columns, rows] = c.mask_repeats.resolve(signal);
@@ -220,7 +230,7 @@ impl App {
         ui.add_enabled_ui(enabled, |ui| {
             ui.horizontal_wrapped(|ui| {
                 toggle = ui
-                    .button(if playing { "Ⅱ Pause" } else { "▶ Play" })
+                    .button(if playing { "⏸ Pause" } else { "▶ Play" })
                     .clicked();
                 ui.small("Silent preview");
                 looped = ui
@@ -289,7 +299,8 @@ impl App {
         });
         ui.small(format!(
             "Showing frame {} · Left/Right arrow keys step frames unless a slider is \
-            selected (Esc lets go of it) · Export frame saves this settled CRT still as PNG.",
+            selected (Esc lets go of it) · Export → Current frame as PNG saves this \
+            settled CRT still.",
             timeline.shown + 1
         ));
         let pick = (seek && enabled && timeline.seeking()).then_some(timeline.picked);

@@ -4,8 +4,10 @@
 //! the look a gallery is auditioning: pointing at a preset or LUT previews the image with it,
 //! and moving away returns to the settings in use. The settings, their undo history and the
 //! source stay the app's; an auditioned look never reaches them.
+pub mod quality;
 mod schedule;
 
+pub use quality::{Choice, Quality};
 pub use schedule::Kind;
 use schedule::{Change, Due, Schedule};
 
@@ -68,8 +70,8 @@ pub struct Preview {
     audition: Option<Audition>,
     /// What a gallery pointed at this frame; the last offer of the frame wins.
     offered: Option<Audition>,
-    /// The longest side a preview is rendered at; none for the export's own size.
-    pub quality: Option<u32>,
+    /// The size previews render at: chosen, or Auto, which follows how long they take.
+    pub quality: Quality,
     /// Why the last preview could not be rendered.
     pub error: Option<String>,
 }
@@ -89,7 +91,7 @@ impl Preview {
             pinned: None,
             audition: None,
             offered: None,
-            quality: Some(1280),
+            quality: Quality::default(),
             error: None,
         }
     }
@@ -158,6 +160,7 @@ impl Preview {
         revision: u64,
         result: anyhow::Result<Previewed>,
     ) -> Option<String> {
+        let dragged = self.schedule.rendering_kind() == Some(Kind::Interactive);
         if !self.schedule.returned(revision) {
             return None;
         }
@@ -168,10 +171,14 @@ impl Preview {
                 self.show(picture);
                 self.schedule.show(revision);
                 self.error = None;
-                Some(format!(
-                    "Preview {width} × {height} · {:.2}s",
-                    previewed.seconds
-                ))
+                let stepped = dragged && self.quality.dragged(previewed.seconds);
+                let status = format!("Preview {width} × {height} · {:.2}s", previewed.seconds);
+                Some(if stepped {
+                    let name = self.quality.auto_name();
+                    format!("{status} · Auto quality now {name}")
+                } else {
+                    status
+                })
             }
             Err(e) => {
                 self.error = Some(format!("{e:#}"));
@@ -271,6 +278,10 @@ impl Preview {
     }
 
     /// Live preview: preview every edit as it happens, rather than on Refresh.
+    pub fn live(&self) -> bool {
+        self.schedule.live
+    }
+
     pub fn live_mut(&mut self) -> &mut bool {
         &mut self.schedule.live
     }
@@ -323,7 +334,7 @@ impl Preview {
             return Ok(false);
         };
         let shown = self.audition.as_ref().map_or(config, |a| &a.config);
-        match shown.with_max_output_side(input.dimensions(), self.quality) {
+        match shown.with_max_output_side(input.dimensions(), self.quality.side()) {
             Ok(config) => {
                 let sent = self.lane.send(PreviewJob::Preview {
                     revision,
@@ -456,6 +467,41 @@ mod tests {
             }) => (revision, kind, *config),
             _ => panic!("expected a preview to be asked for"),
         }
+    }
+
+    #[test]
+    fn slow_dragged_previews_step_auto_quality_down_and_settled_ones_do_not() {
+        let ctx = egui::Context::default();
+        let (mut preview, previews, mut config, input) = preview();
+        // A slow settled still, warm-up and all, says nothing about dragging.
+        for _ in 0..3 {
+            preview.changed(Instant::now());
+            let tick = preview.tick(settled(), false, &config, &input, true);
+            assert_eq!(tick, SETTLES);
+            let (revision, kind, _) = sent(&previews);
+            assert_eq!(kind, Kind::Settled);
+            preview.returned(&ctx, revision, rendered(2.));
+        }
+        assert_eq!(preview.quality.side(), Some(quality::BALANCED));
+        let mut drag = |config: &mut Config, bloom, seconds| {
+            config.bloom = bloom;
+            preview.changed(Instant::now());
+            let tick = preview.tick(Instant::now(), true, config, &input, true);
+            assert_eq!(tick, QUIET);
+            let (revision, kind, shown) = sent(&previews);
+            assert_eq!(kind, Kind::Interactive);
+            let summary = preview.returned(&ctx, revision, rendered(seconds));
+            (shown, summary.unwrap_or_default())
+        };
+        let (_, summary) = drag(&mut config, 0.1, 0.9);
+        assert!(!summary.contains("Auto"));
+        let (shown, summary) = drag(&mut config, 0.2, 0.9);
+        assert!(summary.ends_with("Auto quality now Fast"), "{summary}");
+        // Asked for at Balanced; the next is asked for at Fast.
+        let side = |shown: &Config| shown.output_size(input.dimensions()).unwrap().0;
+        assert_eq!(side(&shown), quality::BALANCED);
+        let (shown, _) = drag(&mut config, 0.3, 0.3);
+        assert_eq!(side(&shown), quality::FAST);
     }
 
     #[test]

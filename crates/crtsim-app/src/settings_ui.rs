@@ -1,7 +1,9 @@
 //! The settings panel: CRT settings by section, then source framing and color.
-use crate::widgets::{choice, numbers, resolution, Keyed};
+use crate::widgets::{choice, notes, numbers, resolution, Keyed, Shown};
 use crate::*;
 use crtsim_core::palette::Model;
+use crtsim_core::settings::Section::*;
+use std::collections::HashSet;
 
 impl App {
     pub(crate) fn settings(&mut self, ui: &mut egui::Ui) {
@@ -13,12 +15,13 @@ impl App {
                 video.fps,
                 if video.audio { "with audio" } else { "silent" }
             ));
-            ui.small(
-                "Preview is silent. Configure exported audio and compression in Export → Video.",
-            );
             if video.hdr {
                 ui.small("HDR source: FFmpeg tone-maps to SDR.");
             }
+            notes(
+                ui,
+                "Preview is silent. Configure exported audio and compression in Export → Video.",
+            );
             ui.separator();
         }
         ui.horizontal(|ui| {
@@ -46,6 +49,40 @@ impl App {
             self.source.input().width(),
             self.source.input().height()
         ));
+        // The two steps every session takes, beside what they act on.
+        ui.add_enabled_ui(self.can_start_work(), |ui| {
+            ui.horizontal_wrapped(|ui| {
+                let ctx = ui.ctx().clone();
+                if ui
+                    .button("Open…")
+                    .on_hover_text(format!(
+                        "Open an image, video or animation · {}",
+                        shortcut(&ctx, SHORTCUT_OPEN)
+                    ))
+                    .clicked()
+                {
+                    self.dialog(Dialog::File, &ctx);
+                }
+                if self.source.timeline.is_some() {
+                    if ui
+                        .button("Export video…")
+                        .on_hover_text("Choose the format, then where to save it")
+                        .clicked()
+                    {
+                        self.open_video_export(false);
+                    }
+                } else if ui
+                    .button("Export PNG…")
+                    .on_hover_text(format!(
+                        "Save the CRT picture at full resolution · {}",
+                        shortcut(&ctx, SHORTCUT_EXPORT)
+                    ))
+                    .clicked()
+                {
+                    self.dialog(Dialog::Export, &ctx);
+                }
+            });
+        });
         // What Reset, and each setting's own reset, return to.
         let default = gallery::default_preset();
         ui.horizontal(|ui| {
@@ -66,47 +103,78 @@ impl App {
                 self.replace_config(default.config.clone());
             }
         });
-        if ui.button("General image").clicked() {
-            self.replace_config(Config::general());
-        }
+        self.preset_in_use(ui);
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .button("Presets…")
+                .on_hover_text("Point at a preset to see it on your picture; click to apply it")
+                .clicked()
+            {
+                self.refresh_gallery();
+                self.presets.open = true;
+            }
+            if ui
+                .button("General image")
+                .on_hover_text(
+                    "Apply the General image preset: square pixels and smooth resizing, for \
+                     photos and screenshots",
+                )
+                .clicked()
+            {
+                self.replace_config(Config::general());
+            }
+        });
         let before = self.config.clone();
         let defaults = &default.config;
-        chrome::Section::new("Image & output").show(ui, |ui| {
-            resolution(
-                ui,
-                "Signal",
-                &mut self.config.signal,
-                &[
-                    "auto", "native", "original", "240p", "288p", "360p", "480p", "576p",
-                ],
-            );
-            resolution(
-                ui,
-                "Export size",
-                &mut self.config.output,
-                &["720p", "1080p", "1440p", "4k", "reference", "match-input"],
-            );
-            choice(
-                ui,
-                "Fit on 4:3 tube",
-                &mut self.config.fit,
-                &[
-                    (Fit::Contain, "Contain"),
-                    (Fit::Cover, "Cover (crop)"),
-                    (Fit::Stretch, "Stretch"),
-                    (Fit::Reference, "Reference"),
-                ],
-            );
-            choice(
-                ui,
-                "Resize filter",
-                &mut self.config.filter,
-                &[
-                    (Filter::Lanczos, "Lanczos (smooth)"),
-                    (Filter::Nearest, "Nearest (pixel art)"),
-                ],
-            );
-            numbers(ui, &mut self.config, defaults, settings::Section::Image);
+        let shown = self.shown_settings(ui);
+        if shown.none() {
+            ui.label("No setting differs from this preset.");
+        }
+        let image = ["signal", "output", "fit", "filter"];
+        section(ui, &shown, "Image & output", &image, &[Image], |ui| {
+            if shown.key("signal") {
+                resolution(
+                    ui,
+                    "Signal",
+                    &mut self.config.signal,
+                    &[
+                        "auto", "native", "original", "240p", "288p", "360p", "480p", "576p",
+                    ],
+                );
+            }
+            if shown.key("output") {
+                resolution(
+                    ui,
+                    "Export size",
+                    &mut self.config.output,
+                    &["720p", "1080p", "1440p", "4k", "reference", "match-input"],
+                );
+            }
+            if shown.key("fit") {
+                choice(
+                    ui,
+                    "Fit on 4:3 tube",
+                    &mut self.config.fit,
+                    &[
+                        (Fit::Contain, "Contain"),
+                        (Fit::Cover, "Cover (crop)"),
+                        (Fit::Stretch, "Stretch"),
+                        (Fit::Reference, "Reference"),
+                    ],
+                );
+            }
+            if shown.key("filter") {
+                choice(
+                    ui,
+                    "Resize filter",
+                    &mut self.config.filter,
+                    &[
+                        (Filter::Lanczos, "Lanczos (smooth)"),
+                        (Filter::Nearest, "Nearest (pixel art)"),
+                    ],
+                );
+            }
+            numbers(ui, &mut self.config, defaults, Image, &shown);
             if let (Ok(signal), Ok(output)) = (
                 self.config.signal_size(self.source.input().dimensions()),
                 self.config.output_size(self.source.input().dimensions()),
@@ -133,120 +201,141 @@ impl App {
                     "Current fit/overscan can crop content and subtitles.",
                 );
             }
-            ui.small(
+            notes(
+                ui,
                 "Rounded glass may hide extreme corners even with Contain. Alpha uses the \
                  selected background. SDR output; no ICC color management.",
             );
         });
-        self.framing_and_color(ui, defaults);
-        chrome::Section::new("Color processing").show(ui, |ui| {
-            choice(
-                ui,
-                "Color processing",
-                &mut self.config.color_mode,
-                &[
-                    (ColorMode::Reference, "Original gamma"),
-                    (ColorMode::LinearLight, "Linear light (experimental)"),
-                ],
-            );
-            if self.config.color_mode == ColorMode::LinearLight {
-                ui.small(
-                    "Linear-light glass, lighting and bloom; SDR output. The analog signal \
-                     still uses the original gamma-space model.",
+        self.framing_and_color(ui, defaults, &shown);
+        let color = ["color_mode", "mask_antialias"];
+        section(ui, &shown, "Color processing", &color, &[Grade], |ui| {
+            if shown.key("color_mode") {
+                choice(
+                    ui,
+                    "Color processing",
+                    &mut self.config.color_mode,
+                    &[
+                        (ColorMode::Reference, "Original gamma"),
+                        (ColorMode::LinearLight, "Linear light (experimental)"),
+                    ],
                 );
+                if self.config.color_mode == ColorMode::LinearLight {
+                    ui.small(
+                        "Linear-light glass, lighting and bloom; SDR output. The analog signal \
+                         still uses the original gamma-space model.",
+                    );
+                }
             }
-            chrome::Section::new("Optional color grade").show(ui, |ui| {
-                numbers(ui, &mut self.config, defaults, settings::Section::Grade);
-                ui.small(
+            section(ui, &shown, "Optional color grade", &[], &[Grade], |ui| {
+                numbers(ui, &mut self.config, defaults, Grade, &shown);
+                notes(
+                    ui,
                     "YIQ hue/chroma adjustment. This is an optional grade, not Super Win the \
                      Game's NES palette or a complete NTSC decoder.",
                 );
             });
-            ui.checkbox(
-                &mut self.config.mask_antialias,
-                "Filter mask when shrinking",
-            )
-            .on_hover_text(
-                "Samples the mask from averaged, smaller copies of itself, as the original \
-                 did, so it stays smooth where it is drawn smaller than it is. Off samples only \
-                 the full-size mask, which can shimmer into moiré.",
-            );
+            if shown.key("mask_antialias") {
+                ui.checkbox(
+                    &mut self.config.mask_antialias,
+                    "Filter mask when shrinking",
+                )
+                .on_hover_text(
+                    "Samples the mask from averaged, smaller copies of itself, as the original \
+                     did, so it stays smooth where it is drawn smaller than it is. Off samples \
+                     only the full-size mask, which can shimmer into moiré.",
+                );
+            }
         });
         ui.separator();
-        chrome::Section::new("CRT signal")
-            .default_open(true)
-            .show(ui, |ui| {
-                numbers(ui, &mut self.config, defaults, settings::Section::Signal)
-            });
-        chrome::Section::new("Glass & mask").show(ui, |ui| {
-            numbers(ui, &mut self.config, defaults, settings::Section::Glass);
-            ui.separator();
-            self.mask_density(ui);
-            numbers(ui, &mut self.config, defaults, settings::Section::Mask);
+        if shown.any(&[], &[Signal]) {
+            chrome::Section::new("CRT signal")
+                .default_open(true)
+                .changes(shown.changes())
+                .show(ui, |ui| {
+                    numbers(ui, &mut self.config, defaults, Signal, &shown)
+                });
+        }
+        section(ui, &shown, "Glass & mask", &[], &[Glass, Mask], |ui| {
+            numbers(ui, &mut self.config, defaults, Glass, &shown);
+            if shown.key("mask_repeats") {
+                ui.separator();
+                self.mask_density(ui);
+            }
+            numbers(ui, &mut self.config, defaults, Mask, &shown);
         });
-        chrome::Section::new("Bloom & reflections").show(ui, |ui| {
-            numbers(ui, &mut self.config, defaults, settings::Section::Bloom);
-            ui.checkbox(
-                &mut self.config.reflection_as_screen,
-                "Reflection as on the screen",
-            )
-            .on_hover_text(
-                "The bezel reflects the picture with the screen's overscan and mask density, \
-                 as Super Win the Game draws it. Off is the public CRTSim source: the overscan \
-                 the other way round and half the mask's rows.",
-            );
+        let bloom = ["reflection_as_screen"];
+        section(ui, &shown, "Bloom & reflections", &bloom, &[Bloom], |ui| {
+            numbers(ui, &mut self.config, defaults, Bloom, &shown);
+            if shown.key("reflection_as_screen") {
+                ui.checkbox(
+                    &mut self.config.reflection_as_screen,
+                    "Reflection as on the screen",
+                )
+                .on_hover_text(
+                    "The bezel reflects the picture with the screen's overscan and mask \
+                     density, as Super Win the Game draws it. Off is the public CRTSim source: \
+                     the overscan the other way round and half the mask's rows.",
+                );
+            }
         });
-        chrome::Section::new("Frame & lighting").show(ui, |ui| {
-            numbers(ui, &mut self.config, defaults, settings::Section::Lighting)
+        section(ui, &shown, "Frame & lighting", &[], &[Lighting], |ui| {
+            numbers(ui, &mut self.config, defaults, Lighting, &shown)
         });
-        chrome::Section::new("Persistence & artifact phase").show(ui, |ui| {
-            numbers(
-                ui,
-                &mut self.config,
-                defaults,
-                settings::Section::Persistence,
-            );
-            ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(
-                        self.config.warmup != defaults.warmup,
-                        egui::Button::new("↺").small(),
-                    )
-                    .on_hover_text(format!("Reset Warm-up ticks to {}", defaults.warmup))
-                    .clicked()
-                {
-                    self.config.warmup = defaults.warmup;
-                }
-                Keyed::new(0..=240).reset_to(defaults.warmup).show(
+        let persistence = ["warmup", "phase", "flip_artifacts", "interlace"];
+        let title = "Persistence & artifact phase";
+        section(ui, &shown, title, &persistence, &[Persistence], |ui| {
+            numbers(ui, &mut self.config, defaults, Persistence, &shown);
+            if shown.key("warmup") {
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(
+                            self.config.warmup != defaults.warmup,
+                            egui::Button::new("↺").small(),
+                        )
+                        .on_hover_text(format!("Reset Warm-up ticks to {}", defaults.warmup))
+                        .clicked()
+                    {
+                        self.config.warmup = defaults.warmup;
+                    }
+                    Keyed::new(0..=240).reset_to(defaults.warmup).show(
+                        ui,
+                        &mut self.config.warmup,
+                        |s| s.text("Warm-up ticks"),
+                    );
+                });
+            }
+            if shown.key("phase") {
+                choice(
                     ui,
-                    &mut self.config.warmup,
-                    |s| s.text("Warm-up ticks"),
+                    "Phase",
+                    &mut self.config.phase,
+                    &[
+                        (Phase::Stable, "Stable"),
+                        (Phase::A, "A"),
+                        (Phase::B, "B"),
+                        (Phase::Alternating, "Alternating"),
+                    ],
                 );
-            });
-            choice(
+            }
+            if shown.key("flip_artifacts") {
+                ui.checkbox(&mut self.config.flip_artifacts, "Flip artifact pattern")
+                    .on_hover_text(
+                        "The composite artifact pattern upside down, each tick blending in the \
+                         row above rather than below, as Super Win the Game's Linux build draws \
+                         it. Off is the public CRTSim source's orientation, which the game's \
+                         Windows build draws.",
+                    );
+            }
+            if shown.key("interlace") {
+                ui.checkbox(&mut self.config.interlace, "Interlaced fields")
+                    .on_hover_text(
+                        "Each tick scans every other row, alternating fields; the rows it skips \
+                         only fade by persistence. Use with a 480- or 576-row signal.",
+                    );
+            }
+            notes(
                 ui,
-                "Phase",
-                &mut self.config.phase,
-                &[
-                    (Phase::Stable, "Stable"),
-                    (Phase::A, "A"),
-                    (Phase::B, "B"),
-                    (Phase::Alternating, "Alternating"),
-                ],
-            );
-            ui.checkbox(&mut self.config.flip_artifacts, "Flip artifact pattern")
-                .on_hover_text(
-                    "The composite artifact pattern upside down, each tick blending in the row \
-                     above rather than below, as Super Win the Game's Linux build draws it. Off \
-                     is the public CRTSim source's orientation, which the game's Windows build \
-                     draws.",
-                );
-            ui.checkbox(&mut self.config.interlace, "Interlaced fields")
-                .on_hover_text(
-                    "Each tick scans every other row, alternating fields; the rows it skips \
-                     only fade by persistence. Use with a 480- or 576-row signal.",
-                );
-            ui.small(
                 "Each still starts from black. Higher persistence may require more warm-up \
                  ticks. Alternating phase depends on tick count.",
             );
@@ -254,6 +343,59 @@ impl App {
         if self.config != before {
             self.changed();
         }
+    }
+    /// Which preset the settings are, or are closest to, and how many of them differ from it,
+    /// listed when pointed at, with the toggle that shows only those.
+    fn preset_in_use(&mut self, ui: &mut egui::Ui) {
+        let Some(closest) = self.presets.closest(&self.config) else {
+            return;
+        };
+        let text = match closest.changes.len() {
+            0 => format!("Preset: {}", closest.name),
+            1 => format!("Preset: {} · 1 change", closest.name),
+            n => format!("Preset: {} · {n} changes", closest.name),
+        };
+        ui.horizontal_wrapped(|ui| {
+            let label = ui.label(egui::RichText::new(text).strong());
+            ui.checkbox(&mut self.changed_only, "Changed only")
+                .on_hover_text("Show only the settings that differ from this preset");
+            if closest.changes.is_empty() {
+                return;
+            }
+            label.on_hover_ui(|ui| {
+                ui.label(format!("What differs from {}:", closest.name));
+                egui::Grid::new("changes from the preset")
+                    .striped(true)
+                    .show(ui, |ui| {
+                        for change in &closest.changes {
+                            ui.label(&change.setting);
+                            ui.weak(&change.from);
+                            ui.label("→");
+                            ui.strong(&change.to);
+                            ui.end_row();
+                        }
+                    });
+            });
+        });
+    }
+    /// Which settings the panel shows: every one, or with Changed only on, those that differ
+    /// from the preset named above them. While a pointer is down, one that showed keeps showing,
+    /// so a slider dragged across the preset's value does not vanish from under it.
+    fn shown_settings(&mut self, ui: &egui::Ui) -> Shown {
+        if !self.changed_only {
+            return Shown::all();
+        }
+        let changes: HashSet<&'static str> = self
+            .presets
+            .closest(&self.config)
+            .map(|closest| closest.changes.iter().map(|change| change.key).collect())
+            .unwrap_or_default();
+        if ui.input(|i| i.pointer.any_down()) {
+            self.changes_shown.extend(changes);
+        } else {
+            self.changes_shown = changes;
+        }
+        Shown::only(self.changes_shown.clone())
     }
     /// Whether the mask follows the signal, as the original's did, or has columns and rows of
     /// its own, which start from the density in use so the picture does not jump.
@@ -281,12 +423,66 @@ impl App {
         }
     }
     /// The source's framing, and its colour mapping before the CRT.
-    fn framing_and_color(&mut self, ui: &mut egui::Ui, defaults: &Config) {
-        crate::chrome::Section::new("Source & framing")
-            .default_open(true)
-            .show(ui, |ui| {
-                ui.checkbox(&mut self.config.screen_only, "Screen only · no bezel");
-                egui::CollapsingHeader::new("Crop edges · percent").show(ui, |ui| {
+    fn framing_and_color(&mut self, ui: &mut egui::Ui, defaults: &Config, shown: &Shown) {
+        let framing = [
+            "screen_only",
+            "source.crop",
+            "source.rotation",
+            "source.zoom",
+            "source.position",
+            "source.background",
+            "source.checkerboard",
+        ];
+        if shown.any(&framing, &[]) {
+            chrome::Section::new("Source & framing")
+                .default_open(true)
+                .changes(shown.changes())
+                .show(ui, |ui| self.framing(ui, shown));
+        }
+        section(
+            ui,
+            shown,
+            "Color & LUT",
+            &["lut", "palette.model"],
+            &[Color],
+            |ui| {
+                ui.label(match (&self.config.palette, &self.config.lut) {
+                    (Some(palette), _) => format!("NES palette, {}", palette.model.name()),
+                    (None, Some(lut)) => lut.name.clone(),
+                    (None, None) => "No LUT".into(),
+                });
+                if ui.button("LUT gallery…").clicked() {
+                    self.stop_playback();
+                    self.luts.open = true;
+                }
+                if ui.button("Import 3D .cube…").clicked() {
+                    self.dialog(Dialog::Lut, &ui.ctx().clone());
+                }
+                if self.config.lut.is_some() && ui.button("Remove LUT").clicked() {
+                    self.config.set_lut(None);
+                }
+                if shown.key("palette.model") {
+                    self.nes_palette(ui);
+                }
+                if self.config.lut.is_some() || self.config.palette.is_some() {
+                    numbers(ui, &mut self.config, defaults, Color, shown);
+                }
+                notes(
+                    ui,
+                    "Applied before CRT simulation. The table is embedded in presets and projects.",
+                );
+            },
+        );
+    }
+    /// The source's crop, rotation, zoom and pan, and what shows through its transparency.
+    fn framing(&mut self, ui: &mut egui::Ui, shown: &Shown) {
+        if shown.key("screen_only") {
+            ui.checkbox(&mut self.config.screen_only, "Screen only · no bezel");
+        }
+        if shown.key("source.crop") {
+            egui::CollapsingHeader::new("Crop edges · percent")
+                .default_open(shown.changes())
+                .show(ui, |ui| {
                     for (i, name) in ["Left", "Top", "Right", "Bottom"].iter().enumerate() {
                         let opposite = (i + 2) % 4;
                         let max = (0.98 - self.config.source.crop[opposite]).max(0.);
@@ -300,107 +496,157 @@ impl App {
                         }
                     }
                 });
-                let source = &mut self.config.source;
-                Keyed::new(-180.0..=180.)
+        }
+        let source = &mut self.config.source;
+        if shown.key("source.rotation") {
+            Keyed::new(-180.0..=180.)
+                .reset_to(0.)
+                .show(ui, &mut source.rotation, |s| s.text("Rotation °"));
+        }
+        if shown.key("source.zoom") {
+            Keyed::new(0.05..=4.)
+                .logarithmic(true)
+                .reset_to(1.)
+                .show(ui, &mut source.zoom, |s| s.text("Source zoom"));
+        }
+        if shown.key("source.position") {
+            for (position, label) in source.position.iter_mut().zip(["Pan X", "Pan Y"]) {
+                Keyed::new(-1.0..=1.)
                     .reset_to(0.)
-                    .show(ui, &mut source.rotation, |s| s.text("Rotation °"));
-                Keyed::new(0.05..=4.).logarithmic(true).reset_to(1.).show(
-                    ui,
-                    &mut source.zoom,
-                    |s| s.text("Source zoom"),
-                );
-                for (position, label) in source.position.iter_mut().zip(["Pan X", "Pan Y"]) {
-                    Keyed::new(-1.0..=1.)
-                        .reset_to(0.)
-                        .show(ui, position, |s| s.text(label));
-                }
-                ui.label("Transparency background (included in exports)");
-                ui.horizontal(|ui| {
-                    if ui
-                        .selectable_label(
-                            !self.config.source.checkerboard
-                                && self.config.source.background == [0; 3],
-                            "Black",
-                        )
-                        .clicked()
-                    {
-                        self.config.source.checkerboard = false;
-                        self.config.source.background = [0; 3];
-                    }
-                    if ui
-                        .selectable_label(
-                            !self.config.source.checkerboard
-                                && self.config.source.background == [255; 3],
-                            "White",
-                        )
-                        .clicked()
-                    {
-                        self.config.source.checkerboard = false;
-                        self.config.source.background = [255; 3];
-                    }
-                    ui.checkbox(&mut self.config.source.checkerboard, "Checker");
-                });
+                    .show(ui, position, |s| s.text(label));
+            }
+        }
+        if shown.key("source.background") || shown.key("source.checkerboard") {
+            ui.label("Transparency background (included in exports)");
+            ui.horizontal(|ui| {
                 if ui
-                    .color_edit_button_srgb(&mut self.config.source.background)
-                    .changed()
+                    .selectable_label(!source.checkerboard && source.background == [0; 3], "Black")
+                    .clicked()
                 {
-                    self.config.source.checkerboard = false;
+                    source.checkerboard = false;
+                    source.background = [0; 3];
                 }
-                if ui.button("Reset source framing").clicked() {
-                    self.config.source = Default::default();
+                if ui
+                    .selectable_label(
+                        !source.checkerboard && source.background == [255; 3],
+                        "White",
+                    )
+                    .clicked()
+                {
+                    source.checkerboard = false;
+                    source.background = [255; 3];
                 }
+                ui.checkbox(&mut source.checkerboard, "Checker");
             });
-        crate::chrome::Section::new("Color & LUT").show(ui, |ui| {
-            ui.label(match (&self.config.palette, &self.config.lut) {
-                (Some(palette), _) => format!("NES palette, {}", palette.model.name()),
-                (None, Some(lut)) => lut.name.clone(),
-                (None, None) => "No LUT".into(),
-            });
-            if ui.button("LUT gallery…").clicked() {
-                self.stop_playback();
-                self.luts.open = true;
+            if ui.color_edit_button_srgb(&mut source.background).changed() {
+                source.checkerboard = false;
             }
-            if ui.button("Import 3D .cube…").clicked() {
-                self.dialog(Dialog::Lut, &ui.ctx().clone());
-            }
-            if self.config.lut.is_some() && ui.button("Remove LUT").clicked() {
-                self.config.set_lut(None);
-            }
-            let mut generated = self.config.palette.is_some();
-            let toggled = ui
-                .checkbox(&mut generated, "NES palette")
+        }
+        if ui.button("Reset source framing").clicked() {
+            self.config.source = Default::default();
+        }
+    }
+    /// The NES palette in place of a LUT, and how it is made.
+    fn nes_palette(&mut self, ui: &mut egui::Ui) {
+        let mut generated = self.config.palette.is_some();
+        let toggled = ui
+            .checkbox(&mut generated, "NES palette")
+            .on_hover_text(
+                "Super Win the Game's NTSC palette, set by Tint, Tint I and Tint Q. It recolours \
+                 images drawn in the NES palette and replaces any LUT.",
+            )
+            .changed();
+        if toggled {
+            self.config.set_palette(generated.then(Default::default));
+        }
+        if let Some(palette) = &mut self.config.palette {
+            ui.radio_value(&mut palette.model, Model::Game, Model::Game.name())
                 .on_hover_text(
-                    "Super Win the Game's NTSC palette, set by Tint, Tint I and Tint Q. It \
-                     recolours images drawn in the NES palette and replaces any LUT.",
-                )
-                .changed();
-            if toggled {
-                self.config.set_palette(generated.then(Default::default));
-            }
-            if let Some(palette) = &mut self.config.palette {
-                ui.radio_value(&mut palette.model, Model::Game, Model::Game.name())
-                    .on_hover_text(
-                        "Exactly as Super Win the Game makes it, for art in the NES palette \
-                         its own is drawn in, which begins 7C7C7C 0000FC 0000BC. Tint I and Q \
-                         steer each hue there, not its saturation.",
-                    );
-                ui.radio_value(
-                    &mut palette.model,
-                    Model::Signal,
-                    "From the composite signal",
-                )
-                .on_hover_text(
-                    "The NES's colours decoded from its measured signal, turned by Tint \
-                         and scaled along I and Q, for art in MAME's NES palette, which the \
-                         included NES LUTs also expect.",
+                    "Exactly as Super Win the Game makes it, for art in the NES palette its own \
+                     is drawn in, which begins 7C7C7C 0000FC 0000BC. Tint I and Q steer each hue \
+                     there, not its saturation.",
                 );
-            }
-            if self.config.lut.is_some() || self.config.palette.is_some() {
-                numbers(ui, &mut self.config, defaults, settings::Section::Color);
-            }
-            ui.small(
-                "Applied before CRT simulation. The table is embedded in presets and projects.",
+            ui.radio_value(
+                &mut palette.model,
+                Model::Signal,
+                "From the composite signal",
+            )
+            .on_hover_text(
+                "The NES's colours decoded from its measured signal, turned by Tint and scaled \
+                 along I and Q, for art in MAME's NES palette, which the included NES LUTs also \
+                 expect.",
             );
-        });
+        }
+    }
+}
+
+/// A section of the panel, shown when any of `keys`, or of the numeric settings of `sections`,
+/// shows; with Changed only on, open and holding only what changed.
+fn section(
+    ui: &mut egui::Ui,
+    shown: &Shown,
+    title: &str,
+    keys: &[&str],
+    sections: &[settings::Section],
+    contents: impl FnOnce(&mut egui::Ui),
+) {
+    if shown.any(keys, sections) {
+        chrome::Section::new(title)
+            .changes(shown.changes())
+            .show(ui, contents);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn changed_only_shows_what_differs_and_keeps_a_held_slider() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(
+            &ctx,
+            worker::Gpu::Own(wgpu::Backends::PRIMARY),
+            Ok(app_data::Store::temporary()),
+            None,
+            None,
+        );
+        let shown = |app: &mut App, pressed: Option<bool>| {
+            let pos = egui::pos2(10., 10.);
+            let events = pressed.map_or(vec![], |pressed| {
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ]
+            });
+            let input = egui::RawInput {
+                events,
+                ..Default::default()
+            };
+            let mut shown = None;
+            ctx.run_ui(input, |ui| shown = Some(app.shown_settings(ui)))
+                .textures_delta
+                .clear();
+            shown.unwrap()
+        };
+        assert!(
+            shown(&mut app, None).key("fov"),
+            "every setting shows when off"
+        );
+        app.changed_only = true;
+        let bloom = app.config.bloom;
+        app.config.bloom += 0.25;
+        let now = shown(&mut app, None);
+        assert!(now.key("bloom") && !now.key("fov"));
+        assert!(now.any(&[], &[Bloom]) && !now.any(&["warmup"], &[Persistence]));
+        // Dragged back to the preset's value, it stays until the pointer lets go.
+        app.config.bloom = bloom;
+        assert!(shown(&mut app, Some(true)).key("bloom"));
+        assert!(shown(&mut app, Some(false)).none());
     }
 }
