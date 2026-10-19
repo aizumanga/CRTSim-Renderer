@@ -27,7 +27,7 @@ pub enum Task {
 impl Task {
     fn of(job: &Job) -> Option<Self> {
         Some(match job {
-            Job::Load(_) | Job::LoadBytes { .. } | Job::LoadVideo { .. } => Self::Loading,
+            Job::Load(..) | Job::LoadBytes { .. } | Job::LoadVideo { .. } => Self::Loading,
             Job::ImportPreset { .. } => Self::ImportingPreset,
             Job::Export { .. } => Self::Exporting,
             Job::Playback { .. } => Self::Playing,
@@ -200,6 +200,7 @@ mod tests {
             },
             path: PathBuf::from("out.png"),
             cancel: cancel.clone(),
+            colors: Default::default(),
         };
         (job, cancel)
     }
@@ -208,9 +209,10 @@ mod tests {
     fn a_job_holds_the_lane_until_it_finishes_saying_whether_it_was_cancelled() {
         let (mut lane, work) = lane();
         assert!(lane.is_idle() && lane.may_start());
-        lane.start(Job::Load("photo.png".into())).unwrap();
+        lane.start(Job::Load("photo.png".into(), Default::default()))
+            .unwrap();
         assert!(
-            matches!(work.try_recv(), Ok(Job::Load(_))),
+            matches!(work.try_recv(), Ok(Job::Load(..))),
             "sent to the worker"
         );
         assert!(lane.is_loading() && lane.is_working() && !lane.may_start());
@@ -251,7 +253,7 @@ mod tests {
         };
         assert_eq!(lane.start(playing), Err(Refused::Busy));
         assert_eq!(
-            lane.start(Job::Load("photo.png".into())),
+            lane.start(Job::Load("photo.png".into(), Default::default())),
             Err(Refused::Busy)
         );
         assert!(lane.is_exporting(), "the export still runs");

@@ -1,5 +1,5 @@
 //! Everything the app remembers between runs: the welcome acknowledged, the interface theme,
-//! where tool windows were, personal presets, recent projects and the session to recover. On
+//! what to do with colours, where tool windows were, personal presets, recent projects and the session to recover. On
 //! the desktop they are files in one folder, each replaced only once the whole of its new
 //! contents is written; in a browser, entries in its storage for the site. Each has a size it
 //! may not exceed.
@@ -18,6 +18,9 @@ const WINDOWS: &str = "windows-v1.json";
 const PRESETS: &str = "presets";
 const RECENT: &str = "recent-projects-v1.json";
 const SESSION: &str = "session-v1.crtsim";
+const COLORS: &str = "colors-v1.txt";
+/// The ICC profile PNG stills are written in, when it is one from a file.
+const PNG_PROFILE: &str = "png-profile-v1.icc";
 
 /// How many recent projects are remembered.
 pub const RECENT_PROJECTS: usize = 10;
@@ -198,6 +201,56 @@ impl Store {
 
     pub fn set_theme(&self, theme: Theme) -> Result<()> {
         self.write(THEME, format!("{}\n", theme.id()).as_bytes())
+    }
+
+    /// What pictures' colour profiles do, and the space PNG stills are written in.
+    pub fn colors(&self) -> Result<crate::worker::Colors> {
+        use crtsim_core::{color::Space, input::Profiles};
+        let mut colors = crate::worker::Colors::default();
+        let Some(bytes) = self.read(COLORS, 256, "Colour settings are too large")? else {
+            return Ok(colors);
+        };
+        for line in String::from_utf8(bytes)?.lines() {
+            match line.split_once(": ") {
+                Some(("profiles", "convert")) => colors.profiles = Profiles::Convert,
+                Some(("profiles", "ignore")) => colors.profiles = Profiles::Ignore,
+                Some(("space", "icc")) => {
+                    let bytes = self
+                        .read(
+                            PNG_PROFILE,
+                            16 * 1024 * 1024,
+                            "The ICC profile is too large",
+                        )?
+                        .context("The ICC profile chosen for PNGs is missing")?;
+                    colors.space = Space::from_icc(bytes)?;
+                }
+                Some(("space", name)) => {
+                    colors.space = Space::NAMED
+                        .iter()
+                        .find(|(slug, _)| *slug == name)
+                        .map(|(_, space)| space.clone())
+                        .with_context(|| format!("Unknown colour space {name:?}"))?;
+                }
+                _ => anyhow::bail!("Unknown colour setting {line:?}"),
+            }
+        }
+        Ok(colors)
+    }
+
+    pub fn set_colors(&self, colors: &crate::worker::Colors) -> Result<()> {
+        use crtsim_core::{color::Space, input::Profiles};
+        if let Space::Icc(profile) = &colors.space {
+            self.write(PNG_PROFILE, &profile.bytes)?;
+        }
+        let profiles = match colors.profiles {
+            Profiles::Convert => "convert",
+            Profiles::Ignore => "ignore",
+        };
+        let space = colors.space.slug().unwrap_or("icc");
+        self.write(
+            COLORS,
+            format!("profiles: {profiles}\nspace: {space}\n").as_bytes(),
+        )
     }
 
     /// Whether the person asked for a check for updates each time the app starts. Until they
@@ -446,6 +499,34 @@ mod tests {
 
     fn store(root: &Path) -> Store {
         Store::in_folder(root)
+    }
+
+    #[test]
+    fn colour_settings_persist_with_a_profile_from_a_file() {
+        use crate::worker::Colors;
+        use crtsim_core::{color::Space, input::Profiles};
+        let temp = tempfile::tempdir().unwrap();
+        let s = store(temp.path());
+        assert_eq!(
+            s.colors().unwrap(),
+            Colors::default(),
+            "sRGB, converting, at first"
+        );
+        let p3 = Colors {
+            profiles: Profiles::Ignore,
+            space: Space::DisplayP3,
+        };
+        s.set_colors(&p3).unwrap();
+        assert_eq!(store(temp.path()).colors().unwrap(), p3);
+        let icc = moxcms::ColorProfile::new_adobe_rgb().encode().unwrap();
+        let custom = Colors {
+            profiles: Profiles::Convert,
+            space: Space::from_icc(icc).unwrap(),
+        };
+        s.set_colors(&custom).unwrap();
+        assert_eq!(store(temp.path()).colors().unwrap(), custom);
+        std::fs::write(temp.path().join(COLORS), "space: cmyk\n").unwrap();
+        assert!(s.colors().is_err());
     }
 
     #[test]

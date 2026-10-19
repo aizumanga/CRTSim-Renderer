@@ -204,7 +204,8 @@ impl App {
             notes(
                 ui,
                 "Rounded glass may hide extreme corners even with Contain. Alpha uses the \
-                 selected background. SDR output; no ICC color management.",
+                 selected background. SDR output, in sRGB or the PNG colour space chosen \
+                 under Export.",
             );
         });
         self.framing_and_color(ui, defaults, &shown);

@@ -133,6 +133,8 @@ enum Frames {
         decoder: Box<image_webp::WebPDecoder<Box<dyn Reader>>>,
         /// One frame as the decoder writes it: RGB, or RGBA when the file has alpha.
         buffer: Vec<u8>,
+        /// Every frame's colours into sRGB, from the file's profile.
+        colors: Box<crtsim_core::color::Reading>,
     },
 }
 
@@ -157,11 +159,16 @@ impl Frames {
                 let size = decoder
                     .output_buffer_size()
                     .context("WebP frames are too large")?;
+                let colors = crtsim_core::color::Reading::of_icc(
+                    decoder.icc_profile().ok().flatten(),
+                    crtsim_core::input::Profiles::Convert,
+                );
                 Ok((
                     decoder.dimensions(),
                     Self::Webp {
                         decoder: Box::new(decoder),
                         buffer: vec![0; size],
+                        colors: Box::new(colors),
                     },
                 ))
             }
@@ -181,7 +188,11 @@ impl Iterator for Frames {
                 let delay = numerator.checked_div(denominator).unwrap_or(0);
                 (frame.into_buffer(), shown_ms(delay))
             })),
-            Self::Webp { decoder, buffer } => {
+            Self::Webp {
+                decoder,
+                buffer,
+                colors,
+            } => {
                 let delay = match decoder.read_frame(buffer) {
                     Err(image_webp::DecodingError::NoMoreFrames) => return None,
                     Err(error) => return Some(Err(error.into())),
@@ -197,7 +208,12 @@ impl Iterator for Frames {
                 Some(
                     RgbaImage::from_raw(width, height, pixels)
                         .context("Invalid WebP frame")
-                        .map(|image| (image, shown_ms(delay))),
+                        .map(|mut image| {
+                            // A profile that cannot convert leaves the frames as sRGB, as a
+                            // still's would be.
+                            let _ = colors.apply(&mut image);
+                            (image, shown_ms(delay))
+                        }),
                 )
             }
         }

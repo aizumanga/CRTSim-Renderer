@@ -22,6 +22,8 @@ pub(crate) enum Dialog {
     /// A look as a preset of a shader port.
     Port(Host),
     ContactSheet,
+    /// An ICC profile to write PNG stills in.
+    ColorProfile,
 }
 
 /// What a dialog is asked for.
@@ -135,6 +137,7 @@ impl Dialog {
                 }
             }
             Self::ContactSheet => ("PNG image", vec!["png"], Some("contact-sheet")),
+            Self::ColorProfile => ("ICC colour profile", vec!["icc", "icm"], None),
         };
         Chooser {
             filter,
@@ -243,6 +246,7 @@ impl App {
             }
             Dialog::Export => self.export(path),
             Dialog::ContactSheet => self.export_contact_sheet(path),
+            Dialog::ColorProfile => self.choose_png_profile(&incoming::File::Path(path)),
             Dialog::Port(host) => match files::save_port(&path, host, &self.config) {
                 Ok(()) => {
                     self.status = format!("Exported the {}", host.port_name());
@@ -387,6 +391,7 @@ impl App {
                 };
                 self.bring_file(purpose, incoming::File::Bytes { name, bytes });
             }
+            Dialog::ColorProfile => self.choose_png_profile(&incoming::File::Bytes { name, bytes }),
             _ => {}
         }
     }

@@ -35,7 +35,7 @@ impl App {
                     }
                     match arrived.opened {
                         Ok(status) => {
-                            self.status = status.into();
+                            self.status = status;
                             self.notices.fixed(Topic::Opening);
                         }
                         // Only a video frame can be cancelled.

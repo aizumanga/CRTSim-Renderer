@@ -54,7 +54,7 @@ pub struct Arrived {
     /// Whether the picture changed.
     pub changed: bool,
     /// What the status bar says if it opened, or why it did not.
-    pub opened: Result<&'static str, Failure>,
+    pub opened: Result<String, Failure>,
     /// The project that was waiting for it, to apply now.
     pub project: Option<Project>,
 }
@@ -75,6 +75,8 @@ pub struct Source {
     /// Where the editor is in the video open, if one is.
     pub timeline: Option<Timeline>,
     pending: Option<Pending>,
+    /// What an image opened from now on does with its colour profile.
+    pub profiles: crtsim_core::input::Profiles,
 }
 
 impl Source {
@@ -89,6 +91,7 @@ impl Source {
             input: Arc::new(card),
             timeline: None,
             pending: None,
+            profiles: Default::default(),
         }
     }
 
@@ -130,7 +133,7 @@ impl Source {
         if crtsim_media::MediaKind::of(&path).is_moving() {
             return video(path, frame, None);
         }
-        Job::Load(path)
+        Job::Load(path, self.profiles)
     }
 
     /// Opens a file a browser handed over, by its `name` and contents.
@@ -143,7 +146,11 @@ impl Source {
             picked: true,
             project: None,
         });
-        Job::LoadBytes { name, bytes }
+        Job::LoadBytes {
+            name,
+            bytes,
+            profiles: self.profiles,
+        }
     }
 
     /// Opens frame `frame` of the video open, if there is one.
@@ -235,9 +242,10 @@ impl Source {
                 };
             }
         };
-        let status = match &loaded.timeline {
-            Some(_) => "Video frame loaded",
-            None => "Image loaded",
+        let status = match (&loaded.timeline, &loaded.note) {
+            (Some(_), _) => "Video frame loaded".into(),
+            (None, Some(note)) => format!("Image loaded. {note}"),
+            (None, None) => "Image loaded".into(),
         };
         let kind = match &loaded.timeline {
             Some(timeline) if timeline.is_video_test_card() => Kind::VideoTestCard,
@@ -351,6 +359,7 @@ mod tests {
             thumbnail: image.clone(),
             image,
             timeline,
+            note: None,
         })
     }
 
@@ -370,7 +379,7 @@ mod tests {
     fn opening_asks_for_an_image_or_a_video_frame_which_can_be_cancelled() {
         let mut source = source();
         let image = source.open("photo.png".into());
-        assert!(matches!(image, Job::Load(_)) && image.cancel().is_none());
+        assert!(matches!(image, Job::Load(..)) && image.cancel().is_none());
         let video = source.open("clip.mp4".into());
         assert!(matches!(video, Job::LoadVideo { frame: 0, .. }));
         assert!(video.cancel().is_some());
@@ -393,7 +402,7 @@ mod tests {
         let _ = source.open("photo.png".into());
         let arrived = source.loaded(loaded("photo.png", None));
         assert!(arrived.changed && arrived.project.is_none());
-        assert_eq!(arrived.opened.ok(), Some("Image loaded"));
+        assert_eq!(arrived.opened.ok().as_deref(), Some("Image loaded"));
         assert_eq!(*source.kind(), Kind::File("photo.png".into()));
         assert_eq!(
             (source.name(), source.input().dimensions()),

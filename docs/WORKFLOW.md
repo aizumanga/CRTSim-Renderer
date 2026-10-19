@@ -32,7 +32,7 @@ Credits and source/license links are available in the gallery and Credits & supp
 
 **Color LUT** imports a 3D `.cube` table (2–65 samples per axis, up to 16 MB). Trilinear interpolation respects
 DOMAIN_MIN/MAX. The LUT runs before the CRT signal simulation and hue/chroma grade. Tables are embedded in
-presets/projects, so moving the original LUT file does not break the look. 1D LUTs and ICC transforms are outside this version.
+presets/projects, so moving the original LUT file does not break the look. 1D LUTs are outside this version.
 
 Choose **Compare · drag divider** and drag anywhere across the image to reveal the original on the left and CRT on the right.
 Each image keeps its aspect ratio; the curved tube is not geometrically registered with the source.

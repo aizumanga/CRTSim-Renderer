@@ -90,7 +90,7 @@ nearest in red and green and blended in blue, here and in every shader port; oth
 It is an artistic grade, not the private NES palette LUT or a full NTSC decoder.
 **Linear light (experimental)** decodes the SDR signal for glass sampling, performs lighting and bloom with RGBA16Float intermediates,
 then encodes the final SDR PNG. Composite/persistence remains gamma-space RGBA8. It uses more GPU memory and changes the look;
-it is not a full linear-light pipeline, HDR export, ICC color management or an exact match to the game.
+it is not a full linear-light pipeline, HDR export or an exact match to the game.
 Old presets load with reference processing and neutral grading. Newly saved presets require the updated app/CLI.
 
 With stable Rust installed, run from the repository folder:
@@ -327,8 +327,27 @@ cargo run --release -p crtsim-cli -- render --input "image.png" --config general
 ```
 
 Edit `general.json` to adjust the effect. It is not necessary to rebuild after editing settings.
-Transparency is composited onto black before filtering; output is opaque SDR PNG. ICC/HDR color management is not implemented.
+Transparency is composited onto black before filtering; output is opaque SDR PNG. HDR output is not implemented.
 The default path follows the original gamma-space UNORM behavior, not linear-light rendering.
+
+### Colour profiles
+
+The CRT works in sRGB. A picture whose file carries a colour profile (an ICC profile in a PNG, JPEG or WebP,
+including CMYK JPEGs from print work, or PNG's cICP, gAMA and cHRM chunks) has its colours converted into sRGB as
+it opens, and the status line says from what. A profile that is sRGB in effect, as many programs embed, leaves
+every value as it is, so art in exact NES palette values still matches the palette. **View → Pictures' colour
+profiles → Ignore**, or `--ignore-profile`, reads every picture's numbers as sRGB whatever it carries.
+
+PNG stills and contact sheets are written in sRGB, tagged as such, unless **Export → PNG colour space** or
+`--color-space` chooses Display P3, Adobe RGB, Rec. 2020, ProPhoto RGB or an RGB `.icc` profile from a file;
+then the PNG is converted at 16 bits, with that profile embedded, so colour-managed programs show the same picture.
+Videos and animations stay sRGB and BT.709. Conversions use [moxcms](https://github.com/awxkee/moxcms), checked
+against lcms in [the validation notes](docs/VALIDATION.md#colour-management).
+
+```sh
+cargo run --release -p crtsim-cli -- render -i photo.jpg -o print.png --color-space adobe-rgb
+cargo run --release -p crtsim-cli -- render -i sprite.png -o crt.png --ignore-profile
+```
 
 ### Resolutions
 

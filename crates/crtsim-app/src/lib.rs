@@ -86,6 +86,8 @@ struct App {
     worker_thread: Option<std::thread::JoinHandle<()>>,
     store: Option<app_data::Store>,
     theme: theme::Theme,
+    /// What pictures' colour profiles do, and the space PNG stills are written in.
+    colors: worker::Colors,
     show_welcome: bool,
     /// Whether the looks offered after a first run's welcome are on screen.
     first_look: bool,
@@ -226,6 +228,16 @@ impl App {
         };
         ctx.set_fonts(theme::fonts());
         theme.apply(ctx);
+        let colors = match store.as_ref().map(app_data::Store::colors) {
+            Some(Ok(colors)) => colors,
+            Some(Err(e)) => {
+                storage_error = Some(format!(
+                    "Could not load the colour settings: {e:#}. Using sRGB."
+                ));
+                worker::Colors::default()
+            }
+            None => worker::Colors::default(),
+        };
         let tool_windows = match store.as_ref().map(app_data::Store::tool_windows) {
             Some(Ok(windows)) => windows,
             // Window placement is a convenience; opening at the default size is fine.
@@ -250,6 +262,7 @@ impl App {
             worker_thread,
             store,
             theme,
+            colors,
             show_welcome,
             first_look: smoke.as_ref().is_some_and(|smoke| smoke.first_look),
             show_credits: false,
@@ -294,6 +307,7 @@ impl App {
         if let Some(error) = storage_error {
             app.notices.failed(Topic::AppData, error);
         }
+        app.source.profiles = app.colors.profiles;
         app.ffmpeg.start_check(ctx);
         #[cfg(not(target_arch = "wasm32"))]
         app.check_for_updates_at_start(ctx);
@@ -441,6 +455,7 @@ impl App {
                 export,
                 path,
                 cancel,
+                colors: self.colors.clone(),
             },
             status,
         );

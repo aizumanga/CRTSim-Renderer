@@ -1,6 +1,7 @@
 #![doc = include_str!("../README.md")]
 
 pub mod bezel;
+pub mod color;
 pub mod config;
 pub mod game_palette;
 pub mod glass;

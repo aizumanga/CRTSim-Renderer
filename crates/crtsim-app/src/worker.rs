@@ -308,13 +308,22 @@ pub enum PreviewJob {
     Shutdown,
 }
 
+/// How the app reads and writes colours: what it does with the colour profile a picture
+/// carries, and the space its PNG stills are written in.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Colors {
+    pub profiles: crtsim_core::input::Profiles,
+    pub space: crtsim_core::color::Space,
+}
+
 /// Work for the other thread: loading, exports and playback, one at a time.
 #[expect(
     clippy::large_enum_variant,
     reason = "a job is sent once for something the user asked for, so its size costs nothing"
 )]
 pub enum Job {
-    Load(PathBuf),
+    /// An image, its colour profile used as asked.
+    Load(PathBuf, crtsim_core::input::Profiles),
     /// An image handed over by name and contents, as a browser gives a file picked or dropped.
     #[cfg_attr(
         all(not(test), not(target_arch = "wasm32")),
@@ -323,6 +332,7 @@ pub enum Job {
     LoadBytes {
         name: String,
         bytes: Vec<u8>,
+        profiles: crtsim_core::input::Profiles,
     },
     LoadVideo {
         path: PathBuf,
@@ -336,11 +346,13 @@ pub enum Job {
         input: (u32, u32),
         cancel: Arc<AtomicBool>,
     },
-    /// Rendered and saved to `path`, which is only replaced once the whole file is ready.
+    /// Rendered and saved to `path`, which is only replaced once the whole file is ready. A
+    /// still is written in `colors`' space, and a batch's images read as they ask.
     Export {
         export: Export,
         path: PathBuf,
         cancel: Arc<AtomicBool>,
+        colors: Colors,
     },
     Playback {
         video: Video,
@@ -358,7 +370,7 @@ impl Job {
             | Self::ImportPreset { cancel, .. }
             | Self::Export { cancel, .. } => Some(cancel),
             Self::Playback { feed, .. } => Some(&feed.cancel),
-            Self::Load(_) | Self::LoadBytes { .. } | Self::Shutdown => None,
+            Self::Load(..) | Self::LoadBytes { .. } | Self::Shutdown => None,
         }
     }
 }
@@ -415,10 +427,12 @@ impl Export {
         path: &Path,
         cancel: &Arc<AtomicBool>,
         progress: &dyn Fn(Progress),
+        colors: &Colors,
     ) -> Result<()> {
+        let space = &colors.space;
         match self {
             Self::Image { input, config } => {
-                export_image(graphics, input, config, path, cancel, progress).await
+                export_image(graphics, input, config, path, cancel, progress, space).await
             }
             Self::Sheet {
                 input,
@@ -448,7 +462,7 @@ impl Export {
                     fraction: 0.97,
                     stage: "Encoding and saving PNG".into(),
                 });
-                files::save_png(path, sheet, None)
+                files::save_png(path, sheet, None, space)
             }
             Self::Video {
                 video,
@@ -469,8 +483,8 @@ impl Export {
                     let video = crtsim_media::probe(source, cancel)?;
                     export_video(graphics, &video, config, options, path, cancel, progress).await
                 } else {
-                    let input = crtsim_core::input::load_image(source)?;
-                    export_image(graphics, &input, config, path, cancel, progress).await
+                    let input = crtsim_core::input::read(source, colors.profiles)?.image;
+                    export_image(graphics, &input, config, path, cancel, progress, space).await
                 }
             }
         }
@@ -581,6 +595,8 @@ pub struct Loaded {
     pub thumbnail: RgbaImage,
     /// For a frame of a video, the video and where in it the frame is.
     pub timeline: Option<Timeline>,
+    /// What became of an image's colour profile, when it carries one other than sRGB.
+    pub note: Option<String>,
 }
 pub struct ImportedPreset {
     pub path: PathBuf,
@@ -805,10 +821,18 @@ async fn work_lane(ctx: egui::Context, gpu: Gpu, jobs: Inbox<Job>, events: mpsc:
                 continue;
             }
             // Loading an image cannot be cancelled.
-            Job::Load(path) => Event::Loaded(load_image(path).map_err(Failure::Failed)),
-            Job::LoadBytes { name, bytes } => {
-                Event::Loaded(load_bytes(name, bytes).await.map_err(Failure::Failed))
+            Job::Load(path, profiles) => {
+                Event::Loaded(load_image(path, profiles).map_err(Failure::Failed))
             }
+            Job::LoadBytes {
+                name,
+                bytes,
+                profiles,
+            } => Event::Loaded(
+                load_bytes(name, bytes, profiles)
+                    .await
+                    .map_err(Failure::Failed),
+            ),
             Job::LoadVideo {
                 path,
                 frame,
@@ -830,10 +854,11 @@ async fn work_lane(ctx: egui::Context, gpu: Gpu, jobs: Inbox<Job>, events: mpsc:
                 export,
                 path,
                 cancel,
+                colors,
             } => Event::Exported(
                 graphics
                     .guard(export.driver_failed(), async |g| {
-                        export.run(g, &path, &cancel, &progress).await
+                        export.run(g, &path, &cancel, &progress, &colors).await
                     })
                     .await
                     .map(|()| path)
@@ -847,14 +872,20 @@ async fn work_lane(ctx: egui::Context, gpu: Gpu, jobs: Inbox<Job>, events: mpsc:
     }
 }
 
-fn load_image(path: PathBuf) -> Result<Loaded> {
-    let image = crtsim_core::input::load_image(&path)?;
+fn load_image(path: PathBuf, profiles: crtsim_core::input::Profiles) -> Result<Loaded> {
+    let decoded = crtsim_core::input::read(&path, profiles)?;
     let name = file_name(&path);
-    Ok(loaded(path.canonicalize().unwrap_or(path), name, image))
+    Ok(loaded(
+        path.canonicalize().unwrap_or(path),
+        name,
+        decoded.image,
+        decoded.note,
+    ))
 }
 
-/// An image opened for editing, with the thumbnail that shows the original.
-fn loaded(path: PathBuf, name: String, image: RgbaImage) -> Loaded {
+/// An image opened for editing, with the thumbnail that shows the original and what became of
+/// its colour profile.
+fn loaded(path: PathBuf, name: String, image: RgbaImage, note: Option<String>) -> Loaded {
     // Keep thumbnail processing off the interface's turn, including alpha before resizing.
     let mut opaque = image.clone();
     crtsim_core::config::flatten_alpha(&mut opaque, [0; 3]);
@@ -867,12 +898,17 @@ fn loaded(path: PathBuf, name: String, image: RgbaImage) -> Loaded {
         image,
         thumbnail,
         timeline: None,
+        note,
     }
 }
 
 /// A file a browser handed over: a video or animation opens with its frames, anything else
 /// as an image.
-async fn load_bytes(name: String, bytes: Vec<u8>) -> Result<Loaded> {
+async fn load_bytes(
+    name: String,
+    bytes: Vec<u8>,
+    profiles: crtsim_core::input::Profiles,
+) -> Result<Loaded> {
     let path = PathBuf::from(&name);
     let contents = crtsim_media::Contents(bytes.into());
     let video = if crtsim_media::MediaKind::of(&path) == crtsim_media::MediaKind::Video {
@@ -894,8 +930,8 @@ async fn load_bytes(name: String, bytes: Vec<u8>) -> Result<Loaded> {
         let image = crate::frames::frame(&video, 0, &cancel).await?;
         return Ok(opened(video, 0, frames, image));
     }
-    let image = crtsim_core::input::decode_image(contents.as_ref())?;
-    Ok(loaded(path, name, image))
+    let decoded = crtsim_core::input::read_bytes(contents.as_ref(), profiles)?;
+    Ok(loaded(path, name, decoded.image, decoded.note))
 }
 
 async fn load_video(
@@ -928,6 +964,7 @@ fn opened(video: Video, frame: u64, frames: u64, image: RgbaImage) -> Loaded {
         image,
         thumbnail,
         timeline: Some(Timeline::new(video, frame, frames)),
+        note: None,
     }
 }
 
@@ -1013,6 +1050,7 @@ async fn export_image(
     path: &Path,
     cancel: &AtomicBool,
     progress: &dyn Fn(Progress),
+    space: &crtsim_core::color::Space,
 ) -> Result<()> {
     let image = still(graphics, input, config, Some(cancel), |mut stage| {
         stage.fraction *= 0.9;
@@ -1024,7 +1062,7 @@ async fn export_image(
         fraction: 0.95,
         stage: "Encoding and saving PNG".into(),
     });
-    files::save_png(path, image, Some(config))
+    files::save_png(path, image, Some(config), space)
 }
 
 /// An animated GIF or WebP of `video`: encoded by FFmpeg on the desktop, and in a browser
@@ -1381,13 +1419,14 @@ mod tests {
     /// A browser hands files over as bytes; either runtime decodes them into a source.
     #[test]
     fn an_image_handed_over_as_bytes_opens_on_either_runtime() {
-        let png = crate::files::png_bytes(RgbaImage::new(6, 4), None).unwrap();
+        let png = crate::files::png_bytes(RgbaImage::new(6, 4), None, &Default::default()).unwrap();
         for (runtime, worker, next) in workers() {
             worker
                 .jobs
                 .send(Job::LoadBytes {
                     name: "picked.png".into(),
                     bytes: png.clone(),
+                    profiles: Default::default(),
                 })
                 .unwrap();
             match next(&worker) {
@@ -1402,6 +1441,7 @@ mod tests {
                 .send(Job::LoadBytes {
                     name: "broken.png".into(),
                     bytes: b"not a picture".to_vec(),
+                    profiles: Default::default(),
                 })
                 .unwrap();
             assert!(
@@ -1434,6 +1474,7 @@ mod tests {
             let job = Job::LoadBytes {
                 name: "clip.gif".into(),
                 bytes: animated_gif(4),
+                profiles: Default::default(),
             };
             worker.jobs.send(job).unwrap();
             let Event::Loaded(Ok(loaded)) = next(&worker) else {
@@ -1550,6 +1591,7 @@ mod tests {
                     export,
                     path: dir.path().join(name),
                     cancel: cancel.clone(),
+                    colors: Default::default(),
                 })
                 .unwrap();
             loop {
@@ -1590,6 +1632,7 @@ mod tests {
             .send(Job::LoadBytes {
                 name: "clip.gif".into(),
                 bytes: animated_gif(3),
+                profiles: Default::default(),
             })
             .unwrap();
         let Event::Loaded(Ok(loaded)) = next(&worker) else {
@@ -1629,6 +1672,7 @@ mod tests {
                     export,
                     path: path.clone(),
                     cancel: Arc::new(AtomicBool::new(false)),
+                    colors: Default::default(),
                 })
                 .unwrap();
             loop {
@@ -1756,6 +1800,7 @@ mod tests {
                     },
                     path: path.clone(),
                     cancel: Arc::new(AtomicBool::new(false)),
+                    colors: Default::default(),
                 })
                 .unwrap();
             loop {
@@ -1796,6 +1841,7 @@ mod tests {
                     },
                     path: dir.path().join("export.png"),
                     cancel: cancel.clone(),
+                    colors: Default::default(),
                 })
                 .unwrap();
             worker

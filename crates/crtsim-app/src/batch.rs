@@ -606,6 +606,7 @@ mod tests {
             export: worker::Export::Batch { config, .. },
             path,
             cancel,
+            ..
         }) = receive.try_recv()
         else {
             panic!("Expected batch export");

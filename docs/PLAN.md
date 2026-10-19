@@ -102,7 +102,6 @@ This phase does not promise continuous real-time frame rates, cancellable GPU su
 
 ## Later work
 
-- Full ICC color management and wider tube geometry remain later work.
 - No default synthetic interlacing, VHS noise, sprite flicker or room reflection.
 
 ## Sources

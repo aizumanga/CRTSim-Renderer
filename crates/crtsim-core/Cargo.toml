@@ -25,6 +25,11 @@ serde_json.workspace = true
 wgpu.workspace = true
 glam = "0.27"
 futures-channel = "0.3"
+# Colour management: ICC profiles read and converted, in Rust, on the desktop and the web.
+moxcms = { version = "0.8", features = ["options"] }
+# A PNG's colour chunks and a JPEG's CMYK inks, which the image crate does not hand over.
+png = "0.17"
+jpeg-decoder = "0.3"
 
 [dev-dependencies]
 naga = { version = "30.0.1", features = ["wgsl-in"] }

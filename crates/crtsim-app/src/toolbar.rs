@@ -1,5 +1,6 @@
 //! The toolbar along the top of the window, and its menus.
 use crate::*;
+use crtsim_core::{color::Space, input::Profiles};
 use crtsim_shader_ports::Host;
 
 impl App {
@@ -94,6 +95,27 @@ impl App {
                         }
                         ui.close();
                     }
+                    ui.separator();
+                    ui.label("Pictures' colour profiles");
+                    let mut profiles = self.colors.profiles;
+                    ui.selectable_value(&mut profiles, Profiles::Convert, "Convert to sRGB")
+                        .on_hover_text(
+                            "A picture whose file carries a colour profile, such as Display P3 \
+                             or Adobe RGB, has its colours converted into sRGB, the CRT's own.",
+                        );
+                    ui.selectable_value(&mut profiles, Profiles::Ignore, "Ignore")
+                        .on_hover_text(
+                            "Every picture's numbers are read as sRGB, whatever profile it \
+                             carries: for art drawn in exact palette values, such as the NES \
+                             palette, that a program tagged with a profile of its own.",
+                        );
+                    if profiles != self.colors.profiles {
+                        self.set_colors(worker::Colors {
+                            profiles,
+                            ..self.colors.clone()
+                        });
+                        ui.close();
+                    }
                 });
                 ui.menu_button("Export", |ui| {
                     let png = if self.source.timeline.is_some() {
@@ -108,6 +130,42 @@ impl App {
                         self.dialog(Dialog::Export, ctx);
                         ui.close();
                     }
+                    ui.menu_button("PNG colour space", |ui| {
+                        let mut space = self.colors.space.clone();
+                        for (_, named) in Space::NAMED {
+                            let name = named.name();
+                            ui.selectable_value(&mut space, named, name);
+                        }
+                        if let Space::Icc(profile) = &self.colors.space {
+                            let name = profile.name.clone();
+                            ui.selectable_value(&mut space, self.colors.space.clone(), name);
+                        }
+                        if space != self.colors.space {
+                            self.set_colors(worker::Colors {
+                                space,
+                                ..self.colors.clone()
+                            });
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui
+                            .button("ICC profile…")
+                            .on_hover_text(
+                                "An RGB profile from a file, such as a display's or a print \
+                                 service's, to write PNGs in.",
+                            )
+                            .clicked()
+                        {
+                            self.dialog(Dialog::ColorProfile, ctx);
+                            ui.close();
+                        }
+                    })
+                    .response
+                    .on_hover_text(
+                        "The colour space PNG stills and contact sheets are written in. Other \
+                         than sRGB, a PNG is written at 16 bits with the space's profile \
+                         embedded. Videos and animations are sRGB.",
+                    );
                     if ui
                         .add_enabled(self.source.timeline.is_some(), egui::Button::new("Video…"))
                         .clicked()
@@ -185,5 +243,48 @@ impl App {
                 }
             }
         });
+    }
+}
+
+impl App {
+    /// Uses `colors` from now on, and remembers them. A picture opened from a file opens again
+    /// when what its colour profile does has changed, so the change shows.
+    pub(crate) fn set_colors(&mut self, colors: worker::Colors) {
+        let reread = colors.profiles != self.colors.profiles;
+        self.colors = colors;
+        self.source.profiles = self.colors.profiles;
+        if let Some(store) = &self.store {
+            if let Err(e) = store.set_colors(&self.colors) {
+                self.notices.failed(
+                    Topic::AppData,
+                    format!("Could not remember the colour settings: {e:#}"),
+                );
+            }
+        }
+        self.status = format!("PNG stills are written in {}", self.colors.space.name());
+        if reread {
+            match self.source.kind() {
+                source::Kind::File(path) if self.source.timeline.is_none() => {
+                    self.load(path.clone())
+                }
+                _ => self.status = "Pictures opened from now on use this".into(),
+            }
+        }
+    }
+
+    /// Writes PNG stills in the RGB profile in `file`, or says why it cannot.
+    pub(crate) fn choose_png_profile(&mut self, file: &incoming::File) {
+        match file
+            .read(16 * 1024 * 1024, "The profile")
+            .and_then(|bytes| Space::from_icc(bytes.into_owned()))
+        {
+            Ok(space) => self.set_colors(worker::Colors {
+                space,
+                ..self.colors.clone()
+            }),
+            Err(e) => self
+                .notices
+                .failed(Topic::Opening, format!("Cannot use the profile: {e:#}")),
+        }
     }
 }

@@ -72,7 +72,7 @@ impl App {
                 let bytes: Vec<u8> = image.pixels.iter().flat_map(|p| p.to_array()).collect();
                 let im = RgbaImage::from_raw(image.width() as u32, image.height() as u32, bytes)
                     .unwrap();
-                if let Err(e) = files::save_png(&smoke.screenshot, im, None) {
+                if let Err(e) = files::save_png(&smoke.screenshot, im, None, &Default::default()) {
                     eprintln!("{e:#}");
                     std::process::exit(1);
                 }
