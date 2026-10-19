@@ -974,6 +974,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "crtsim-service"
+version = "1.4.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "clap",
+ "crtsim-core",
+ "crtsim-media",
+ "form_urlencoded",
+ "getrandom 0.3.4",
+ "httparse",
+ "image 0.24.9",
+ "pollster 0.3.0",
+ "serde_json",
+ "tempfile",
+ "wgpu",
+]
+
+[[package]]
 name = "crtsim-shader-ports"
 version = "1.4.0"
 dependencies = [

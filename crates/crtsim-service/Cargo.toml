@@ -1,0 +1,28 @@
+[package]
+name = "crtsim-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Renders pictures, animations and videos through the CRT over HTTP, headless, with a queue and limits."
+publish = false
+
+[[bin]]
+name = "crtsim-service"
+path = "src/main.rs"
+
+[dependencies]
+crtsim-core = { path = "../crtsim-core" }
+crtsim-media = { path = "../crtsim-media" }
+anyhow.workspace = true
+image.workspace = true
+serde_json.workspace = true
+wgpu.workspace = true
+pollster = "0.3"
+clap = { version = "4", features = ["derive"] }
+tempfile = "3"
+# A request's line and headers; the service reads its body itself, by Content-Length.
+httparse = "1"
+form_urlencoded = "1"
+base64 = "0.23"
+# Job ids no one can guess.
+getrandom = "0.3"

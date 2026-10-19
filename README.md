@@ -225,6 +225,20 @@ Every port is checked against the renderer: the RetroArch port through librashad
 filter in OBS itself, picture for picture, and the ReShade effect compiled by ReShade's own
 compiler as each shipped look sets it.
 
+## As a service
+
+`crtsim-service` renders pictures, animations and videos sent over HTTP, for a chat bot or a batch of renders on a
+server with no screen, one at a time on one GPU, or on software Vulkan in its container, with a queue and limits on
+every request:
+
+```sh
+docker build -f packaging/service/Dockerfile -t crtsim-service .
+docker run --rm -p 127.0.0.1:8080:8080 -e CRTSIM_SERVICE_TOKEN=<a long secret> crtsim-service
+curl -H "Authorization: Bearer <a long secret>" --data-binary @shot.png -o crt.png 'localhost:8080/render?preset=NTSC%20240p'
+```
+
+See [the service's documentation](docs/SERVICE.md) for its options, limits and how to expose it.
+
 ## In Rust programs: crtsim-core
 
 The renderer itself is the [`crtsim-core`](crates/crtsim-core) crate, ready for crates.io: stills, video sequences

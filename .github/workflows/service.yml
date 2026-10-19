@@ -1,0 +1,56 @@
+name: Render service image
+# The service's image, built and rendered through as a client would use it. Its own tests run
+# on software Vulkan with the others in the validation workflow.
+on:
+  push:
+    branches: [main]
+    paths:
+      - crates/crtsim-service/**
+      - crates/crtsim-core/**
+      - crates/crtsim-media/**
+      - packaging/service/**
+      - tools/licenses.py
+      - .dockerignore
+      - .github/workflows/service.yml
+      - Cargo.lock
+  pull_request:
+    paths:
+      - crates/crtsim-service/**
+      - crates/crtsim-core/**
+      - crates/crtsim-media/**
+      - packaging/service/**
+      - tools/licenses.py
+      - .dockerignore
+      - .github/workflows/service.yml
+      - Cargo.lock
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    env:
+      TOKEN: ci-token-not-a-secret-0123456789
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image
+        run: docker build -f packaging/service/Dockerfile -t crtsim-service .
+      - name: Render a still and an animation through it
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y ffmpeg
+          docker run -d --name crtsim -p 127.0.0.1:8080:8080 -e CRTSIM_SERVICE_TOKEN="$TOKEN" crtsim-service
+          for attempt in $(seq 30); do curl -sf localhost:8080/health && break; sleep 1; done
+          curl -sf localhost:8080/health | python3 -c 'import json, sys; h = json.load(sys.stdin); assert h["status"] == "ok" and h["moving"], h; print(h)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/presets)" = 401
+          curl -sf -H "Authorization: Bearer $TOKEN" --data-binary @'crates/crtsim-core/assets/nes-luts/00 - NES SMPTE-2025.png' \
+            "localhost:8080/render?preset=NTSC%20240p&size=320x240" -o still.png
+          file still.png | grep -q 'PNG image data, 320 x 240'
+          ffmpeg -v error -f lavfi -i testsrc2=size=64x48:rate=10 -t 1 -loop 0 animation.gif
+          curl -sf -H "Authorization: Bearer $TOKEN" --data-binary @animation.gif \
+            "localhost:8080/render?max_side=160&fps=10" -o crt.gif
+          file crt.gif | grep -q 'GIF image data'
+      - name: The service's log
+        if: always()
+        run: docker logs crtsim

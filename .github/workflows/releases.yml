@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/releases.yml
       - tools/package.py
+      - tools/licenses.py
       - tools/build_web.py
       - packaging/**
       - ports/**

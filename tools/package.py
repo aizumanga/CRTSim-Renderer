@@ -2,6 +2,8 @@
 import argparse
 import json
 from pathlib import Path
+
+import licenses as licenses_of
 import shutil
 import subprocess
 import tarfile
@@ -73,65 +75,20 @@ for source, destination in [
     ('SHA256SUMS', 'NES_LUTS_SHA256SUMS'),
 ]:
     shutil.copy2(ASSETS / 'nes-luts' / source, stage / destination)
-# Collect license texts from the exact Cargo.lock dependency sources, including build dependencies,
-# of what ships: the app and the CLI. Test-only crates, such as crtsim-ports and the librashader
-# it runs the shader ports with, are never built into a package.
-metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--format-version', '1']))
-nodes = {node['id']: node for node in metadata['resolve']['nodes']}
+# The license texts of what ships: the app and the CLI (see tools/licenses.py).
+metadata = licenses_of.metadata()
 # The app's own version, as it reports it in its status bar and compares with the latest release
 # when asked to check for updates. A release tag must name that same version.
 app_version = next(p['version'] for p in metadata['packages'] if p['name'] == 'crtsim-app' and p['source'] is None)
 if args.version.startswith('v') and args.version != f'v{app_version}':
     raise SystemExit(f'Release {args.version} does not match the version in Cargo.toml, {app_version}')
-shipped = set()
-pending = [p['id'] for p in metadata['packages'] if p['name'] in ('crtsim-app', 'crtsim-cli') and p['source'] is None]
-while pending:
-    package_id = pending.pop()
-    if package_id in shipped:
-        continue
-    shipped.add(package_id)
-    pending += [dep['pkg'] for dep in nodes[package_id]['deps']
-                if any(kind['kind'] != 'dev' for kind in dep['dep_kinds'])]
 licenses = stage / 'dependency-licenses'
 licenses.mkdir()
-index = []
-for package in metadata['packages']:
-    if package['source'] is None or package['id'] not in shipped:
-        continue
-    package_root = Path(package['manifest_path']).parent
-    destination = licenses / f"{package['name']}-{package['version']}"
-    destination.mkdir()
-    candidates = set()
-    for pattern in ['LICENSE*', 'LICENCE*', 'COPYING*', 'NOTICE*', 'license*', 'licence*', 'copyright*']:
-        candidates.update(package_root.glob(pattern))
-    if package.get('license_file'):
-        candidates.add(package_root / package['license_file'])
-    for source in sorted(candidates):
-        if source.is_file():
-            shutil.copy2(source, destination / source.name)
-        elif source.is_dir():
-            shutil.copytree(source, destination / source.name, dirs_exist_ok=True)
-    index.append({key: package.get(key) for key in ['name', 'version', 'license', 'repository']})
-(licenses / 'index.json').write_text(json.dumps(index, indent=2) + '\n', encoding='utf-8')
+index = licenses_of.collect(metadata, licenses_of.shipped(metadata, ('crtsim-app', 'crtsim-cli')), licenses)
 if web:
     # A website serves every file it holds, so the web package gathers the texts into one file
     # rather than a folder per dependency, with each text written out once.
-    texts = []
-    first = {}
-    for entry in index:
-        package = f"{entry['name']} {entry['version']}"
-        folder = licenses / f"{entry['name']}-{entry['version']}"
-        texts.append(f"{'=' * 78}\n{package} ({entry['license']})\n"
-                     f"{entry['repository'] or ''}\n{'=' * 78}\n")
-        for file in sorted(p for p in folder.rglob('*') if p.is_file()):
-            text = file.read_text(encoding='utf-8', errors='replace').rstrip()
-            license_name = file.relative_to(folder)
-            if text in first:
-                texts.append(f"--- {license_name}: the same text as {first[text]} ---\n\n")
-            else:
-                first[text] = f"{package}'s {license_name}"
-                texts.append(f"--- {license_name} ---\n{text}\n\n")
-    (stage / 'dependency-licenses.txt').write_text(''.join(texts), encoding='utf-8')
+    (stage / 'dependency-licenses.txt').write_text(licenses_of.one_file(index, licenses), encoding='utf-8')
     shutil.rmtree(licenses)
 (stage / 'BUILD.txt').write_text(
     f"Version: {args.version}\nPlatform: {args.platform}\nCommit: "

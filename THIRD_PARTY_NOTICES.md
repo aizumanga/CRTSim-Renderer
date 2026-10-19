@@ -38,6 +38,15 @@ public domain VGA fonts. The glyphs are embedded in `crates/crtsim-core/src/shee
 ## FFmpeg
 
 Phase 3 invokes a user-installed FFmpeg and ffprobe as separate executables. Neither is bundled, linked or downloaded by this application.
+
+## The render service's image
+
+`packaging/service/Dockerfile` builds `crtsim-service` into an image on Debian's `trixie-slim`, with Debian's
+`ffmpeg` (built by Debian with GPL components, so GPL-2.0-or-later as a whole), `mesa-vulkan-drivers` (MIT) and
+`libvulkan1` (Apache-2.0) installed unmodified from Debian, each with its copyright file under `/usr/share/doc`; their
+sources are Debian's (`apt-get source`, or sources.debian.org). The service runs FFmpeg as a separate program, as the
+desktop does. The image carries this project's license and notices, and the license text of every Rust dependency
+the service builds with, gathered by `tools/licenses.py`, in `/usr/share/doc/crtsim-service`.
 The installed build determines codec availability and its license obligations; builds containing libx264 generally enable GPL components.
 Before distributing FFmpeg with a future release, collect the exact build configuration, applicable licenses and corresponding source obligations.
 

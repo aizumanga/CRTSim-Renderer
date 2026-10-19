@@ -192,6 +192,11 @@ person chooses Help → Check for updates, or at each start once they have turne
 (`crates/crtsim-app/src/updates.rs`). It tells; it never downloads a release, which package
 managers and AppImage tools do instead. See [the decision](docs/adr/0004-check-for-updates-never-download-them.md).
 
+**Render service**: the renderer behind HTTP, headless (`crates/crtsim-service`, see
+[the service](docs/SERVICE.md)). A request's picture, animation or video becomes a **job**,
+known by 128 random bits, which waits in a queue of bounded length for the one worker that owns
+the GPU, renders within a time limit, and leaves its result for a while.
+
 **Web app**: the whole app, with editing, the galleries, playback and exports, running in a
 browser from the author's Neocities site. It is not a cut-down demo: what the desktop app does
 with a look, the web app does too, within what a browser allows. It needs WebGPU and never

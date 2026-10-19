@@ -109,7 +109,8 @@ handles). Porting the shaders is less work and more robust.
   deterministic, high-quality offline renders. Editors do not render frames in order, so a
   plugin must warm up from a few frames earlier each time, as stills already do.
 - **A headless service**: the CLI with software Vulkan (lavapipe), as CI already runs it, can
-  power a chat bot or batch service. Only resource limits and a queue are missing.
+  power a chat bot or batch service. Done: `crtsim-service`, with a queue and limits, and a
+  container image on lavapipe (see [the service](SERVICE.md)).
 - **Publishing `crtsim-core` to crates.io**, so Rust projects can depend on it directly. Ready:
   it packages and builds from its package alone, and `publish-core.yml` publishes a version
   tagged for it (see [releases](RELEASES.md#crtsim-core-on-cratesio)).
