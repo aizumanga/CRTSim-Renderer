@@ -1,5 +1,34 @@
 # Portable releases (Phase 4)
 
+## v1.4.0
+
+The desktop and web app are easier to start with and to finish an export in: Open and Export sit under the source,
+the panel names the preset in use, the first run offers three looks, and messages no longer hide each other.
+Super Win the Game stays the default look, with its NES palette off. [The review](UX_REVIEW.md) behind these changes
+and [the plan](UX_PLAN.md) that ranked them are in the docs.
+
+- **Super Win the Game**, the look the app starts with and Reset returns to, leaves its NES palette off, since the
+  palette recolours only art drawn in the NES palette. **Super Win the Game NES palette** is the game's look with it
+  on, by that name in the gallery and in `crtsim render --preset`.
+- Right after the welcome, the first run offers three looks, Super Win the Game, General image and Soft television,
+  each a thumbnail of the picture open.
+- **Open…** and **Export PNG…** or **Export video…** sit under the source's name. **Preset** below them names the
+  preset the settings are, or are closest to, with how many settings differ, listed when pointed at, and
+  **Presets…** opens the gallery. **Changed only** hides every setting that matches it.
+- The status bar's notices say what failed and what an export saved, one per topic, each with its own Dismiss. A
+  preview that fails no longer hides an export that failed. A saved file's notice offers **Show in folder**, and an
+  FFmpeg failure **FFmpeg setup…**.
+- Closing the window during an export asks first: keep exporting, close when it finishes, or stop and close. The web
+  app has the browser ask before the page is left while it exports.
+- **Auto** preview quality, the default, steps from Balanced down to Fast while dragged previews are slow, as on
+  integrated graphics, and back up once they are quick. Choosing a size keeps it.
+- On the desktop, several images or videos dropped on the window become batch jobs, once a folder for their exports
+  is chosen.
+- The preset gallery opens on its presets, with saving under My presets. Standing notes sit behind **ℹ Notes**, small
+  print is 11 px rather than 9, and Refresh shows only while Live preview is off.
+- The Pause button, arrows and crosses that drew as boxes draw properly, and a test checks the fonts hold every
+  character the interface writes.
+
 ## v1.3.0
 
 The CRT runs in ReShade, over almost any PC game, and in OBS Studio, as a filter that keeps the glow between frames,
