@@ -217,6 +217,34 @@ impl Queue {
     }
 }
 
+/// What files dropped on the window come to.
+#[derive(Debug, PartialEq)]
+pub(crate) enum Dropped {
+    Nothing,
+    /// One file, or several of which no more than one is an image or video: that one, or the
+    /// first, opens.
+    Open(PathBuf),
+    /// Several images and videos, which become batch jobs; the other files are left out.
+    Batch(Vec<PathBuf>),
+}
+
+impl Dropped {
+    pub fn of(paths: Vec<PathBuf>) -> Self {
+        let extensions = files::media_extensions();
+        let media = |path: &PathBuf| {
+            path.extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| extensions.iter().any(|known| known.eq_ignore_ascii_case(e)))
+        };
+        let (media, other): (Vec<_>, Vec<_>) = paths.into_iter().partition(media);
+        match media.len() {
+            0 => other.into_iter().next().map_or(Self::Nothing, Self::Open),
+            1 => Self::Open(media.into_iter().next().unwrap_or_default()),
+            _ => Self::Batch(media),
+        }
+    }
+}
+
 /// The settings new batch jobs keep: the ones on screen when their files were asked for.
 pub struct Settings {
     pub config: Config,
@@ -224,13 +252,29 @@ pub struct Settings {
 }
 
 impl App {
-    /// Asks for the files to add to the queue, then the folder their exports go to.
-    fn pick_batch_files(&mut self, ctx: &egui::Context) {
+    /// Asks for the files to add to the queue, unless `sources` already holds them, then the
+    /// folder their exports go to.
+    fn pick_batch_files(&mut self, sources: Option<Vec<PathBuf>>, ctx: &egui::Context) {
         let settings = Settings {
             config: self.config.clone(),
             options: self.video_options.clone(),
         };
-        self.ask(dialogs::Request::Batch(Box::new(settings)), ctx);
+        let settings = Box::new(settings);
+        self.ask(dialogs::Request::Batch { settings, sources }, ctx);
+    }
+
+    /// Files dropped on the window: one opens, as Open… opens it, and several images and
+    /// videos become batch jobs once a folder for their exports is chosen.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn dropped_paths(&mut self, paths: Vec<PathBuf>, ctx: &egui::Context) {
+        match Dropped::of(paths) {
+            Dropped::Nothing => {}
+            Dropped::Open(path) => self.load(path),
+            Dropped::Batch(sources) => {
+                self.status = format!("Choose a folder for the {} files' exports", sources.len());
+                self.pick_batch_files(Some(sources), ctx);
+            }
+        }
     }
 
     /// Adds a job for each of the files chosen, exporting into `folder`.
@@ -297,7 +341,7 @@ impl App {
                         .add_enabled(!self.modal_open(), egui::Button::new("Add files…"))
                         .clicked()
                     {
-                        self.pick_batch_files(ctx);
+                        self.pick_batch_files(None, ctx);
                     }
                     if ui
                         .add_enabled(!self.modal_open(), egui::Button::new("Video settings…"))
@@ -400,6 +444,30 @@ mod tests {
             .unwrap();
         queue.set_running(true);
         queue
+    }
+
+    #[test]
+    fn several_images_and_videos_dropped_become_jobs_and_one_opens() {
+        let paths = |names: &[&str]| names.iter().map(PathBuf::from).collect::<Vec<_>>();
+        assert_eq!(Dropped::of(vec![]), Dropped::Nothing);
+        assert_eq!(
+            Dropped::of(paths(&["a.png"])),
+            Dropped::Open("a.png".into())
+        );
+        // A project, or anything else, opens as it would alone.
+        assert_eq!(
+            Dropped::of(paths(&["look.crtsim", "notes.txt"])),
+            Dropped::Open("look.crtsim".into())
+        );
+        // One image among other files is the one that opens.
+        assert_eq!(
+            Dropped::of(paths(&["look.crtsim", "b.JPG"])),
+            Dropped::Open("b.JPG".into())
+        );
+        assert_eq!(
+            Dropped::of(paths(&["a.png", "look.crtsim", "clip.mp4"])),
+            Dropped::Batch(paths(&["a.png", "clip.mp4"]))
+        );
     }
 
     #[test]

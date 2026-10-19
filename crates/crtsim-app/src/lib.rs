@@ -611,18 +611,22 @@ impl eframe::App for App {
             self.shortcuts(ctx);
         }
         if self.can_start_work() {
-            let dropped = ctx.input(|i| i.raw.dropped_files.first().cloned());
             // A browser gives a dropped file's name and bytes; the desktop, its path.
             #[cfg(target_arch = "wasm32")]
-            if let Some(file) = dropped {
+            if let Some(file) = ctx.input(|i| i.raw.dropped_files.first().cloned()) {
                 self.dropped(file);
             }
             #[cfg(not(target_arch = "wasm32"))]
-            if let Some(path) = dropped
-                .map(|f| f.path().to_path_buf())
-                .filter(|path| !path.as_os_str().is_empty())
             {
-                self.load(path);
+                let paths = ctx.input(|i| {
+                    i.raw
+                        .dropped_files
+                        .iter()
+                        .map(|file| file.path().to_path_buf())
+                        .filter(|path| !path.as_os_str().is_empty())
+                        .collect()
+                });
+                self.dropped_paths(paths, ctx);
             }
         }
         // A modal file dialog freezes edits so its eventual result uses the displayed settings.

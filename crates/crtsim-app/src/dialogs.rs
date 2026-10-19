@@ -28,9 +28,12 @@ pub(crate) enum Dialog {
 pub(crate) enum Request {
     /// One file, as `Dialog` says.
     File(Dialog),
-    /// Files for new batch jobs, then the folder their exports go to. The jobs keep these
-    /// settings, the ones on screen when the dialog opened.
-    Batch(Box<batch::Settings>),
+    /// Files for new batch jobs, unless they were dropped on the window, then the folder their
+    /// exports go to. The jobs keep these settings, the ones on screen when it was asked.
+    Batch {
+        settings: Box<batch::Settings>,
+        sources: Option<Vec<PathBuf>>,
+    },
 }
 
 /// What a dialog answered.
@@ -73,18 +76,21 @@ impl Request {
                 };
                 path.map_or(Answer::Cancelled, |path| Answer::File(kind, path))
             }
-            Self::Batch(settings) => {
-                let Some(sources) = rfd::FileDialog::new()
-                    .add_filter("Images and videos", &files::media_extensions())
-                    .pick_files()
-                else {
+            Self::Batch { settings, sources } => {
+                let Some(sources) = sources.or_else(|| {
+                    rfd::FileDialog::new()
+                        .add_filter("Images and videos", &files::media_extensions())
+                        .pick_files()
+                }) else {
                     return Answer::Cancelled;
                 };
-                // The destination is asked for only once there are files to send to it.
-                match rfd::FileDialog::new()
-                    .set_title("Batch export destination")
-                    .pick_folder()
-                {
+                // The destination is asked for only once there are files to send to it, and
+                // starts where the first of them is.
+                let mut folder = rfd::FileDialog::new();
+                if let Some(beside) = sources[0].parent() {
+                    folder = folder.set_directory(beside);
+                }
+                match folder.set_title("Batch export destination").pick_folder() {
                     Some(folder) => Answer::Batch {
                         settings,
                         sources,
@@ -309,7 +315,7 @@ impl App {
         self.stop_playback();
         let kind = match request {
             Request::File(kind) => kind,
-            Request::Batch(_) => return self.not_yet("Batch export"),
+            Request::Batch { .. } => return self.not_yet("Batch export"),
         };
         let chooser = kind.chooser(self.export_format);
         match kind {
