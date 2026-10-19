@@ -11,6 +11,7 @@ mod events;
 mod export_ui;
 mod ffmpeg_setup;
 mod files;
+mod first_look;
 mod frames;
 mod gallery;
 mod gallery_ui;
@@ -83,6 +84,8 @@ struct App {
     store: Option<app_data::Store>,
     theme: theme::Theme,
     show_welcome: bool,
+    /// Whether the looks offered after a first run's welcome are on screen.
+    first_look: bool,
     show_credits: bool,
     show_queue: bool,
     /// The batch export queue.
@@ -238,6 +241,7 @@ impl App {
             store,
             theme,
             show_welcome,
+            first_look: smoke.as_ref().is_some_and(|smoke| smoke.first_look),
             show_credits: false,
             show_queue: false,
             queue: Default::default(),
@@ -652,6 +656,7 @@ impl eframe::App for App {
         self.gallery_window(ctx);
         self.lut_gallery_window(ctx);
         self.credits_window(ctx);
+        self.first_look_window(ctx);
         self.ffmpeg_window(ctx);
         self.look_link_window(ctx);
         self.contact_sheet_window(ctx);

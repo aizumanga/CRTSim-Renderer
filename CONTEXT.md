@@ -119,6 +119,10 @@ laid out in a grid with each look's name beneath it in an 8x8 bitmap font
 **Included presets**: the looks the gallery offers and `crtsim render --preset` names
 (`crtsim_core::presets`). Personal presets are the app's own.
 
+**First look**: three included presets offered right after the welcome on a first run, each as a
+thumbnail of the picture open, so the person starts from a look they chose (`first_look.rs`).
+Someone with a session to recover has been here before and is not offered it.
+
 **Preset gallery** and **LUT gallery**: the windows offering looks to audition and apply
 (`gallery.rs` and `lut_gallery.rs`). The preset gallery also saves the settings in use as a
 personal preset; the LUT gallery decodes each included LUT once and shares it.

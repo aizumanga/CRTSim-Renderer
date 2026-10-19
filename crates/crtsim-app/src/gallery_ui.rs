@@ -339,6 +339,19 @@ impl App {
             THIRD_PARTY_NOTICES.md in the repository.",
         );
     }
+    /// The welcome was read: it is remembered, and the first look follows it, unless a session
+    /// waits to be recovered, whose owner has been here before.
+    pub(crate) fn welcome_read(&mut self) {
+        if let Some(ref store) = self.store {
+            if let Err(e) = store.acknowledge() {
+                self.error = Some(format!(
+                    "Could not remember the welcome message: {e:#}. It may appear next time."
+                ));
+            }
+        }
+        self.show_welcome = false;
+        self.first_look = !self.session.recovery_offered();
+    }
     pub(crate) fn credits_window(&mut self, ctx: &egui::Context) {
         if self.show_welcome {
             egui::Window::new("Welcome to CRTSim Renderer")
@@ -350,15 +363,7 @@ impl App {
                     Self::credit_text(ui);
                     ui.add_space(12.);
                     if ui.button("Got it — continue").clicked() {
-                        if let Some(ref store) = self.store {
-                            if let Err(e) = store.acknowledge() {
-                                self.error = Some(format!(
-                                    "Could not remember the welcome message: {e:#}. It may appear \
-                                next time."
-                                ));
-                            }
-                        }
-                        self.show_welcome = false;
+                        self.welcome_read();
                     }
                 });
         } else if self.show_credits {

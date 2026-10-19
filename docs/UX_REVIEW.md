@@ -199,8 +199,10 @@ Then H, I, J and K together, as one pass over the panel and gallery; then N, whi
 line makes easier, since the picker can say "Preset: General image" afterwards; then M, which
 the save notice starts; then O and P. L waits until the batch queue is next worked on.
 
-**Open questions**
+**Open questions**, since answered
 - Should the first-run picker be part of the welcome window, or the step after it? The credits
-  are a deliberate first screen, and the picker should not push them aside.
-- Is the default preset right for photos and screenshots, which are most first files? If not,
-  the picker matters more than its place here says.
+  are a deliberate first screen, and the picker should not push them aside. *The step after
+  it; N is done.*
+- Is the default preset right for photos and screenshots, which are most first files? *Super
+  Win the Game stays the default, with its NES palette off: the palette recolours only art
+  drawn in the NES palette. The game's look with it is its own preset.*

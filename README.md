@@ -32,8 +32,11 @@ Please support the original developer by buying and playing their games. This po
 The welcome and credits also link to Pittman's
 [CRT Simulation in Super Win the Game](https://www.gamedeveloper.com/programming/crt-simulation-in-super-win-the-game),
 an interesting technical account of how the effect developed.
+Right after the welcome, the first time, the app offers three looks to start from, Super Win the Game, General image and
+Soft television, each as a thumbnail of the picture open; choosing one applies it, and closing the window keeps the
+look in use.
 
-**Preset gallery** includes Super Win the Game, the preset the app starts with, General image, Soft television, Clean RGB, Pixel art 240p, NTSC 240p, NTSC 480i, PAL 288p, PAL 576i, Warm analog and Linear light.
+**Preset gallery** includes Super Win the Game, the preset the app starts with, Super Win the Game NES palette, General image, Soft television, Clean RGB, Pixel art 240p, NTSC 240p, NTSC 480i, PAL 288p, PAL 576i, Warm analog and Linear light.
 The NTSC and PAL presets set the line count, interlacing and composite phase. The artifact model is the original NTSC-derived one, so the PAL presets approximate PAL's line-alternating color with gentler, stable artifacts rather than simulating it. Video frame rate is chosen separately in Export → Video.
 Each preset shows a thumbnail rendered from your current image. Point at a preset to preview it on the full image without applying it (nothing is changed or added to Undo), and click to apply it.
 Enter a name and choose **Save current** to add your exact settings to **My presets**; they reappear after restarting. Use **Edit description** on any personal preset to add, change or clear its description, and **Delete** to remove it, after confirming.
@@ -71,7 +74,9 @@ original did, so a finer signal gets a finer mask. Super Win the Game and the li
 use it; the general-image presets keep a fixed 128 × 224 mask. Presets saved with fixed columns and rows keep them.
 
 **Super Win the Game** uses the game's own CRT options on top of the public reference: a 30° field of view, **NTSC blending**
-at 0.35, its **NTSC palette**, the artifact pattern as its Windows build draws it, and the bezel reflecting the picture as the screen shows it (**Reflection as on the screen**), and the game's grey backdrop past the bezel in wide outputs (**Backdrop color**). The game saves its screenshots with the two artifact patterns averaged; set **Phase** to **Stable** to compare with one. NTSC blending moves the two composite artifact patterns towards each other in the game's
+at 0.35, the artifact pattern as its Windows build draws it, and the bezel reflecting the picture as the screen shows it (**Reflection as on the screen**), and the game's grey backdrop past the bezel in wide outputs (**Backdrop color**). Its **NTSC palette** is off, since it
+recolours only art drawn in the NES palette, so whatever is opened keeps its colours; **Super Win the Game NES palette**
+is the same look with it on, as the game shows its own art. The game saves its screenshots with the two artifact patterns averaged; set **Phase** to **Stable** to compare with one. NTSC blending moves the two composite artifact patterns towards each other in the game's
 units, so alternating ticks mix them 17.5/82.5 and 82.5/17.5 instead of switching cleanly; 0, the default, is the public
 source's switch, and 1 shows their average on every tick. **NES palette** (Color & LUT) makes the palette from the game's
 **Tint**, **Tint I** and **Tint Q**, one of two ways. **Super Win the Game's** makes it exactly as the game does, matching
@@ -102,7 +107,8 @@ Settings changed during an export apply to the next export. The native save dial
 already exists; after confirmation, the app writes a complete temporary file and atomically replaces the destination.
 
 - **Super Win the Game**, the preset the app starts with and **Reset** returns to, is the public-reference defaults,
-  including 256x224 signal resampling and saturation 1.35, with the game's own CRT options on top.
+  including 256x224 signal resampling and saturation 1.35, with the game's own CRT options on top, except its NES
+  palette.
 - **General image** starts with square pixels, smooth resizing, contain fitting and saturation 1.0.
 - Under the source's name, **Open…** opens a file and **Export PNG…**, or **Export video…** for a video, saves the
   result. Below them, **Preset** names the preset the settings are, or are closest to, with how many settings differ

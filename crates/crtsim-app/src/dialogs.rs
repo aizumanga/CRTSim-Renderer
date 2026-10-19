@@ -405,6 +405,8 @@ impl App {
                 }
                 self.status = brought.status;
                 self.error = None;
+                // A look brought in, such as one a link opened, is the look chosen.
+                self.first_look = false;
             }
             Err(error) => self.error = Some(error),
         }

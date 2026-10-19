@@ -168,12 +168,18 @@ mod tests {
 
     #[test]
     fn the_game_preset_matches_its_options_screen() {
-        let game = builtins()
-            .into_iter()
-            .find(|e| e.name == "Super Win the Game")
-            .unwrap()
-            .config;
-        assert_eq!(game, default_preset().config);
+        let named = |name| builtins().into_iter().find(|e| e.name == name).unwrap();
+        let game = named("Super Win the Game NES palette").config;
+        // The app starts with the game's options without its palette, which recolours only
+        // art drawn in the NES palette.
+        assert_eq!(named("Super Win the Game").config, default_preset().config);
+        assert_eq!(
+            default_preset().config,
+            Config {
+                palette: None,
+                ..game.clone()
+            }
+        );
         // As the game's CRT options show them.
         assert_eq!(game.fov, 30.);
         assert_eq!(game.ntsc_blending, 0.35);
@@ -221,6 +227,7 @@ mod tests {
             let follows = matches!(
                 entry.name.as_str(),
                 "Super Win the Game"
+                    | "Super Win the Game NES palette"
                     | "Pixel art 240p"
                     | "NTSC 240p"
                     | "NTSC 480i"
