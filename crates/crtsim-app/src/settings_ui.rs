@@ -46,6 +46,40 @@ impl App {
             self.source.input().width(),
             self.source.input().height()
         ));
+        // The two steps every session takes, beside what they act on.
+        ui.add_enabled_ui(self.can_start_work(), |ui| {
+            ui.horizontal_wrapped(|ui| {
+                let ctx = ui.ctx().clone();
+                if ui
+                    .button("Open…")
+                    .on_hover_text(format!(
+                        "Open an image, video or animation · {}",
+                        shortcut(&ctx, SHORTCUT_OPEN)
+                    ))
+                    .clicked()
+                {
+                    self.dialog(Dialog::File, &ctx);
+                }
+                if self.source.timeline.is_some() {
+                    if ui
+                        .button("Export video…")
+                        .on_hover_text("Choose the format, then where to save it")
+                        .clicked()
+                    {
+                        self.open_video_export(false);
+                    }
+                } else if ui
+                    .button("Export PNG…")
+                    .on_hover_text(format!(
+                        "Save the CRT picture at full resolution · {}",
+                        shortcut(&ctx, SHORTCUT_EXPORT)
+                    ))
+                    .clicked()
+                {
+                    self.dialog(Dialog::Export, &ctx);
+                }
+            });
+        });
         // What Reset, and each setting's own reset, return to.
         let default = gallery::default_preset();
         ui.horizontal(|ui| {
@@ -66,9 +100,27 @@ impl App {
                 self.replace_config(default.config.clone());
             }
         });
-        if ui.button("General image").clicked() {
-            self.replace_config(Config::general());
-        }
+        self.preset_in_use(ui);
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .button("Presets…")
+                .on_hover_text("Point at a preset to see it on your picture; click to apply it")
+                .clicked()
+            {
+                self.refresh_gallery();
+                self.presets.open = true;
+            }
+            if ui
+                .button("General image")
+                .on_hover_text(
+                    "Apply the General image preset: square pixels and smooth resizing, for \
+                     photos and screenshots",
+                )
+                .clicked()
+            {
+                self.replace_config(Config::general());
+            }
+        });
         let before = self.config.clone();
         let defaults = &default.config;
         chrome::Section::new("Image & output").show(ui, |ui| {
@@ -254,6 +306,36 @@ impl App {
         if self.config != before {
             self.changed();
         }
+    }
+    /// Which preset the settings are, or are closest to, and how many of them differ from it,
+    /// listed when pointed at.
+    fn preset_in_use(&mut self, ui: &mut egui::Ui) {
+        let Some(closest) = self.presets.closest(&self.config) else {
+            return;
+        };
+        let text = match closest.changes.len() {
+            0 => format!("Preset: {}", closest.name),
+            1 => format!("Preset: {} · 1 change", closest.name),
+            n => format!("Preset: {} · {n} changes", closest.name),
+        };
+        let label = ui.label(egui::RichText::new(text).strong());
+        if closest.changes.is_empty() {
+            return;
+        }
+        label.on_hover_ui(|ui| {
+            ui.label(format!("What differs from {}:", closest.name));
+            egui::Grid::new("changes from the preset")
+                .striped(true)
+                .show(ui, |ui| {
+                    for change in &closest.changes {
+                        ui.label(&change.setting);
+                        ui.weak(&change.from);
+                        ui.label("→");
+                        ui.strong(&change.to);
+                        ui.end_row();
+                    }
+                });
+        });
     }
     /// Whether the mask follows the signal, as the original's did, or has columns and rows of
     /// its own, which start from the density in use so the picture does not jump.

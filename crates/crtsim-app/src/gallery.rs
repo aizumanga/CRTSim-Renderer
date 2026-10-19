@@ -1,4 +1,4 @@
-use crate::app_data;
+use crate::{app_data, model};
 use crtsim_core::config::Config;
 
 #[derive(Clone)]
@@ -52,6 +52,14 @@ pub struct PresetGallery {
     pub editing: Option<(String, String)>,
     /// A change to a personal preset waiting for the person to confirm it.
     pub confirming: Option<Confirm>,
+    /// The preset closest to some settings, and the settings it was found for.
+    closest: Option<(Config, Option<Closest>)>,
+}
+
+/// The preset a look is closest to, and the settings that differ from it.
+pub struct Closest {
+    pub name: String,
+    pub changes: Vec<model::Difference>,
 }
 
 /// A change to a personal preset that cannot be undone, asked about before it is made.
@@ -71,8 +79,27 @@ impl PresetGallery {
         gallery
     }
 
+    /// The preset `config` is closest to, the one it differs from in fewest settings, found
+    /// again only once `config` or the presets change. Of presets as close, the first wins, so
+    /// an included one before a personal one.
+    pub fn closest(&mut self, config: &Config) -> Option<&Closest> {
+        if self.closest.as_ref().is_none_or(|(of, _)| of != config) {
+            let closest = self
+                .entries
+                .iter()
+                .map(|entry| Closest {
+                    name: entry.name.clone(),
+                    changes: model::differences(&entry.config, config),
+                })
+                .min_by_key(|closest| closest.changes.len());
+            self.closest = Some((config.clone(), closest));
+        }
+        self.closest.as_ref()?.1.as_ref()
+    }
+
     /// Reads the personal presets again, which may have changed on disk.
     pub fn refresh(&mut self, store: Option<&app_data::Store>) {
+        self.closest = None;
         self.entries = builtins();
         self.warnings = match store.map(app_data::Store::presets) {
             Some(Ok((personal, warnings))) => {
@@ -101,6 +128,23 @@ mod tests {
             e.config.validate().unwrap();
             e.config.signal_size((1216, 832)).unwrap();
         }
+    }
+
+    #[test]
+    fn the_closest_preset_is_the_one_the_settings_differ_least_from() {
+        let mut gallery = PresetGallery::new(None);
+        let mut config = default_preset().config;
+        let closest = gallery.closest(&config).unwrap();
+        assert_eq!(closest.name, "Super Win the Game");
+        assert!(closest.changes.is_empty());
+        config.bloom += 0.25;
+        let closest = gallery.closest(&config).unwrap();
+        assert_eq!(closest.name, "Super Win the Game");
+        assert_eq!(closest.changes.len(), 1);
+        assert_eq!(
+            gallery.closest(&Config::general()).unwrap().name,
+            "General image"
+        );
     }
 
     #[test]

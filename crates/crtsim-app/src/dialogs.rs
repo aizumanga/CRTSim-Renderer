@@ -235,7 +235,8 @@ impl App {
             Dialog::ContactSheet => self.export_contact_sheet(path),
             Dialog::Port(host) => match files::save_port(&path, host, &self.config) {
                 Ok(()) => {
-                    self.status = format!("Exported {} {}", host.port_name(), path.display());
+                    self.status = format!("Exported the {}", host.port_name());
+                    self.saved = Some(path);
                     self.error = None;
                 }
                 Err(e) => self.error = Some(format!("Cannot export {}: {e:#}", host.port_name())),

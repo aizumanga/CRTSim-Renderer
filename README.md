@@ -104,6 +104,11 @@ already exists; after confirmation, the app writes a complete temporary file and
 - **Super Win the Game**, the preset the app starts with and **Reset** returns to, is the public-reference defaults,
   including 256x224 signal resampling and saturation 1.35, with the game's own CRT options on top.
 - **General image** starts with square pixels, smooth resizing, contain fitting and saturation 1.0.
+- Under the source's name, **Open…** opens a file and **Export PNG…**, or **Export video…** for a video, saves the
+  result. Below them, **Preset** names the preset the settings are, or are closest to, with how many settings differ
+  from it, listed when pointed at; **Presets…** opens the gallery.
+- After an export, the status bar keeps the file's name until the next one, with **Show in folder**, which shows it
+  in Explorer or Finder, or opens its folder on Linux.
 - **Original / CRT / Compare** compares the source with the rendered tube. Drag the comparison divider. The CRT bends the image, so the two views are not geometrically registered.
 - **Pin look** keeps the settled picture and its settings; **Compare** then shows the pinned look left of the divider and
   the settings in use right of it, with the settings changed since listed above the picture. **Unpin look**, or opening

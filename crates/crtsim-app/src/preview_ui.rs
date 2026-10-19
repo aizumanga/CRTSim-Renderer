@@ -19,7 +19,8 @@ impl App {
             } else if ui
                 .add_enabled(self.preview.can_pin(), egui::Button::new("Pin look"))
                 .on_hover_text(
-                    "Keep this picture and its settings, to compare what you change next with                      them in Compare.",
+                    "Keep this picture and its settings, to compare what you change next with \
+                     them in Compare.",
                 )
                 .on_disabled_hover_text("Wait for the preview to settle, then pin it.")
                 .clicked()
@@ -220,7 +221,7 @@ impl App {
         ui.add_enabled_ui(enabled, |ui| {
             ui.horizontal_wrapped(|ui| {
                 toggle = ui
-                    .button(if playing { "Ⅱ Pause" } else { "▶ Play" })
+                    .button(if playing { "⏸ Pause" } else { "▶ Play" })
                     .clicked();
                 ui.small("Silent preview");
                 looped = ui
@@ -289,7 +290,8 @@ impl App {
         });
         ui.small(format!(
             "Showing frame {} · Left/Right arrow keys step frames unless a slider is \
-            selected (Esc lets go of it) · Export frame saves this settled CRT still as PNG.",
+            selected (Esc lets go of it) · Export → Current frame as PNG saves this \
+            settled CRT still.",
             timeline.shown + 1
         ));
         let pick = (seek && enabled && timeline.seeking()).then_some(timeline.picked);

@@ -67,7 +67,8 @@ impl App {
                     self.queue_finished(&result, finished.cancelled);
                     match result {
                         Ok(path) => {
-                            self.status = format!("Saved {}", path.display());
+                            self.status = "Export finished".into();
+                            self.saved = Some(path);
                             self.error = None;
                         }
                         Err(Failure::Cancelled) => {

@@ -127,6 +127,9 @@ struct App {
     dialog_receive: mpsc::Receiver<dialogs::Answer>,
     status: String,
     error: Option<String>,
+    /// The file the last export saved, which the status bar keeps until the next export, where
+    /// the previews that follow would otherwise replace the news within a moment.
+    saved: Option<PathBuf>,
     smoke: Option<Smoke>,
 }
 
@@ -208,6 +211,7 @@ impl App {
                 theme::Theme::default()
             }
         };
+        ctx.set_fonts(theme::fonts());
         theme.apply(ctx);
         let tool_windows = match store.as_ref().map(app_data::Store::tool_windows) {
             Some(Ok(windows)) => windows,
@@ -266,6 +270,7 @@ impl App {
             dialog_receive,
             status: "Preparing preview…".into(),
             error: storage_error,
+            saved: None,
             smoke,
         };
         app.ffmpeg.start_check(ctx);
@@ -407,6 +412,7 @@ impl App {
         queued: Option<&str>,
     ) {
         let cancel = Arc::new(AtomicBool::new(false));
+        self.saved = None;
         self.start(
             Job::Export {
                 export,
@@ -482,6 +488,21 @@ impl App {
             }
         } else if pressed(egui::Modifiers::NONE, SHORTCUT_EXPORT) {
             self.dialog(Dialog::Export, ctx);
+        }
+    }
+    /// The file the last export saved, and a way to it on the desktop.
+    fn saved_notice(&mut self, ui: &mut egui::Ui) {
+        let Some(path) = &self.saved else {
+            return;
+        };
+        ui.separator();
+        ui.label(format!("Saved {}", file_name(path)))
+            .on_hover_text(path.display().to_string());
+        #[cfg(not(target_arch = "wasm32"))]
+        if ui.small_button("Show in folder").clicked() {
+            if let Err(e) = files::show_in_folder(path) {
+                self.error = Some(format!("Cannot show the folder: {e:#}"));
+            }
         }
     }
     /// Remembered placement for one tool window. Copied out so the window's contents can
@@ -562,8 +583,15 @@ impl eframe::App for App {
                     self.error.is_some() || self.preview.error.is_some(),
                 );
                 ui.label(&self.status);
+                // A phone's status bar has room for one of the two.
+                if !chrome::narrow(ctx) {
+                    self.saved_notice(ui);
+                }
                 chrome::version(ui);
             });
+            if chrome::narrow(ctx) && self.saved.is_some() {
+                ui.horizontal(|ui| self.saved_notice(ui));
+            }
             if let Some(p) = self.lane.shown_progress() {
                 ui.add(
                     egui::ProgressBar::new(p.fraction)
@@ -693,6 +721,29 @@ mod tests {
             _ => panic!("expected a preview while exporting"),
         }
         assert!(app.lane.is_exporting() && app.preview.rendering());
+    }
+
+    #[test]
+    fn a_saved_file_stays_in_view_until_the_next_export() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(
+            &ctx,
+            worker::Gpu::Own(wgpu::Backends::PRIMARY),
+            Ok(app_data::Store::temporary()),
+            None,
+            None,
+        );
+        let (_work, _previews) = app.capture_jobs();
+        let (events, received) = mpsc::channel();
+        app.events = received;
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.png");
+        app.export(first.clone());
+        events.send(Event::Exported(Ok(first.clone()))).unwrap();
+        app.receive(&ctx);
+        assert_eq!(app.saved, Some(first));
+        app.export(dir.path().join("second.png"));
+        assert_eq!(app.saved, None);
     }
 
     #[test]

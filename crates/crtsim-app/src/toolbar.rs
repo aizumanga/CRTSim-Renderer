@@ -61,7 +61,8 @@ impl App {
                     if ui
                         .button("Copy link to this look")
                         .on_hover_text(
-                            "A link that opens these settings in the web app, to share them.                              The link holds the whole look.",
+                            "A link that opens these settings in the web app, to share them. \
+                             The link holds the whole look.",
                         )
                         .clicked()
                     {

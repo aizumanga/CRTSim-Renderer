@@ -191,6 +191,10 @@ impl Theme {
         style
             .text_styles
             .insert(egui::TextStyle::Heading, egui::FontId::proportional(18.));
+        // egui's 9 px is too small to read the notes and hints it is used for.
+        style
+            .text_styles
+            .insert(egui::TextStyle::Small, egui::FontId::proportional(11.));
         // The same style whatever the system's light or dark preference: the theme is the
         // person's choice here, not the system's.
         ctx.all_styles_mut(|each| *each = style.clone());
@@ -201,9 +205,22 @@ const fn rgb(r: u8, g: u8, b: u8) -> Color32 {
     Color32::from_rgb(r, g, b)
 }
 
+/// egui's own fonts, with its monospace font, Hack, behind the proportional ones too: they lack
+/// some symbols the interface writes, such as `→`, and egui draws a box for a missing one.
+pub fn fonts() -> egui::FontDefinitions {
+    let mut fonts = egui::FontDefinitions::default();
+    fonts
+        .families
+        .entry(egui::FontFamily::Proportional)
+        .or_default()
+        .push("Hack".into());
+    fonts
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use skrifa::MetadataProvider;
 
     #[test]
     fn theme_ids_are_unique_and_round_trip() {
@@ -221,5 +238,42 @@ mod tests {
             assert_eq!(style.spacing.item_spacing, egui::vec2(8., 8.));
         }
         assert_eq!(Theme::from_id("unknown"), None);
+    }
+
+    /// Every character outside ASCII that the interface's code writes, and the presets'
+    /// descriptions the gallery shows, has a glyph in the fonts the interface reads with.
+    #[test]
+    fn every_character_the_interface_writes_can_be_drawn() {
+        fn characters(path: &std::path::Path, found: &mut std::collections::BTreeSet<char>) {
+            if path.is_dir() {
+                for entry in std::fs::read_dir(path).unwrap() {
+                    characters(&entry.unwrap().path(), found);
+                }
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let code = std::fs::read_to_string(path).unwrap();
+                let lines = code.lines().filter(|l| !l.trim_start().starts_with("//"));
+                found.extend(lines.flat_map(str::chars).filter(|c| !c.is_ascii()));
+            }
+        }
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let mut written = Default::default();
+        characters(&crates.join("crtsim-app/src"), &mut written);
+        characters(&crates.join("crtsim-core/src/presets.rs"), &mut written);
+        characters(&crates.join("crtsim-core/src/settings.rs"), &mut written);
+        // Read from the fonts themselves: egui's own `has_glyph` answers no for any character
+        // in the font its replacement box comes from, such as ▶.
+        let fonts = fonts();
+        let faces: Vec<_> = fonts.families[&egui::FontFamily::Proportional]
+            .iter()
+            .map(|name| {
+                let data = &fonts.font_data[name];
+                skrifa::FontRef::from_index(&data.font, data.index).unwrap()
+            })
+            .collect();
+        let missing: String = written
+            .into_iter()
+            .filter(|&c| !faces.iter().any(|face| face.charmap().map(c).is_some()))
+            .collect();
+        assert!(missing.is_empty(), "no glyph for {missing:?}");
     }
 }

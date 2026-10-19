@@ -52,6 +52,50 @@ pub fn deliver(path: &Path, bytes: &[u8], mime: &str) -> Result<()> {
     }
 }
 
+/// Opens the folder holding `path` in the system's file manager, with the file selected in
+/// Explorer and Finder; elsewhere `xdg-open` opens the folder alone.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn show_in_folder(path: &Path) -> Result<()> {
+    use std::process::Command;
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        use std::os::windows::process::CommandExt;
+        let mut command = Command::new("explorer");
+        // Explorer reads `/select,` and the path after it as one argument, the path quoted.
+        command.raw_arg(format!("/select,\"{}\"", path.display()));
+        command
+    };
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg("-R").arg(path);
+        command
+    };
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let mut command = {
+        let folder = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        let mut command = Command::new("xdg-open");
+        command.arg(folder);
+        // The AppImage's own libraries are for this app; the file manager needs the system's.
+        if std::env::var_os("CRTSIM_APPIMAGE").is_some() {
+            if let Some(original) = std::env::var_os("CRTSIM_HOST_LD_LIBRARY_PATH") {
+                command.env("LD_LIBRARY_PATH", original);
+            }
+        }
+        command
+    };
+    let mut child = command
+        .spawn()
+        .with_context(|| format!("Cannot start {}", command.get_program().to_string_lossy()))?;
+    // Waited for elsewhere, so it does not linger; Explorer exits with 1 even when it opened
+    // the folder, so how it exits says nothing.
+    std::thread::spawn(move || child.wait());
+    Ok(())
+}
+
 /// `image` delivered as a PNG, carrying `preset` when there is one.
 pub fn save_png(path: &Path, image: RgbaImage, preset: Option<&Config>) -> Result<()> {
     ensure!(
