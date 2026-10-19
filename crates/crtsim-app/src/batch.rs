@@ -244,7 +244,7 @@ impl App {
             .queue
             .add(sources, folder, &settings.config, &settings.options);
         if let Err(e) = added {
-            self.error = Some(format!("{e:#}"));
+            self.notices.failed(Topic::Saving, format!("{e:#}"));
         }
         self.show_queue = true;
         self.save_session();
@@ -593,7 +593,7 @@ mod tests {
             "a failed dialog does not leave edits frozen"
         );
         assert_eq!(
-            app.error.as_deref(),
+            app.notices.error(Topic::Opening),
             Some("File chooser closed unexpectedly")
         );
     }

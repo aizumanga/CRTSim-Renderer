@@ -115,8 +115,11 @@ already exists; after confirmation, the app writes a complete temporary file and
   from it, listed when pointed at; **Changed only** beside it hides every setting that matches that preset, and
   **Presets…** opens the gallery. With **Live preview** off, **Refresh** renders the edits waiting; on, the preview
   already follows them and Refresh is not offered. Notes that hold whatever the settings are sit behind **ℹ Notes**.
-- After an export, the status bar keeps the file's name until the next one, with **Show in folder**, which shows it
-  in Explorer or Finder, or opens its folder on Linux.
+- The status bar's **notices** say what failed and what an export saved, one per topic: opening, saving, playback,
+  the preview, presets, app data and the renderer. News of a topic replaces that topic's older news and leaves the
+  rest, and each notice has its own **Dismiss**. A saved file's notice stays until the next export, with **Show in
+  folder**, which shows it in Explorer or Finder, or opens its folder on Linux; an FFmpeg failure offers
+  **FFmpeg setup…**.
 - **Original / CRT / Compare** compares the source with the rendered tube. Drag the comparison divider. The CRT bends the image, so the two views are not geometrically registered.
 - **Pin look** keeps the settled picture and its settings; **Compare** then shows the pinned look left of the divider and
   the settings in use right of it, with the settings changed since listed above the picture. **Unpin look**, or opening

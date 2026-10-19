@@ -193,7 +193,9 @@ impl App {
                     sources,
                     folder,
                 } => self.add_batch_jobs(&settings, sources, &folder),
-                Answer::Failed => self.error = Some("File chooser closed unexpectedly".into()),
+                Answer::Failed => self
+                    .notices
+                    .failed(Topic::Opening, "File chooser closed unexpectedly"),
                 #[cfg(target_arch = "wasm32")]
                 Answer::Picked { kind, name, bytes } => self.picked(kind, name, bytes),
             }
@@ -226,9 +228,11 @@ impl App {
                 {
                     Ok(()) => {
                         self.status = format!("Saved preset {}", path.display());
-                        self.error = None;
+                        self.notices.fixed(Topic::Saving);
                     }
-                    Err(e) => self.error = Some(format!("Cannot save preset: {e:#}")),
+                    Err(e) => self
+                        .notices
+                        .failed(Topic::Saving, format!("Cannot save preset: {e:#}")),
                 }
             }
             Dialog::Export => self.export(path),
@@ -236,10 +240,12 @@ impl App {
             Dialog::Port(host) => match files::save_port(&path, host, &self.config) {
                 Ok(()) => {
                     self.status = format!("Exported the {}", host.port_name());
-                    self.saved = Some(path);
-                    self.error = None;
+                    self.notices.saved(path);
                 }
-                Err(e) => self.error = Some(format!("Cannot export {}: {e:#}", host.port_name())),
+                Err(e) => self.notices.failed(
+                    Topic::Saving,
+                    format!("Cannot export {}: {e:#}", host.port_name()),
+                ),
             },
         }
     }
@@ -252,9 +258,10 @@ impl App {
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case(extension))
         {
-            self.error = Some(format!(
-                "Choose a .{extension} filename for the selected format."
-            ));
+            self.notices.failed(
+                Topic::Saving,
+                format!("Choose a .{extension} filename for the selected format."),
+            );
             return;
         }
         let Some(video) = self.source.timeline.as_ref().map(|t| t.video.clone()) else {
@@ -404,11 +411,11 @@ impl App {
                     self.video_options = options;
                 }
                 self.status = brought.status;
-                self.error = None;
+                self.notices.fixed(Topic::Opening);
                 // A look brought in, such as one a link opened, is the look chosen.
                 self.first_look = false;
             }
-            Err(error) => self.error = Some(error),
+            Err(error) => self.notices.failed(Topic::Opening, error),
         }
     }
 }

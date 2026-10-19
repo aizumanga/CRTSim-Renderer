@@ -7,6 +7,7 @@
 //! by its name rather than its 262,144 colours; a LUT imported from a file is too large for a
 //! link, which is refused, so that look is shared as a JSON preset instead.
 use crate::chrome::Fitted;
+use crate::notices::Topic;
 use anyhow::{bail, ensure, Context, Result};
 use crtsim_core::{config::Config, nes_luts};
 use std::{io::Read, sync::Arc};
@@ -160,9 +161,12 @@ impl crate::App {
                 self.status = "Copied a link to this look. Opening it shows the look in the \
                                web app."
                     .into();
-                self.error = None;
+                self.notices.fixed(Topic::Presets);
             }
-            Err(e) => self.error = Some(format!("Cannot share this look as a link: {e:#}")),
+            Err(e) => self.notices.failed(
+                Topic::Presets,
+                format!("Cannot share this look as a link: {e:#}"),
+            ),
         }
     }
 
@@ -179,7 +183,8 @@ impl crate::App {
                 true
             }
             Err(e) => {
-                self.error = Some(format!("Cannot open this link: {e:#}"));
+                self.notices
+                    .failed(Topic::Opening, format!("Cannot open this link: {e:#}"));
                 false
             }
         }

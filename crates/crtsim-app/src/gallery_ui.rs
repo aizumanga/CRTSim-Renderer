@@ -1,6 +1,7 @@
 //! The preset gallery and credits windows.
 use crate::chrome::Fitted;
 use crate::gallery::Confirm;
+use crate::notices::Topic;
 use crate::{chrome, gallery, model, thumbnails, App, Dialog};
 use crtsim_core::config::Config;
 use eframe::egui::{self, TextureHandle};
@@ -41,7 +42,7 @@ impl App {
         let open = chrome::tool_window(ctx, "Preset gallery", [600., 500.], &mut window, |ui| {
             ui.add_enabled_ui(!self.dialog_open, |ui| {
                 ui.label("Point at a preset to see it on your picture; click to apply it.");
-                if let Some(error) = &self.error {
+                if let Some(error) = self.notices.error(Topic::Presets) {
                     ui.colored_label(ui.visuals().error_fg_color, error);
                 }
                 ui.separator();
@@ -201,21 +202,25 @@ impl App {
         let name = self.presets.name.clone();
         // Asked before anything else, so no replacement is ever offered for one.
         if gallery::is_included(&name) {
-            self.error = Some(format!(
+            self.notices.failed(
+                Topic::Presets,
+                format!(
                 "“{name}” is an included preset, which cannot be replaced. Choose another name."
-            ));
+            ),
+            );
             return;
         }
         if !replace {
             match store.saved_preset(&name) {
                 Ok(Some(taken)) => {
                     self.presets.confirming = Some(Confirm::Replace(taken));
-                    self.error = None;
+                    self.notices.fixed(Topic::Presets);
                     return;
                 }
                 Ok(None) => {}
                 Err(e) => {
-                    self.error = Some(format!("Cannot save gallery preset: {e:#}"));
+                    self.notices
+                        .failed(Topic::Presets, format!("Cannot save gallery preset: {e:#}"));
                     return;
                 }
             }
@@ -232,10 +237,12 @@ impl App {
                 } else {
                     format!("Saved '{saved}' to My presets")
                 };
-                self.error = None;
+                self.notices.fixed(Topic::Presets);
                 self.refresh_gallery();
             }
-            Err(e) => self.error = Some(format!("Cannot save gallery preset: {e:#}")),
+            Err(e) => self
+                .notices
+                .failed(Topic::Presets, format!("Cannot save gallery preset: {e:#}")),
         }
     }
     fn delete_from_gallery(&mut self, name: &str) {
@@ -246,7 +253,7 @@ impl App {
         match store.delete_preset(name) {
             Ok(()) => {
                 self.status = format!("Deleted '{name}' from My presets");
-                self.error = None;
+                self.notices.fixed(Topic::Presets);
                 if self
                     .presets
                     .editing
@@ -256,7 +263,10 @@ impl App {
                     self.presets.editing = None;
                 }
             }
-            Err(e) => self.error = Some(format!("Cannot delete gallery preset: {e:#}")),
+            Err(e) => self.notices.failed(
+                Topic::Presets,
+                format!("Cannot delete gallery preset: {e:#}"),
+            ),
         }
         self.refresh_gallery();
     }
@@ -276,7 +286,7 @@ impl App {
                     );
                     ui.small("Up to 4096 bytes. Leave blank to remove the description.");
                     save = ui.button("Save description").clicked();
-                    if let Some(error) = &self.error {
+                    if let Some(error) = self.notices.error(Topic::Presets) {
                         ui.colored_label(ui.visuals().error_fg_color, error);
                     }
                 });
@@ -289,10 +299,12 @@ impl App {
                 match result {
                     Ok(()) => {
                         self.refresh_gallery();
-                        self.error = None;
+                        self.notices.fixed(Topic::Presets);
                         editing = false;
                     }
-                    Err(e) => self.error = Some(format!("Cannot save description: {e:#}")),
+                    Err(e) => self
+                        .notices
+                        .failed(Topic::Presets, format!("Cannot save description: {e:#}")),
                 }
             }
             self.presets.editing = editing.then_some((name, description));
@@ -353,9 +365,12 @@ impl App {
     pub(crate) fn welcome_read(&mut self) {
         if let Some(ref store) = self.store {
             if let Err(e) = store.acknowledge() {
-                self.error = Some(format!(
-                    "Could not remember the welcome message: {e:#}. It may appear next time."
-                ));
+                self.notices.failed(
+                    Topic::AppData,
+                    format!(
+                        "Could not remember the welcome message: {e:#}. It may appear next time."
+                    ),
+                );
             }
         }
         self.show_welcome = false;
@@ -528,8 +543,8 @@ mod tests {
             app.save_to_gallery(replace);
             assert_eq!(app.presets.confirming, None, "no replacement is offered");
             assert!(app
-                .error
-                .as_deref()
+                .notices
+                .error(Topic::Presets)
                 .is_some_and(|e| e.contains("included preset")));
         }
         let included = gallery::builtins()
@@ -552,7 +567,7 @@ mod tests {
         // Another name saves as before.
         app.presets.name = "My take on it".into();
         app.save_to_gallery(false);
-        assert_eq!(app.error, None);
+        assert_eq!(app.notices.error(Topic::Presets), None);
         assert!(app
             .presets
             .entries

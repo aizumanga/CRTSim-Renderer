@@ -1,6 +1,7 @@
 //! The session: the project the app saves every two seconds and offers to recover on the next
 //! start, and the project files opened and saved during it.
 use crate::chrome::Fitted;
+use crate::notices::Topic;
 use crate::{app_data, project, source, App, Dialog};
 use anyhow::Result;
 use app_data::Store;
@@ -111,7 +112,7 @@ impl App {
             return;
         };
         if let Some(error) = self.session.load(&store, !explicit_input) {
-            self.error = Some(error);
+            self.notices.failed(Topic::AppData, error);
         }
     }
 
@@ -134,7 +135,10 @@ impl App {
         // Nor while a project waits for its source, its settings not yet applied.
         let loading = self.lane.is_loading() || self.source.restoring();
         if let Err(e) = self.session.save(store.as_ref(), loading, snapshot) {
-            self.error = Some(format!("Session recovery could not be saved: {e:#}"));
+            self.notices.failed(
+                Topic::AppData,
+                format!("Session recovery could not be saved: {e:#}"),
+            );
         }
     }
 
@@ -149,7 +153,10 @@ impl App {
     /// `path` is the project open now; remembers it among the recent ones.
     fn opened_project(&mut self, path: PathBuf) {
         if let Err(e) = self.session.opened(path, self.store.as_ref()) {
-            self.error = Some(format!("Cannot save recent projects: {e:#}"));
+            self.notices.failed(
+                Topic::AppData,
+                format!("Cannot save recent projects: {e:#}"),
+            );
         }
     }
 
@@ -159,7 +166,9 @@ impl App {
                 self.status = format!("Saved project {}", path.display());
                 self.opened_project(path);
             }
-            Err(e) => self.error = Some(format!("Cannot save project: {e:#}")),
+            Err(e) => self
+                .notices
+                .failed(Topic::Saving, format!("Cannot save project: {e:#}")),
         }
     }
 
@@ -169,7 +178,9 @@ impl App {
                 self.restore_project(p);
                 self.opened_project(path);
             }
-            Err(e) => self.error = Some(format!("Cannot open project: {e:#}")),
+            Err(e) => self
+                .notices
+                .failed(Topic::Opening, format!("Cannot open project: {e:#}")),
         }
     }
 
@@ -184,8 +195,8 @@ impl App {
                 self.source_changed();
                 self.apply_project(project);
                 // Any error already showing stays, unless this one replaces it.
-                if error.is_some() {
-                    self.error = error;
+                if let Some(error) = error {
+                    self.notices.failed(Topic::Opening, error);
                 }
             }
         }
@@ -352,7 +363,7 @@ mod tests {
         let started = Instant::now();
         let waited = |app: &mut App| {
             app.receive(&ctx);
-            assert!(app.error.is_none(), "{:?}", app.error);
+            assert!(!app.notices.any_error(), "{:?}", app.notices);
             assert!(started.elapsed() < Duration::from_secs(180), "stalled");
             std::thread::sleep(Duration::from_millis(5));
         };

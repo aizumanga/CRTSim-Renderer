@@ -52,7 +52,7 @@ impl App {
             return;
         }
         let thumbnails_pending = self.thumbnails_pending();
-        let (error, preview_error) = (&self.error, &self.preview.error);
+        let (error, preview_error) = (&self.notices, &self.preview.error);
         let Some(smoke) = &mut self.smoke else {
             return;
         };

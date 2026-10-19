@@ -240,7 +240,10 @@ impl App {
                 .app_data()
                 .map(|store| store.set_check_updates_at_start(at_start))
             {
-                self.error = Some(format!("Could not remember that choice: {e:#}"));
+                self.notices.failed(
+                    Topic::AppData,
+                    format!("Could not remember that choice: {e:#}"),
+                );
             }
         }
     }

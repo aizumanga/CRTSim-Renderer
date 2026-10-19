@@ -258,7 +258,8 @@ impl App {
         {
             Ok(c) => c,
             Err(e) => {
-                self.error = Some(format!("Cannot play: {e:#}"));
+                self.notices
+                    .failed(Topic::Playback, format!("Cannot play: {e:#}"));
                 return;
             }
         };
@@ -301,7 +302,7 @@ impl App {
         let tick = playback.tick(Instant::now());
         let failed = playback.failed();
         if let Some(error) = tick.error {
-            self.error = Some(error);
+            self.notices.failed(Topic::Playback, error);
         }
         if let Some(frame) = tick.frame {
             self.show_playing(ctx, frame);
@@ -573,7 +574,7 @@ mod tests {
         feed.frames.send(Err("driver failed".into())).unwrap();
         drop(feed);
         app.tick_playback(&ctx);
-        assert!(app.playback.is_none() && app.error.is_some());
+        assert!(app.playback.is_none() && app.notices.error(Topic::Playback).is_some());
         assert!(jobs.try_iter().next().is_none());
     }
 
@@ -750,7 +751,7 @@ mod tests {
         let started = Instant::now();
         let waited = |app: &mut App| {
             app.receive(&ctx);
-            assert!(app.error.is_none(), "{:?}", app.error);
+            assert!(!app.notices.any_error(), "{:?}", app.notices);
             assert!(started.elapsed() < Duration::from_secs(120), "stalled");
             std::thread::sleep(5 * MS);
         };
@@ -799,7 +800,7 @@ mod tests {
         let waited = |app: &mut App| {
             app.receive(&ctx);
             app.tick_playback(&ctx);
-            assert!(app.error.is_none(), "{:?}", app.error);
+            assert!(!app.notices.any_error(), "{:?}", app.notices);
             assert!(started.elapsed() < Duration::from_secs(120), "stalled");
             std::thread::sleep(5 * MS);
         };
@@ -858,7 +859,7 @@ mod tests {
         let waited = |app: &mut App| {
             app.receive(&ctx);
             app.tick_playback(&ctx);
-            assert!(app.error.is_none(), "{:?}", app.error);
+            assert!(!app.notices.any_error(), "{:?}", app.notices);
             assert!(started.elapsed() < Duration::from_secs(120), "stalled");
             std::thread::sleep(5 * MS);
         };

@@ -123,7 +123,7 @@ impl App {
                     "Collection, credits & license",
                     "https://github.com/mamedev/mame-goodies/tree/master/bgfx/lut/nes",
                 );
-                if let Some(error) = &self.error {
+                if let Some(error) = self.notices.error(Topic::Presets) {
                     ui.colored_label(ui.visuals().error_fg_color, error);
                 }
             });
@@ -146,7 +146,7 @@ impl App {
         }
         if remove {
             self.replace_config(with_lut(&self.config, None));
-            self.error = None;
+            self.notices.fixed(Topic::Presets);
             self.status = "LUT removed".into();
         } else if let Some(index) = selected {
             match self.luts.lut(index) {
@@ -156,10 +156,13 @@ impl App {
                     if config != self.config {
                         self.replace_config(config);
                     }
-                    self.error = None;
+                    self.notices.fixed(Topic::Presets);
                     self.status = format!("Applied {name}");
                 }
-                Err(error) => self.error = Some(format!("Cannot load included LUT: {error:#}")),
+                Err(error) => self.notices.failed(
+                    Topic::Presets,
+                    format!("Cannot load included LUT: {error:#}"),
+                ),
             }
         }
     }

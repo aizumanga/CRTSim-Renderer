@@ -1,4 +1,5 @@
 use crate::chrome::Fitted;
+use crate::notices::Topic;
 use crate::{
     widgets::{choice, Keyed},
     App, Dialog,
@@ -330,7 +331,7 @@ impl App {
                 ExportFormat::Animation(format) => draft.animation.validate(format),
             };
             if let Err(e) = valid {
-                self.error = Some(e.to_string());
+                self.notices.failed(Topic::Saving, e.to_string());
                 self.export_dialog = Some(draft);
                 return;
             }
@@ -798,7 +799,7 @@ mod tests {
             ))
             .unwrap();
         app.receive(&ctx);
-        assert!(app.error.take().unwrap().contains(".gif"));
+        assert!(app.notices.error(Topic::Saving).unwrap().contains(".gif"));
         assert!(receive.try_recv().is_err());
 
         app.dialog_send
