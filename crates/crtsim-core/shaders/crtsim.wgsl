@@ -10,11 +10,11 @@ struct Params {
     lighting: vec4<f32>, // diffuse, specular, power, rim
     surface: vec4<f32>, // dimming, reflection, saturation, unused
     bezel: vec4<f32>, // colour, reflection as on the screen
-    light: vec4<f32>,
-    camera: vec4<f32>,
-    bloom: vec4<f32>, // amount, power, spread, unused
+    light: vec4<f32>, // position, the glass's stretch across from the original's
+    camera: vec4<f32>, // position, the tube's width over its height
+    bloom: vec4<f32>, // amount, power, spread, the tube's widening either side
     processing: vec4<f32>, // linear-light surface/bloom path, interlaced, field scanned this tick, screen only
-    backdrop: vec4<f32>, // colour where neither the glass nor the bezel is
+    backdrop: vec4<f32>, // colour where neither the glass nor the bezel is, the view's widening
 };
 @group(0) @binding(0) var<uniform> p: Params;
 @group(0) @binding(1) var source: texture_2d<f32>;
@@ -156,11 +156,20 @@ const BEZEL_STEPS = 32;
 const BEZEL_HALVINGS = 7;
 const NOTHING = 1e9;
 
+// A tube other than the original's 4:3 is as much wider, or narrower, either side: its glass
+// the original's stretched across, its bezel's corners and sides moved out, or in, and its top
+// and bottom running between them, as the original's middle.
+// Both are worked out with the settings, so the original's are exactly none and 1.
+fn widened() -> f32 { return p.bloom.w; }
+fn stretched() -> f32 { return p.light.w; }
+// Where y across a tube this wide falls across the original's.
+fn original_y(y: f32) -> f32 { return sign(y)*max(abs(y)-widened(),0.); }
+
 fn pair(hi: f32, lo: f32) -> f32 { return (round(hi*255.)*256.+round(lo*255.))/65534.; }
 // Where (y, z) falls on the bezel's grid, in texels.
 fn bezel_texel(yz: vec2<f32>) -> vec2<f32> {
     let size=vec2<f32>(textureDimensions(bezel_shape));
-    return (BEZEL_HALF-yz)/(2.*BEZEL_HALF)*size-vec2(0.5);
+    return (BEZEL_HALF-vec2(original_y(yz.x),yz.y))/(2.*BEZEL_HALF)*size-vec2(0.5);
 }
 fn bezel_load(t: texture_2d<f32>, xy: vec2<i32>) -> vec4<f32> {
     let size=vec2<i32>(textureDimensions(t));
@@ -235,23 +244,30 @@ fn bezel_hit(ray: vec3<f32>) -> f32 {
 // across the bezel's whole depth.
 fn may_meet_bezel(ray: vec3<f32>) -> bool {
     let near=abs(along(ray,BEZEL_NEAR).yz); let far=abs(along(ray,BEZEL_FAR).yz);
-    return any(max(near,far)>=BEZEL_OPENING);
+    return any(max(near,far)>=BEZEL_OPENING+vec2(widened(),0.));
 }
 // The glass and its bezel, each pixel showing whichever its ray meets first.
 @fragment fn surface(q: Quad) -> @location(0) vec4<f32> {
     let ndc=vec2(q.position.x/p.size.z*2.-1.,1.-q.position.y/p.size.w*2.);
-    // The camera looks along +x from 1/tan(fov/2) in front, with z up and -y to the right.
-    let spread=-1./p.camera.x;
-    let ray=normalize(vec3(1.,-ndc.x*spread*p.size.z/p.size.w,ndc.y*spread));
+    // The camera looks along +x from 1/tan(fov/2) in front, with z up and -y to the right. A
+    // tube wider than the picture is framed as a 4:3 tube is in a picture of the tube's shape.
+    let spread=-1./p.camera.x*p.backdrop.w;
+    // The ray where the glass is the original's sphere, across `stretched` times narrower;
+    // along any ray, the bezel steps by depth alone, so it takes the ray stretched back.
+    let s=stretched();
+    let traced=normalize(vec3(1.,-ndc.x*spread*p.size.z/p.size.w/s,ndc.y*spread));
+    let ray=vec3(traced.x,traced.y*s,traced.z);
 
     let to=p.camera.xyz-GLASS_CENTRE;
-    let b=dot(to,ray);
+    let b=dot(to,traced);
     let reach=b*b-dot(to,to)+GLASS_RADIUS*GLASS_RADIUS;
-    let glass_at=p.camera.xyz+ray*(-b-sqrt(max(reach,0.)));
+    let sphere_at=p.camera.xyz+traced*(-b-sqrt(max(reach,0.)));
+    let glass_at=vec3(sphere_at.x,sphere_at.y*s,sphere_at.z);
     var glass: Surface;
-    glass.uv=vec2((4./3.-glass_at.y)*0.375,(1.-glass_at.z)*0.5);
-    let baked=glass_baked(glass.uv);
-    glass.normal=(glass_at-GLASS_CENTRE)/GLASS_RADIUS;
+    // The picture spans the whole glass; its outline and shading keep the original's corners.
+    glass.uv=vec2((4./3.-sphere_at.y)*0.375,(1.-sphere_at.z)*0.5);
+    let baked=glass_baked(vec2((4./3.-original_y(glass_at.y))*0.375,glass.uv.y));
+    glass.normal=(sphere_at-GLASS_CENTRE)/GLASS_RADIUS*vec3(1.,1./s,1.);
     glass.color=vec4(vec3(baked.x),1.);
     glass.reflection=0.;
     glass.camera=p.camera.xyz-glass_at; glass.light=p.light.xyz-glass_at;
@@ -265,6 +281,13 @@ fn may_meet_bezel(ray: vec3<f32>) -> bool {
     let bezel_at=along(ray,min(bezel_depth,BEZEL_FAR));
     var bezel: Surface;
     bezel.uv=bezel_pairs(bezel_uv,bezel_at.yz);
+    if widened()!=0. {
+        // The point of the picture the bezel reflects, moved with it: its UV is the screen's
+        // across the original's glass.
+        let a=p.camera.w;
+        let screen_y=4./3.-bezel.uv.x*8./3.+bezel_at.y-original_y(bezel_at.y);
+        bezel.uv.x=(a-screen_y)/(2.*a);
+    }
 
     // How each surface's uv changes between pixels, taken here, where every pixel runs, so
     // that each pixel need only shade the surface it shows.

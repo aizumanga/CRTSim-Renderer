@@ -259,7 +259,7 @@ mod tests {
             "#define CRTSIM_BEZEL_WIDTH 1024\n",
             "#ifndef CRTSIM_SIGNAL_HEIGHT\n#define CRTSIM_SIGNAL_HEIGHT 224\n#endif\n",
             "#define CRTSIM_TABLE_FILE \"crtsim-renderer/no-table.png\"\n",
-            "uniform int CRTSIM_FIT <\n    ui_type = \"combo\";\n    ui_label = \"Fit on 4:3 tube\";\n    ui_items = \"original\\0contain\\0cover\\0stretch\\0\";\n> = 0;\n",
+            "uniform int CRTSIM_FIT <\n    ui_type = \"combo\";\n    ui_label = \"Fit on the tube\";\n    ui_items = \"original\\0contain\\0cover\\0stretch\\0\";\n> = 0;\n",
             "uniform float CRTSIM_BLOOM <\n    ui_type = \"slider\";\n    ui_label = \"Bloom amount\";\n",
         ] {
             assert!(header.contains(expected), "{expected:?} in\n{header}");

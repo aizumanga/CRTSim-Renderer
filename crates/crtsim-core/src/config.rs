@@ -150,6 +150,10 @@ pub struct Config {
     pub persistence: [f32; 3],
     pub overscan: f32,
     pub barrel: f32,
+    /// The picture tube's width over its height: the original's 4:3, or wider, as later sets
+    /// were, to 16:9, or narrower, to a portrait 3:4. The glass is the original's stretched
+    /// across; the bezel keeps its corners and sides, its top and bottom running between them.
+    pub tube_aspect: f32,
     pub saturation: f32,
     pub mask_brightness: f32,
     pub mask_opacity: f32,
@@ -212,6 +216,7 @@ impl Default for Config {
             persistence: [0.7, 0.525, 0.42],
             overscan: 1.,
             barrel: -0.115,
+            tube_aspect: 4. / 3.,
             saturation: 1.35,
             mask_brightness: 0.45,
             mask_opacity: 1.,
@@ -458,8 +463,9 @@ impl Config {
     pub fn grades(&self) -> bool {
         self.hue != 0. || self.chroma != 1.
     }
+    /// How the picture's coordinates scale across the tube, as `fit` places it there.
     pub fn uv_scale(&self, signal: (u32, u32)) -> [f32; 2] {
-        let ratio = signal.0 as f32 / signal.1 as f32 * self.pixel_aspect / (4. / 3.);
+        let ratio = signal.0 as f32 / signal.1 as f32 * self.pixel_aspect / self.tube_aspect;
         match self.fit {
             Fit::Reference => [1., ratio],
             Fit::Stretch => [1., 1.],

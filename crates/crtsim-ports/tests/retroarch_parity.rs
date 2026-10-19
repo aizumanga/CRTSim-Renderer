@@ -32,7 +32,7 @@ fn port(case: &Case, folder: &Path) -> RgbaImage {
         picture = Some(
             port.render(
                 input,
-                parity::OUTPUT,
+                parity::output(case),
                 *frames,
                 frame_time_us,
                 parity::aspect(case),

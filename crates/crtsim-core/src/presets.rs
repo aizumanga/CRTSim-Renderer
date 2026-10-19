@@ -112,6 +112,19 @@ pub fn included() -> Vec<Preset> {
             },
         ),
         entry(
+            "Widescreen television",
+            "A 16:9 tube, as the last sets had, showing 480 interlaced rows with the composite \
+             phase alternating each field: for widescreen video.",
+            Config {
+                tube_aspect: 16. / 9.,
+                signal: "480p".into(),
+                interlace: true,
+                phase: Phase::Alternating,
+                mask_repeats: MaskRepeats::Signal,
+                ..general.clone()
+            },
+        ),
+        entry(
             "PAL 288p",
             "288 progressive rows, as consoles and computers drove a PAL set. PAL's \
              line-alternating color is not simulated; gentler, stable artifacts stand in for it.",

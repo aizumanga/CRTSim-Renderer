@@ -195,7 +195,7 @@ use Section::*;
 pub static SETTINGS: &[Setting] = &[
     Setting::other("signal", "Signal"),
     Setting::other("output", "Export size"),
-    Setting::other("fit", "Fit on 4:3 tube"),
+    Setting::other("fit", "Fit on the tube"),
     Setting::other("filter", "Resize filter"),
     Setting::numbers(
         "pixel_aspect",
@@ -279,6 +279,11 @@ pub static SETTINGS: &[Setting] = &[
         "overscan",
         "Overscan",
         Numbers::slider(Glass, access!(overscan), 0.1..=3.),
+    ),
+    Setting::numbers(
+        "tube_aspect",
+        "Tube aspect (width ÷ height)",
+        Numbers::slider(Glass, access!(tube_aspect), 0.75..=2.),
     ),
     Setting::numbers(
         "dimming",

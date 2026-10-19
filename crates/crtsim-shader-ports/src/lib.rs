@@ -354,6 +354,7 @@ const NUMBERS: &[(&str, &[&str], &[Host])] = &[
     ("ntsc_blending", &["CRTSIM_NTSC_BLENDING"], ALL),
     ("barrel", &["CRTSIM_BARREL"], ALL),
     ("overscan", &["CRTSIM_OVERSCAN"], ALL),
+    ("tube_aspect", &["CRTSIM_TUBE_ASPECT"], ALL),
     ("dimming", &["CRTSIM_DIMMING"], ALL),
     ("fov", &["CRTSIM_FOV"], ALL),
     ("mask_opacity", &["CRTSIM_MASK_OPACITY"], ALL),
@@ -513,7 +514,7 @@ pub fn parameters(host: Host) -> Vec<Parameter> {
         ),
         choice(
             "CRTSIM_FIT",
-            "Fit on 4:3 tube",
+            "Fit on the tube",
             &["original", "contain", "cover", "stretch"],
             ALL,
             |c| match c.fit {

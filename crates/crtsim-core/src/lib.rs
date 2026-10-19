@@ -62,6 +62,30 @@ struct Params {
     backdrop: [f32; 4],
 }
 
+/// What a tube's aspect makes of the original's 4:3 one, worked out here so that for 4:3 they
+/// are exactly the original's, whatever a GPU's division rounds to.
+struct Tube {
+    /// The glass across, over the original's.
+    stretch: f32,
+    /// How much wider each side is than the original's, or narrower where it is negative.
+    widening: f32,
+    /// How much more the view takes in, so a tube wider than an output of `output`'s shape is
+    /// framed as a 4:3 one is in an output of the tube's shape; 1 for any other.
+    framing: f32,
+}
+
+impl Tube {
+    fn new(aspect: f32, output: (u32, u32)) -> Self {
+        const ORIGINAL: f32 = 4. / 3.;
+        let output = output.0 as f32 / output.1 as f32;
+        Self {
+            stretch: aspect / ORIGINAL,
+            widening: aspect - ORIGINAL,
+            framing: (aspect / output.max(ORIGINAL)).max(1.),
+        }
+    }
+}
+
 /// The size of `Params`, which each settings slot holds.
 const PARAMS_SIZE: Option<std::num::NonZeroU64> =
     std::num::NonZeroU64::new(std::mem::size_of::<Params>() as u64);
@@ -77,6 +101,7 @@ impl Params {
             glam::Mat4::perspective_rh(fov, output.0 as f32 / output.1 as f32, 0.1, 100.);
         let uv = c.uv_scale(signal);
         let mask = c.mask_repeats.resolve(signal);
+        let tube = Tube::new(c.tube_aspect, output);
         let flag = |on: bool| if on { 1. } else { 0. };
         Self {
             mvp: (projection * view).to_cols_array_2d(),
@@ -112,10 +137,10 @@ impl Params {
                 c.light_position[0],
                 c.light_position[1],
                 c.light_position[2],
-                0.,
+                tube.stretch,
             ],
-            camera: [camera.x, camera.y, camera.z, 0.],
-            bloom: [c.bloom, c.bloom_power, c.bloom_spread, 0.],
+            camera: [camera.x, camera.y, camera.z, c.tube_aspect],
+            bloom: [c.bloom, c.bloom_power, c.bloom_spread, tube.widening],
             processing: [
                 flag(c.color_mode == ColorMode::LinearLight),
                 flag(c.interlace),
@@ -126,7 +151,7 @@ impl Params {
                 c.backdrop_color[0],
                 c.backdrop_color[1],
                 c.backdrop_color[2],
-                0.,
+                tube.framing,
             ],
         }
     }

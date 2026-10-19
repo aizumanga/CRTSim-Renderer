@@ -108,7 +108,7 @@ fn c_float(value: f32) -> String {
 pub fn header() -> String {
     let mut out = String::from(
         "/* CC0. Written by CRTSim Renderer's exporter from its settings table; edit that, not\n \
-         * this. `cargo test -p crtsim-core obs` says when it is out of date, and\n \
+         * this. `cargo test -p crtsim-shader-ports obs` says when it is out of date, and\n \
          * CRTSIM_WRITE_OBS_HEADER=1 rewrites it. */\n\n\
          #pragma once\n\n\
          #include <stdbool.h>\n\

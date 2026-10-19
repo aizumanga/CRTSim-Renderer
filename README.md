@@ -36,7 +36,7 @@ Right after the welcome, the first time, the app offers three looks to start fro
 Soft television, each as a thumbnail of the picture open; choosing one applies it, and closing the window keeps the
 look in use.
 
-**Preset gallery** includes Super Win the Game, the preset the app starts with, Super Win the Game NES palette, General image, Soft television, Clean RGB, Pixel art 240p, NTSC 240p, NTSC 480i, PAL 288p, PAL 576i, Warm analog and Linear light.
+**Preset gallery** includes Super Win the Game, the preset the app starts with, Super Win the Game NES palette, General image, Soft television, Clean RGB, Pixel art 240p, NTSC 240p, NTSC 480i, Widescreen television, PAL 288p, PAL 576i, Warm analog and Linear light.
 The NTSC and PAL presets set the line count, interlacing and composite phase. The artifact model is the original NTSC-derived one, so the PAL presets approximate PAL's line-alternating color with gentler, stable artifacts rather than simulating it. Video frame rate is chosen separately in Export → Video.
 Each preset shows a thumbnail rendered from your current image. Point at a preset to preview it on the full image without applying it (nothing is changed or added to Undo), and click to apply it.
 Enter a name and choose **Save current** to add your exact settings to **My presets**; they reappear after restarting. Use **Edit description** on any personal preset to add, change or clear its description, and **Delete** to remove it, after confirming.
@@ -377,9 +377,16 @@ cargo run --release -p crtsim-cli -- render --input image.png --config general.j
 
 `--signal` changes dimensions only: it does not silently change pixel aspect, filtering or fit settings.
 Use `config --general` for normal images: it writes the desktop's General image preset. Plain `config` generates the original-style configuration (8:7 pixel aspect, nearest filtering).
-`fit` controls placement on a fixed 4:3 tube: `reference`, `contain`, `cover`, or `stretch`.
+`fit` controls placement on the tube: `reference`, `contain`, `cover`, or `stretch`.
 Contain mode prevents rectangular aspect cropping, but the rounded glass and barrel distortion can still hide extreme corners.
-A widescreen output canvas does not turn the tube itself into a widescreen tube.
+A widescreen output canvas does not turn the tube itself into a widescreen tube; **Tube** does.
+
+**Tube** (`"tube_aspect"`, the tube's width over its height, under Image & output and Glass) makes the tube the
+original's 4:3, or wider, to the 16:9 of the last sets, or narrower, to a portrait 3:4 such as an arcade cabinet's
+turned monitor; anything from 0.75 to 2. The glass is the original's sphere stretched across, keeping its rounded
+corners, and the bezel keeps its corners and sides, its top and bottom running between them. A tube wider than the
+output is framed as a 4:3 tube is in an output of the tube's shape. **Widescreen television** is a 16:9 tube showing
+480 interlaced rows. The shader ports carry it.
 
 Hard safeguards: maximum 64 megapixels and 16384 pixels per side, additionally limited by the adapter and a conservative 1.5 GB job estimate.
 This is a prototype safety policy, not a universal GPU limit or a promise that allocations cannot fail. Very large inputs are rejected before decoding;

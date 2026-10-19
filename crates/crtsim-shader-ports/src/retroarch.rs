@@ -317,7 +317,7 @@ mod tests {
             "#pragma parameter CRTSIM_PERSISTENCE_R \"Red persistence\" 0.7 0 0.999 0.01\n"
         ));
         assert!(pragmas.contains(
-            "#pragma parameter CRTSIM_FIT \"Fit on 4:3 tube (original, contain, cover, stretch)\" 0 0 3 1\n"
+            "#pragma parameter CRTSIM_FIT \"Fit on the tube (original, contain, cover, stretch)\" 0 0 3 1\n"
         ));
         assert!(pragmas.contains("CRTSIM_MASK_ROWS \"Mask rows (0 follows the signal)\" 0 "));
         file(&files, "shaders/crtsim-renderer/passes/surface.inc");

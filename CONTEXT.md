@@ -59,6 +59,10 @@ reads its host. See [the decision](docs/adr/0005-the-ports-share-one-translation
 from one table for every port (`crtsim_shader_ports::parameters`). A choice is numbered from 0;
 some hosts read only some parameters.
 
+**Tube aspect**: the picture tube's width over its height (`Config::tube_aspect`): the original's
+4:3, or a wider or narrower tube made from it, its glass stretched across and its bezel's sides
+moved, so its corners stay the original's.
+
 **Bezel**: the moulded surround of the picture tube, lit and reflecting the glass.
 _Avoid_: frame, which already means a picture in a sequence.
 
