@@ -112,7 +112,9 @@ already exists; after confirmation, the app writes a complete temporary file and
 - **General image** starts with square pixels, smooth resizing, contain fitting and saturation 1.0.
 - Under the source's name, **Open…** opens a file and **Export PNG…**, or **Export video…** for a video, saves the
   result. Below them, **Preset** names the preset the settings are, or are closest to, with how many settings differ
-  from it, listed when pointed at; **Presets…** opens the gallery.
+  from it, listed when pointed at; **Changed only** beside it hides every setting that matches that preset, and
+  **Presets…** opens the gallery. With **Live preview** off, **Refresh** renders the edits waiting; on, the preview
+  already follows them and Refresh is not offered. Notes that hold whatever the settings are sit behind **ℹ Notes**.
 - After an export, the status bar keeps the file's name until the next one, with **Show in folder**, which shows it
   in Explorer or Finder, or opens its folder on Linux.
 - **Original / CRT / Compare** compares the source with the rendered tube. Drag the comparison divider. The CRT bends the image, so the two views are not geometrically registered.

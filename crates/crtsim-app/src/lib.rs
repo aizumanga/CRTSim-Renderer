@@ -104,6 +104,10 @@ struct App {
     tool_windows_saved: app_data::Layout,
     config: Config,
     history: model::History,
+    /// Whether the panel shows only the settings that differ from the preset it names.
+    changed_only: bool,
+    /// The settings Changed only shows, kept while a pointer is down.
+    changes_shown: std::collections::HashSet<&'static str>,
     /// What is open, and the picture it gives.
     source: source::Source,
     /// The CRT picture on screen, and when to render the next one.
@@ -255,6 +259,8 @@ impl App {
             tool_windows_saved: tool_windows.clone(),
             tool_windows,
             history: model::History::new(config.clone()),
+            changed_only: false,
+            changes_shown: Default::default(),
             config,
             source: source::Source::new(ctx),
             preview: preview::Preview::new(jobs.preview_lane(), render_state, Instant::now()),

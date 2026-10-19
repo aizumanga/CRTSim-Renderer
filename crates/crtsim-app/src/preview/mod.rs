@@ -271,6 +271,10 @@ impl Preview {
     }
 
     /// Live preview: preview every edit as it happens, rather than on Refresh.
+    pub fn live(&self) -> bool {
+        self.schedule.live
+    }
+
     pub fn live_mut(&mut self) -> &mut bool {
         &mut self.schedule.live
     }

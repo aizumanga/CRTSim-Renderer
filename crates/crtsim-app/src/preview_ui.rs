@@ -1,5 +1,5 @@
 //! The preview area: the rendered picture, its comparison split and the video controls.
-use crate::widgets::{choice, show_image, Keyed};
+use crate::widgets::{choice, notes, show_image, Keyed};
 use crate::*;
 
 impl App {
@@ -30,12 +30,14 @@ impl App {
             }
             ui.separator();
             ui.checkbox(self.preview.live_mut(), "Live preview");
-            if ui
-                .add_enabled(
-                    !self.preview.rendering() && !self.lane.is_loading(),
-                    egui::Button::new("Refresh"),
-                )
-                .clicked()
+            // Live, the preview already follows every change; off, Refresh catches it up.
+            if !self.preview.live()
+                && ui
+                    .add_enabled(
+                        !self.preview.rendering() && !self.lane.is_loading(),
+                        egui::Button::new("Refresh"),
+                    )
+                    .clicked()
             {
                 self.refresh_preview();
             }
@@ -61,7 +63,8 @@ impl App {
                     .show(ui, &mut self.zoom, |s| s.text("Zoom"));
             }
         });
-        ui.small("Preview monitor").on_hover_text(
+        notes(
+            ui,
             "Drag the divider in Compare. Preview quality never changes \
             export resolution. Inspect mask detail at Export resolution \
             and 1× zoom.",

@@ -3,6 +3,8 @@ use crtsim_core::{config::Config, settings};
 /// One setting that differs between two looks, written for a person to read.
 #[derive(Debug, PartialEq)]
 pub struct Difference {
+    /// The setting's key in preset JSON, as `settings::SETTINGS` has it.
+    pub key: &'static str,
     pub setting: String,
     pub from: String,
     pub to: String,
@@ -35,6 +37,7 @@ pub fn differences(from: &Config, to: &Config) -> Vec<Difference> {
                 (at(&before), at(&after))
             };
             (was != now).then(|| Difference {
+                key: setting.key,
                 setting: setting.label.into(),
                 from: was,
                 to: now,
@@ -110,6 +113,7 @@ mod tests {
         assert_eq!(
             find("Signal"),
             Some(&Difference {
+                key: "signal",
                 setting: "Signal".into(),
                 from: "auto".into(),
                 to: "original".into(),

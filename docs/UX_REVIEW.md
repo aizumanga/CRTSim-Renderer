@@ -198,6 +198,7 @@ Across: *effort*, judged from the code it touches.
 Then H, I, J and K together, as one pass over the panel and gallery; then N, which the preset
 line makes easier, since the picker can say "Preset: General image" afterwards; then M, which
 the save notice starts; then O and P. L waits until the batch queue is next worked on.
+H, I, J and K are done too.
 
 **Open questions**, since answered
 - Should the first-run picker be part of the welcome window, or the step after it? The credits
