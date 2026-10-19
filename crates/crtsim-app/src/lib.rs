@@ -835,7 +835,7 @@ mod tests {
         let (receive, _previews) = app.capture_jobs();
         let dir = tempfile::tempdir().unwrap();
         app.config.output = "4k".into();
-        app.preview.quality = Some(800);
+        app.preview.quality = preview::Quality::new(preview::Choice::Fixed(Some(800)));
         let source = app.source.input().clone();
         let expected = app.config.clone();
         app.export(dir.path().join("rendered.png"));

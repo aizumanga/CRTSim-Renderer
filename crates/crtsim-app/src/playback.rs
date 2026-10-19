@@ -252,10 +252,10 @@ impl App {
         }
         let (video, time) = (timeline.video.clone(), from.unwrap_or(timeline.time));
         self.stop_playback();
-        let config = match self
-            .config
-            .with_max_output_side(self.source.input().dimensions(), self.preview.quality)
-        {
+        let config = match self.config.with_max_output_side(
+            self.source.input().dimensions(),
+            self.preview.quality.side(),
+        ) {
             Ok(c) => c,
             Err(e) => {
                 self.notices
@@ -282,9 +282,10 @@ impl App {
         let Some(playback) = &self.playback else {
             return;
         };
-        let config = self
-            .config
-            .with_max_output_side(self.source.input().dimensions(), self.preview.quality);
+        let config = self.config.with_max_output_side(
+            self.source.input().dimensions(),
+            self.preview.quality.side(),
+        );
         if config.is_ok_and(|config| playback.retune(config)) {
             return;
         }
@@ -686,7 +687,7 @@ mod tests {
         let input = app.source.input().dimensions();
         let config = app
             .config
-            .with_max_output_side(input, app.preview.quality)
+            .with_max_output_side(input, app.preview.quality.side())
             .unwrap();
         let output = config.output_size(input).unwrap();
         let (playback, feed) = Playback::new(&video(10., input), 0., output, config, false);
@@ -697,7 +698,7 @@ mod tests {
         assert_eq!(feed.settings.get().bloom, 0.);
         // A smaller preview needs a new sequence. Without a video open there is nothing to
         // start again, which leaves it stopped.
-        app.preview.quality = Some(800);
+        app.preview.quality = preview::Quality::new(preview::Choice::Fixed(Some(800)));
         app.changed();
         assert!(app.playback.is_none() && feed.cancel.load(Ordering::Relaxed));
     }
@@ -877,7 +878,7 @@ mod tests {
         while time(&app) < 0.6 {
             waited(&mut app);
         }
-        app.preview.quality = Some(320);
+        app.preview.quality = preview::Quality::new(preview::Choice::Fixed(Some(320)));
         app.changed();
         let restarted_at = time(&app);
         assert!(app.playback.is_some(), "a new size starts it again");

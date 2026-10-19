@@ -43,17 +43,23 @@ impl App {
             }
         });
         ui.horizontal_wrapped(|ui| {
-            let chosen = choice(
+            use preview::{quality, Choice};
+            let auto = format!("Auto ({})", self.preview.quality.auto_name());
+            let mut chosen = self.preview.quality.choice();
+            let fast = format!("Fast ({} px)", quality::FAST);
+            let balanced = format!("Balanced ({} px)", quality::BALANCED);
+            if choice(
                 ui,
                 "Preview quality",
-                &mut self.preview.quality,
+                &mut chosen,
                 &[
-                    (Some(800), "Fast (800 px)"),
-                    (Some(1280), "Balanced (1280 px)"),
-                    (None, "Export resolution"),
+                    (Choice::Auto, &auto),
+                    (Choice::Fixed(Some(quality::FAST)), &fast),
+                    (Choice::Fixed(Some(quality::BALANCED)), &balanced),
+                    (Choice::Fixed(None), "Export resolution"),
                 ],
-            );
-            if chosen {
+            ) {
+                self.preview.quality.choose(chosen);
                 self.changed();
             }
             ui.checkbox(&mut self.fit_preview, "Fit view");
@@ -69,10 +75,10 @@ impl App {
             export resolution. Inspect mask detail at Export resolution \
             and 1× zoom.",
         );
-        if let Ok(c) = self
-            .config
-            .with_max_output_side(self.source.input().dimensions(), self.preview.quality)
-        {
+        if let Ok(c) = self.config.with_max_output_side(
+            self.source.input().dimensions(),
+            self.preview.quality.side(),
+        ) {
             let input = self.source.input().dimensions();
             if let (Ok((w, h)), Ok(signal)) = (c.output_size(input), c.signal_size(input)) {
                 let [columns, rows] = c.mask_repeats.resolve(signal);

@@ -128,7 +128,10 @@ already exists; after confirmation, the app writes a complete temporary file and
   the settings in use right of it, with the settings changed since listed above the picture. **Unpin look**, or opening
   another source, returns Compare to the original. The pinned picture is a still: after moving to another frame of a
   video, pin again to compare that one.
-- **Fast / Balanced / Export resolution** changes preview canvas resolution only. Use Export resolution and turn off Fit view at 1x zoom to inspect mask sampling.
+- **Auto / Fast / Balanced / Export resolution** changes preview canvas resolution only. **Auto**, the default, starts
+  at Balanced (1280 px) and steps down to Fast (800 px) after two previews of a dragged slider take over 0.5 s, as on
+  integrated graphics, and back up after five Fast ones take under 0.15 s; the list says which it is on. Settled
+  stills do not count, since their warm-up is slow at any size. Choosing a size keeps it. Use Export resolution and turn off Fit view at 1x zoom to inspect mask sampling.
 - **Load / Save preset** uses the same version-1 JSON format as the CLI. **Undo / Redo / Reset** acts on settings, not source files or exported files.
   `Ctrl+Z` and `Ctrl+Shift+Z` provide undo and redo shortcuts (`Command` equivalents are also accepted on macOS).
 - Signal and export size boxes accept named presets or custom `WIDTHxHEIGHT`. Resolved dimensions and crop/mask warnings are shown in the window.
