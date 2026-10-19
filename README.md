@@ -120,6 +120,9 @@ already exists; after confirmation, the app writes a complete temporary file and
   rest, and each notice has its own **Dismiss**. A saved file's notice stays until the next export, with **Show in
   folder**, which shows it in Explorer or Finder, or opens its folder on Linux; an FFmpeg failure offers
   **FFmpeg setup…**.
+- Closing the window while an export runs, or while the batch queue has jobs to go, asks first: **Keep exporting**,
+  **Close when it finishes**, or **Stop and close**. Waiting to close stays open instead if the export fails, so its
+  notice can say why. The web app asks the browser to ask before the page is left while it exports.
 - **Original / CRT / Compare** compares the source with the rendered tube. Drag the comparison divider. The CRT bends the image, so the two views are not geometrically registered.
 - **Pin look** keeps the settled picture and its settings; **Compare** then shows the pinned look left of the divider and
   the settings in use right of it, with the settings changed since listed above the picture. **Unpin look**, or opening

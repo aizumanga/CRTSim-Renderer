@@ -25,16 +25,15 @@ each. Done items are in this branch; the rest are proposals in priority order, t
 | Which notes are always on screen? | Only those that depend on the settings, such as large output or cropping. Standing notes ("SDR output; no ICC color management") sit behind **ℹ Notes**. |
 | Why offer Refresh while Live preview is on? | It is offered only while Live preview is off, when edits wait for it. |
 | Why does one message hide another? | They no longer do. The status bar's notices (`notices.rs`) hold one per topic (opening, saving, playback, the preview, presets, app data, the renderer); news of a topic replaces its own and leaves the rest, so a preview that fails no longer hides an export that failed, and a file that opens fine no longer clears it. Each has its own **Dismiss**, an FFmpeg failure carries **FFmpeg setup…**, and the saved file's notice is one of them. |
+| What happens when I close during an export? | The app asks first (`closing.rs`): **Keep exporting**, **Close when it finishes** or **Stop and close**, saying a single export's file would not be saved and a batch queue comes back paused. Waiting to close stays open if the export fails, so its notice shows. The web app has the browser ask before the page is left. |
 | Smaller fixes | The tooltips of Pin look and Copy link to this look lost a run of spaces from a missing line continuation; the playback hint names **Export → Current frame as PNG** as the menu does. |
 
 ## Proposed
 
-1. **Ask before closing during an export.** Closing mid-export currently cancels it silently.
-   The session is recovered, but the export is not.
-2. **Adaptive preview quality.** Each preview reports how long it took. Stepping down from
+1. **Adaptive preview quality.** Each preview reports how long it took. Stepping down from
    Balanced to Fast after previews slower than 0.5 s, and back up after fast ones, would keep
    dragging responsive on integrated graphics. An explicit choice would still win.
-3. **Dropping several files** onto the window adds them to the **Batch queue**, where today
+2. **Dropping several files** onto the window adds them to the **Batch queue**, where today
    only the first file opens.
 
 ## Not planned

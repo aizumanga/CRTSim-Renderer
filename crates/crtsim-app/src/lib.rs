@@ -6,6 +6,7 @@
 mod app_data;
 mod batch;
 mod chrome;
+mod closing;
 mod dialogs;
 mod events;
 mod export_ui;
@@ -137,6 +138,11 @@ struct App {
     status: String,
     /// What failed, and the file the last export saved, by topic: the status bar's notices.
     notices: notices::Notices,
+    /// Whether the window was asked to close while an export ran, and what was chosen.
+    closing: closing::Closing,
+    /// Whether the browser asks before the page is left, as it does while an export runs.
+    #[cfg(target_arch = "wasm32")]
+    leaving_asks: bool,
     smoke: Option<Smoke>,
 }
 
@@ -280,6 +286,9 @@ impl App {
             dialog_receive,
             status: "Preparing preview…".into(),
             notices: Default::default(),
+            closing: Default::default(),
+            #[cfg(target_arch = "wasm32")]
+            leaving_asks: false,
             smoke,
         };
         if let Some(error) = storage_error {
@@ -597,6 +606,7 @@ impl eframe::App for App {
         self.autosave();
         ctx.request_repaint_after(Duration::from_secs(2));
         self.receive(ctx);
+        self.ask_before_closing(ctx);
         if !self.modal_open() && !ctx.egui_wants_keyboard_input() {
             self.shortcuts(ctx);
         }
