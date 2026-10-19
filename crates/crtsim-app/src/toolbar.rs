@@ -1,6 +1,6 @@
 //! The toolbar along the top of the window, and its menus.
 use crate::*;
-use crtsim_core::ports::Host;
+use crtsim_shader_ports::Host;
 
 impl App {
     pub(crate) fn toolbar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {

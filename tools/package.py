@@ -25,6 +25,8 @@ name = f'CRTSim-Renderer-{args.version}-{args.platform}'
 stage = dist / name
 stage.mkdir()  # Refuse stale/reused staging folders.
 cli = str(root / 'target' / 'release' / 'crtsim')
+# The vendored assets live in the renderer's crate, which embeds them.
+ASSETS = root / 'crates' / 'crtsim-core' / 'assets'
 
 
 if args.platform in ('retroarch', 'reshade', 'obs-linux-x86_64'):
@@ -42,7 +44,7 @@ if args.platform in ('retroarch', 'reshade', 'obs-linux-x86_64'):
         subprocess.run([cli, f'export-{args.platform}', '--output-dir', str(folder)], check=True,
                        stdout=subprocess.DEVNULL)
     shutil.copy2(root / 'LICENSE', folder)
-    shutil.copy2(root / 'assets/original-crtsim/SOURCES.md', folder / 'ORIGINAL_ASSETS.md')
+    shutil.copy2(ASSETS / 'original-crtsim/SOURCES.md', folder / 'ORIGINAL_ASSETS.md')
     archive = dist / (name + '.zip')
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as output:
         for path in sorted(folder.rglob('*')):
@@ -64,13 +66,13 @@ for doc in ['LICENSE', 'THIRD_PARTY_NOTICES.md'] if web else ['README.md', 'LICE
     shutil.copy2(root / doc, stage)
 if not web:
     shutil.copytree(root / 'docs', stage / 'docs')
-shutil.copy2(root / 'assets/original-crtsim/SOURCES.md', stage / 'ORIGINAL_ASSETS.md')
+shutil.copy2(ASSETS / 'original-crtsim/SOURCES.md', stage / 'ORIGINAL_ASSETS.md')
 for source, destination in [
     ('SOURCES.md', 'NES_LUTS_SOURCES.md'),
     ('UPSTREAM_README.md', 'NES_LUTS_UPSTREAM_README.md'),
     ('SHA256SUMS', 'NES_LUTS_SHA256SUMS'),
 ]:
-    shutil.copy2(root / 'assets/nes-luts' / source, stage / destination)
+    shutil.copy2(ASSETS / 'nes-luts' / source, stage / destination)
 # Collect license texts from the exact Cargo.lock dependency sources, including build dependencies,
 # of what ships: the app and the CLI. Test-only crates, such as crtsim-ports and the librashader
 # it runs the shader ports with, are never built into a package.

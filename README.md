@@ -225,6 +225,13 @@ Every port is checked against the renderer: the RetroArch port through librashad
 filter in OBS itself, picture for picture, and the ReShade effect compiled by ReShade's own
 compiler as each shipped look sets it.
 
+## In Rust programs: crtsim-core
+
+The renderer itself is the [`crtsim-core`](crates/crtsim-core) crate, ready for crates.io: stills, video sequences
+that keep the glow from frame to frame, and `Renderer::encode`, which records a game's or an engine's frame into its
+own command encoder, from its texture into its target, on its own device, waiting for nothing. Its settings are the
+same JSON the app saves as a preset. See [publishing it](docs/RELEASES.md#crtsim-core-on-cratesio).
+
 ## Build and try
 
 ### Video
@@ -395,5 +402,5 @@ Only the second command requires a GPU or software Vulkan driver. Normal tests i
 ## Credits
 
 Based on the CC0 CRTSim reference implementation by **J. Kyle Pittman**.
-Original assets and shader source remain unmodified in `assets/original-crtsim/`; provenance is in [SOURCES.md](assets/original-crtsim/SOURCES.md).
+Original assets and shader source remain unmodified in `crates/crtsim-core/assets/original-crtsim/`; provenance is in [SOURCES.md](crates/crtsim-core/assets/original-crtsim/SOURCES.md).
 The WGSL translation and application additions use this repository's CC0 license. Dependencies keep their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

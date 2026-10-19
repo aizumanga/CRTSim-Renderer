@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 crtsim-core = { path = "../crtsim-core" }
+crtsim-shader-ports = { path = "../crtsim-shader-ports" }
 crtsim-media = { path = "../crtsim-media" }
 image.workspace = true
 serde_json.workspace = true

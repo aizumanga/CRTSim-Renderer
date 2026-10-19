@@ -1,5 +1,6 @@
 use anyhow::{ensure, Context, Result};
-use crtsim_core::{config::Config, ports::Host};
+use crtsim_core::config::Config;
+use crtsim_shader_ports::Host;
 use image::{DynamicImage, ImageOutputFormat, RgbaImage};
 use std::{io::Cursor, path::Path};
 
@@ -227,14 +228,14 @@ pub fn save_port(path: &Path, host: Host, c: &Config) -> Result<()> {
         .collect();
     let bytes = zip(
         &format!("{name}{suffix}"),
-        &crtsim_core::ports::export(host, &[(&name, c)])?,
+        &crtsim_shader_ports::export(host, &[(&name, c)])?,
     );
     deliver(path, &bytes, "application/zip")
 }
 
 /// `files` in a zip archive under `folder`, stored uncompressed: the PNGs are compressed
 /// already and the shaders are small, so storing keeps this short and free of dependencies.
-fn zip(folder: &str, files: &[crtsim_core::ports::File]) -> Vec<u8> {
+fn zip(folder: &str, files: &[crtsim_shader_ports::File]) -> Vec<u8> {
     let mut archive = Vec::new();
     let mut directory = Vec::new();
     for file in files {

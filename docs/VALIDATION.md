@@ -30,7 +30,7 @@ is therefore a deliberate review point, not a silent shift.
 
 ## GPU prepare step
 
-Resize, alpha composite, source edits, LUT and grade run on the GPU (`shaders/prepare.wgsl`).
+Resize, alpha composite, source edits, LUT and grade run on the GPU (`crates/crtsim-core/shaders/prepare.wgsl`).
 The shader repeats the CPU implementation's arithmetic rather than improving on it -- the image
 crate's separable resize with weights computed on the CPU exactly as that crate computes them,
 and the rounding to 8 bits between stages -- so the move changes where the work runs and not

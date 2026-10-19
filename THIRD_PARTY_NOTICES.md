@@ -4,9 +4,9 @@ The root CC0 dedication applies to this project's original contributions, not to
 
 ## CRTSim
 
-J. Kyle Pittman, CC0 1.0. Original dedication: `assets/original-crtsim/COPYING.txt`.
-Repository and exact source commit: `assets/original-crtsim/SOURCES.md`.
-The CRT shader, `shaders/crtsim.wgsl`, is a translation/adaptation of the shared effect. `shaders/prepare.wgsl` is original to this project.
+J. Kyle Pittman, CC0 1.0. Original dedication: `crates/crtsim-core/assets/original-crtsim/COPYING.txt`.
+Repository and exact source commit: `crates/crtsim-core/assets/original-crtsim/SOURCES.md`.
+The CRT shader, `crates/crtsim-core/shaders/crtsim.wgsl`, is a translation/adaptation of the shared effect. `crates/crtsim-core/shaders/prepare.wgsl` is original to this project.
 
 ## Rust dependencies
 
@@ -51,7 +51,7 @@ and other creators identified in the original palette names, which are preserved
 
 [Author's announcement](https://www.reddit.com/r/emulation/comments/1oopf1i/updated_nes_luts_for_mame/).
 The unmodified PNGs, upstream dedication, source notes and SHA-256 digests are in
-`assets/nes-luts/`. Release packages include `NES_LUTS_README.md`, `NES_LUTS_SOURCES.md`
+`crates/crtsim-core/assets/nes-luts/`. Release packages include `NES_LUTS_README.md`, `NES_LUTS_SOURCES.md`
 and `NES_LUTS_SHA256SUMS`; the LUT data is embedded in the executable.
 
 ## NES palette generator

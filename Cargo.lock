@@ -885,6 +885,7 @@ dependencies = [
  "anyhow",
  "crtsim-core",
  "crtsim-media",
+ "crtsim-shader-ports",
  "directories",
  "eframe",
  "flate2",
@@ -912,6 +913,7 @@ dependencies = [
  "clap",
  "crtsim-core",
  "crtsim-media",
+ "crtsim-shader-ports",
  "image 0.24.9",
  "pollster 0.3.0",
  "serde_json",
@@ -920,7 +922,7 @@ dependencies = [
 
 [[package]]
 name = "crtsim-core"
-version = "1.4.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -960,10 +962,21 @@ version = "1.4.0"
 dependencies = [
  "anyhow",
  "crtsim-core",
+ "crtsim-shader-ports",
  "image 0.24.9",
  "librashader",
  "pollster 0.3.0",
  "wgpu",
+]
+
+[[package]]
+name = "crtsim-shader-ports"
+version = "1.4.0"
+dependencies = [
+ "anyhow",
+ "crtsim-core",
+ "image 0.24.9",
+ "serde_json",
 ]
 
 [[package]]

@@ -14,6 +14,7 @@ publish = false
 # shared by its tests and its benchmark. The crate never ships, so neither does librashader.
 librashader = { version = "0.12.0", default-features = false, features = ["runtime-wgpu", "presets", "preprocess"] }
 crtsim-core = { path = "../crtsim-core" }
+crtsim-shader-ports = { path = "../crtsim-shader-ports" }
 anyhow.workspace = true
 image.workspace = true
 wgpu.workspace = true

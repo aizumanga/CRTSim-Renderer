@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 pub mod bezel;
 pub mod config;
 pub mod game_palette;
@@ -8,7 +10,6 @@ pub mod input;
 pub mod mesh;
 pub mod nes_luts;
 pub mod palette;
-pub mod ports;
 pub mod presets;
 mod sequence;
 pub mod settings;
@@ -18,20 +19,27 @@ pub mod test_clip;
 mod tests;
 pub mod workflow;
 
+/// The original's two textures as images: the composite artifact pattern, and the shadow mask
+/// at full size. Shader ports carry them as files, to read what the renderer reads.
+pub mod textures {
+    pub use crate::gpu::{artifacts_image as artifacts, mask_image as shadow_mask};
+}
+
 use anyhow::{ensure, Context, Result};
 use bytemuck::{Pod, Zeroable};
 use config::{ColorMode, Config, Phase};
 use gpu::{Readback, Target, FORMAT};
 use image::RgbaImage;
+use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 
 pub use gpu_prepare::PrepareOn;
 pub use sequence::{Sequence, Shape, Timing};
 
-pub const SHADER: &str = include_str!("../../../shaders/crtsim.wgsl");
+pub const SHADER: &str = include_str!("../shaders/crtsim.wgsl");
 
 /// The shader's settings, laid out as `Params` in `crtsim.wgsl`.
 #[repr(C)]
@@ -153,6 +161,9 @@ struct Pipelines {
     present: wgpu::RenderPipeline,
     reference: SurfacePasses,
     linear: SurfacePasses,
+    /// Kept to make the pass that hands a frame to a host, for each format it asks for.
+    module: wgpu::ShaderModule,
+    layout: wgpu::PipelineLayout,
 }
 
 /// What follows the signal: the curved glass and its bezel, then the bloom's two blurs.
@@ -194,6 +205,9 @@ pub(crate) struct Workspace {
 /// Ticks encoded before each submission, which is also where a frame reports progress and
 /// notices a cancel.
 const BATCH: u32 = 8;
+
+/// The most memory a render's targets may take, as `Renderer::fits` estimates them.
+const BUDGET: u64 = 1_500_000_000;
 
 /// A workspace's settings, one slot per tick of a batch and one for the surface passes, each
 /// reached by dynamic offset. `write_buffer` takes effect when the batch is submitted, so every
@@ -262,9 +276,29 @@ pub struct Renderer {
     artifacts: Target,
     mask: Target,
     prepare_pipelines: gpu_prepare::Pipelines,
+    /// What a frame recorded for a host is drawn into its target with, made for each format
+    /// a host asks for.
+    deliver: Mutex<HashMap<wgpu::TextureFormat, wgpu::RenderPipeline>>,
     /// Where the prepare step runs. The GPU unless a caller asks otherwise, to compare the two.
     pub prepare: PrepareOn,
     pub adapter: wgpu::AdapterInfo,
+}
+
+/// One frame of a host's picture, for `Renderer::encode`: its texture in, its target out, and
+/// how long the frame before it was shown.
+pub struct HostFrame<'a> {
+    /// The host's picture: a 2D texture on the renderer's device, bound for sampling, of a
+    /// color format with float samples, such as `Rgba8Unorm`, `Bgra8UnormSrgb` or
+    /// `Rgba16Float`. An sRGB format reads as the colors it encodes, so it is read as such.
+    pub source: &'a wgpu::Texture,
+    /// Where the CRT is drawn, filling it: a 2D texture of a color format with float samples,
+    /// bound as a render attachment, such as a window's surface texture. Its size is the
+    /// output's, whatever the settings' export size says. An sRGB format is given the colors
+    /// it is to encode.
+    pub target: &'a wgpu::Texture,
+    /// How long the frame before this one was on screen, in seconds, which this one's glow
+    /// decays by: a sixtieth for a host running at 60 frames a second.
+    pub seconds: f64,
 }
 
 /// The images a frame was made from, for inspection and tests.
@@ -450,6 +484,7 @@ impl Renderer {
             samplers,
             pipelines,
             prepare_pipelines,
+            deliver: Default::default(),
             prepare: PrepareOn::default(),
             adapter: info,
         })
@@ -466,33 +501,8 @@ impl Renderer {
             label: Some("CRT WGSL"),
             source: wgpu::ShaderSource::Wgsl(SHADER.into()),
         });
-        // Every pass covers its target with one triangle; the glass and bezel are ray-traced.
         let pipeline = |entry: &str, format| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(entry),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &module,
-                    entry_point: Some("quad"),
-                    compilation_options: Default::default(),
-                    buffers: &[],
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &module,
-                    entry_point: Some(entry),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: Default::default(),
-                depth_stencil: None,
-                multisample: Default::default(),
-                multiview_mask: None,
-                cache: None,
-            })
+            Self::fullscreen_pipeline(device, &pipeline_layout, &module, entry, format)
         };
         let surface = |mode| {
             let format = surface_format(mode);
@@ -507,7 +517,45 @@ impl Renderer {
             present: pipeline("present", FORMAT),
             reference: surface(ColorMode::Reference),
             linear: surface(ColorMode::LinearLight),
+            module,
+            layout: pipeline_layout,
         }
+    }
+
+    /// A pass of `entry` writing `format`, covering its target with one triangle: every pass
+    /// is one, the glass and bezel being ray-traced.
+    fn fullscreen_pipeline(
+        device: &wgpu::Device,
+        layout: &wgpu::PipelineLayout,
+        module: &wgpu::ShaderModule,
+        entry: &str,
+        format: wgpu::TextureFormat,
+    ) -> wgpu::RenderPipeline {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(entry),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module,
+                entry_point: Some("quad"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module,
+                entry_point: Some(entry),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            multiview_mask: None,
+            cache: None,
+        })
     }
 
     /// Renders `sequence`'s next frame of `input`, which stays on the device until it is read
@@ -541,12 +589,12 @@ impl Renderer {
                 sequence.restarts(),
                 "Start a new video sequence after changing signal size, output size or color mode"
             );
-            *sequence = Sequence::editing();
+            sequence.restart();
         }
         let ticks = sequence.ticks(c.warmup);
         let workspace = sequence
             .workspace
-            .get_or_insert_with(|| self.workspace(&plan));
+            .get_or_insert_with(|| self.workspace(plan.shape));
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -559,7 +607,7 @@ impl Renderer {
                 &self.queue,
                 &mut encoder,
                 &mut workspace.prepare,
-                input,
+                gpu_prepare::Picture::Image(input),
                 c,
                 &workspace.source,
             ),
@@ -680,24 +728,201 @@ impl Renderer {
         Ok(image)
     }
 
-    /// The targets for `plan`, and the bind groups their passes use.
-    fn workspace(&self, plan: &Plan) -> Workspace {
+    /// Records `sequence`'s next frame into a host's `encoder`, from the host's picture into
+    /// its target, both already on this renderer's device: the way a game, an emulator or an
+    /// engine draws the CRT over its own frames. It submits nothing and waits for nothing;
+    /// the frame is drawn when the host submits the encoder.
+    ///
+    /// `sequence` must be a host's, from `Sequence::host`: no warm-up, one tick a frame, and
+    /// each frame's glow decaying by `frame.seconds`. The target's size is the output's, and a
+    /// new one keeps the glow; a new signal size or color mode starts the sequence again.
+    ///
+    /// The settings reach the device through the queue, as `Queue::write_buffer` writes, so
+    /// submit each frame's commands before encoding the sequence's next frame.
+    pub fn encode(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        sequence: &mut Sequence,
+        frame: &HostFrame,
+        config: &Config,
+    ) -> Result<()> {
+        ensure!(
+            sequence.hosted(),
+            "Encode a host's sequence, made with Sequence::host"
+        );
+        let (source, target) = (frame.source, frame.target);
+        let float = |texture: &wgpu::Texture| {
+            texture.dimension() == wgpu::TextureDimension::D2
+                && texture.sample_count() == 1
+                && texture.format().has_color_aspect()
+                && matches!(
+                    texture
+                        .format()
+                        .sample_type(None, Some(self.device.features())),
+                    Some(wgpu::TextureSampleType::Float { .. })
+                )
+        };
+        ensure!(
+            float(source)
+                && source
+                    .usage()
+                    .contains(wgpu::TextureUsages::TEXTURE_BINDING),
+            "The host's picture must be a 2D color texture with float samples, bound for sampling"
+        );
+        ensure!(
+            float(target)
+                && target
+                    .usage()
+                    .contains(wgpu::TextureUsages::RENDER_ATTACHMENT),
+            "The host's target must be a 2D color texture with float samples, bound as a render \
+             attachment"
+        );
+        sequence.lasted(frame.seconds);
+        let c = &sequence.timed(config);
+        c.validate()?;
+        let input = (source.width(), source.height());
+        let limit = self.device.limits().max_texture_dimension_2d;
+        ensure!(
+            input.0 <= limit && input.1 <= limit,
+            "the host's picture exceeds adapter texture limit {limit}"
+        );
+        let shape = Shape {
+            signal: c.signal_size(input)?,
+            output: (target.width(), target.height()),
+            color_mode: c.color_mode,
+        };
+        self.fits(shape)?;
+        sequence.workspace = match sequence.workspace.take() {
+            Some(workspace) if workspace.shape == shape => Some(workspace),
+            Some(workspace)
+                if workspace.shape.signal == shape.signal
+                    && workspace.shape.color_mode == shape.color_mode =>
+            {
+                Some(self.reshaped(workspace, shape.output))
+            }
+            Some(_) => {
+                sequence.restart();
+                None
+            }
+            None => None,
+        };
+        let workspace = sequence
+            .workspace
+            .get_or_insert_with(|| self.workspace(shape));
+        self.prepare_pipelines.encode(
+            &self.device,
+            &self.queue,
+            encoder,
+            &mut workspace.prepare,
+            gpu_prepare::Picture::Texture(source),
+            c,
+            &workspace.source,
+        );
+        if sequence.tick == 0 {
+            for target in &workspace.history {
+                gpu::clear(encoder, target);
+            }
+        }
+        let tick = sequence.tick;
+        let mut params = Params::new(c, shape.signal, shape.output);
+        params.tick(c.phase, c.ntsc_blending, tick);
+        let offset = workspace.uniforms.write(&self.queue, 0, &params);
+        gpu::fullscreen(
+            encoder,
+            &workspace.history[written(tick)],
+            &self.pipelines.composite,
+            &workspace.bindings.composite[written(tick)],
+            &[offset],
+        );
+        sequence.tick += 1;
+        self.surface(encoder, workspace, written(tick), &params, c);
+        let format = target.format();
+        let mut pipelines = self
+            .deliver
+            .lock()
+            .map_err(|_| anyhow::anyhow!("a frame for a host failed while making its pass"))?;
+        let deliver = pipelines.entry(format).or_insert_with(|| {
+            let entry = if format.is_srgb() {
+                "deliver_srgb"
+            } else {
+                "deliver"
+            };
+            Self::fullscreen_pipeline(
+                &self.device,
+                &self.pipelines.layout,
+                &self.pipelines.module,
+                entry,
+                format,
+            )
+        });
+        let bindings = self.bind(
+            &workspace.uniforms.buffer,
+            &workspace.final_target,
+            &workspace.source,
+        );
+        gpu::draw(
+            encoder,
+            &target.create_view(&Default::default()),
+            deliver,
+            &bindings,
+            &[offset],
+        );
+        Ok(())
+    }
+
+    /// The targets for `shape`, and the bind groups their passes use.
+    fn workspace(&self, shape: Shape) -> Workspace {
         let device = &self.device;
-        let (signal_size, output_size) = (plan.shape.signal, plan.shape.output);
-        let format = surface_format(plan.shape.color_mode);
-        let surface = |name, size| Target::with_format(device, name, size, format, 1);
-        let source = Target::new(device, "clean signal", signal_size);
+        let source = Target::new(device, "clean signal", shape.signal);
         let history = [
-            Target::new(device, "history A", signal_size),
-            Target::new(device, "history B", signal_size),
+            Target::new(device, "history A", shape.signal),
+            Target::new(device, "history B", shape.signal),
         ];
+        self.around(
+            source,
+            history,
+            Default::default(),
+            Uniforms::new(device),
+            shape,
+        )
+    }
+
+    /// `workspace` drawn at another output size, keeping its signal and history, so the glow
+    /// goes on where the frames before left it.
+    fn reshaped(&self, workspace: Workspace, output: (u32, u32)) -> Workspace {
+        let shape = Shape {
+            output,
+            ..workspace.shape
+        };
+        self.around(
+            workspace.source,
+            workspace.history,
+            workspace.prepare,
+            workspace.uniforms,
+            shape,
+        )
+    }
+
+    /// The output's targets for `shape`, around a signal and its history, and the bind groups
+    /// of all their passes.
+    fn around(
+        &self,
+        source: Target,
+        history: [Target; 2],
+        prepare: gpu_prepare::Cache,
+        uniforms: Uniforms,
+        shape: Shape,
+    ) -> Workspace {
+        let device = &self.device;
+        let output_size = shape.output;
+        let format = surface_format(shape.color_mode);
+        let surface = |name, size| Target::with_format(device, name, size, format, 1);
         let full = surface("screen and bezel", output_size);
         let down = surface(
             "bloom downsample",
             ((output_size.0 / 16).max(1), (output_size.1 / 16).max(1)),
         );
         let up = surface("bloom upsample", output_size);
-        let uniforms = Uniforms::new(device);
         let bind = |a, b| self.bind(&uniforms.buffer, a, b);
         let bindings = Bindings {
             composite: [bind(&source, &history[1]), bind(&source, &history[0])],
@@ -709,7 +934,7 @@ impl Renderer {
         Workspace {
             final_target: Target::new(device, "output", output_size),
             readback: None,
-            prepare: Default::default(),
+            prepare,
             uniforms,
             bindings,
             source,
@@ -717,39 +942,25 @@ impl Renderer {
             full,
             down,
             up,
-            shape: plan.shape,
+            shape,
         }
     }
 
     fn plan(&self, input: &RgbaImage, c: &Config) -> Result<Plan> {
         c.validate()?;
         let shape = c.sequence_shape(input.dimensions())?;
-        let (signal, output) = (shape.signal, shape.output);
-        let limit = self.device.limits().max_texture_dimension_2d;
-        ensure!(
-            [signal.0, signal.1, output.0, output.1]
-                .iter()
-                .all(|v| *v <= limit),
-            "image exceeds adapter texture limit {limit}"
-        );
-        // Conservative working-set guard: color targets, depth, readback and history.
-        const BUDGET: u64 = 1_500_000_000;
-        let linear = c.color_mode == ColorMode::LinearLight;
-        let estimated = u64::from(output.0) * u64::from(output.1) * if linear { 48 } else { 24 }
-            + u64::from(signal.0) * u64::from(signal.1) * 16;
-        ensure!(
-            estimated <= BUDGET,
-            "estimated working set exceeds Phase 0 budget; choose a smaller preset"
-        );
+        let estimated = self.fits(shape)?;
         // Preparing on the device puts the input there as it is, plus the resize's intermediate.
         // Where that does not fit -- a 16384-pixel image on a device limited to 8192, or a huge
         // input kept at native size -- the render is still accepted, as it always was, by
         // preparing here instead.
         let (width, height) = input.dimensions();
+        let limit = self.device.limits().max_texture_dimension_2d;
         let prepare_on_gpu = self.prepare == PrepareOn::Gpu
             && width <= limit
             && height <= limit
-            && estimated + u64::from(width) * (u64::from(height) * 4 + u64::from(signal.1) * 16)
+            && estimated
+                + u64::from(width) * (u64::from(height) * 4 + u64::from(shape.signal.1) * 16)
                 <= BUDGET;
         // In a browser, preparing here would hold the page's only thread for seconds.
         #[cfg(target_arch = "wasm32")]
@@ -763,6 +974,28 @@ impl Renderer {
             shape,
             prepare_on_gpu,
         })
+    }
+
+    /// Checks that a sequence of `shape` fits the device, and returns its working set's
+    /// estimated size in bytes.
+    fn fits(&self, shape: Shape) -> Result<u64> {
+        let (signal, output) = (shape.signal, shape.output);
+        let limit = self.device.limits().max_texture_dimension_2d;
+        ensure!(
+            [signal.0, signal.1, output.0, output.1]
+                .iter()
+                .all(|v| *v <= limit),
+            "image exceeds adapter texture limit {limit}"
+        );
+        // Conservative working-set guard: color targets, depth, readback and history.
+        let linear = shape.color_mode == ColorMode::LinearLight;
+        let estimated = u64::from(output.0) * u64::from(output.1) * if linear { 48 } else { 24 }
+            + u64::from(signal.0) * u64::from(signal.1) * 16;
+        ensure!(
+            estimated <= BUDGET,
+            "estimated working set exceeds Phase 0 budget; choose a smaller preset"
+        );
+        Ok(estimated)
     }
 
     /// The curved glass and its bezel over the simulated signal in history target `latest`,

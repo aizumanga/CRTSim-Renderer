@@ -4,7 +4,7 @@
 use crate::export_ui::ExportFormat;
 use crate::worker::Export;
 use crate::*;
-use crtsim_core::ports::Host;
+use crtsim_shader_ports::Host;
 #[cfg(not(target_arch = "wasm32"))]
 use std::panic::AssertUnwindSafe;
 

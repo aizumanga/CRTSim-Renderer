@@ -294,6 +294,23 @@ They must include the codecs described in [VIDEO_PIPELINE.md](VIDEO_PIPELINE.md)
 There are no runtime downloads; the desktop reaches the network only when asked to check for a newer release. Personal presets remain in the normal per-user app-data directory;
 updating or replacing a portable package does not delete them. Use `CRTSIM_DATA_DIR` for an explicit alternate directory.
 
+## crtsim-core on crates.io
+
+The renderer is published as the [`crtsim-core`](https://crates.io/crates/crtsim-core) crate, for Rust programs to
+depend on: stills, video sequences, and `Renderer::encode` for a game's or an engine's own frames. It is versioned
+on its own, not with the app: 0.x while its interface settles, a change that breaks a caller raising the minor
+version. Everything it embeds, its shaders, the original meshes and textures, and the NES LUTs, lives in its folder,
+`crates/crtsim-core`, so the crate builds from its package alone; CI packages it on every change to prove that.
+
+Publishing is never part of an app release. A crate version cannot be taken back, so a person publishes it:
+
+1. Raise `version` in `crates/crtsim-core/Cargo.toml` and merge it.
+2. The first version only: `cargo publish -p crtsim-core` with a crates.io token, then add this repository's
+   `publish-core.yml` workflow as the crate's trusted publisher on crates.io (crate settings → Trusted Publishing,
+   environment `crates-io`).
+3. Later versions: push a tag `crtsim-core-v<version>`, such as `crtsim-core-v0.2.0`. The workflow checks the tag
+   names the crate's version, tests it and publishes it, with a token crates.io issues for that run alone.
+
 ## Local packaging
 
 Build with `cargo build --release --locked -p crtsim-app -p crtsim-cli`, then run

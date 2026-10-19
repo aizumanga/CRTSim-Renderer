@@ -19,7 +19,7 @@ use image::RgbaImage;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
-pub const SHADER: &str = include_str!("../../../shaders/prepare.wgsl");
+pub const SHADER: &str = include_str!("../shaders/prepare.wgsl");
 
 /// Where a render runs the prepare step.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -262,11 +262,30 @@ pub(crate) struct Cache {
     lut: Option<(Arc<Lut>, wgpu::TextureView)>,
 }
 
+/// The picture a frame is prepared from.
+pub(crate) enum Picture<'a> {
+    /// Decoded here, and uploaded.
+    Image(&'a RgbaImage),
+    /// A host's, already on the device: a 2D texture with float samples.
+    Texture(&'a wgpu::Texture),
+}
+
+impl Picture<'_> {
+    pub(crate) fn size(&self) -> (u32, u32) {
+        match self {
+            Self::Image(image) => image.dimensions(),
+            Self::Texture(texture) => (texture.width(), texture.height()),
+        }
+    }
+}
+
 pub(crate) struct Pipelines {
     layout: wgpu::BindGroupLayout,
     rows: wgpu::RenderPipeline,
     columns: wgpu::RenderPipeline,
     edit: wgpu::RenderPipeline,
+    /// A host's picture copied in, as it is or encoded from an sRGB texture.
+    copy_in: [wgpu::RenderPipeline; 2],
     /// Bound where a pass does not use a table, since every binding must be filled.
     no_kernel: KernelTextures,
     no_lut: wgpu::TextureView,
@@ -353,6 +372,10 @@ impl Pipelines {
             rows: pipeline("resample_rows", BETWEEN),
             columns: pipeline("resample_columns", FORMAT),
             edit: pipeline("edit", FORMAT),
+            copy_in: [
+                pipeline("copy_in", FORMAT),
+                pipeline("copy_in_srgb", FORMAT),
+            ],
             layout,
             no_kernel: Kernel::identity(1).upload(device, queue),
             no_lut: lut_texture(
@@ -370,8 +393,9 @@ impl Pipelines {
         }
     }
 
-    /// Records the passes that turn `input` into the signal in `signal`. The input itself is
-    /// uploaded here, through the queue, so it lands before the commands are submitted.
+    /// Records the passes that turn `input` into the signal in `signal`. An image is uploaded
+    /// here, through the queue, so it lands before the commands are submitted; a texture is
+    /// copied in by the first of them.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn encode(
         &self,
@@ -379,18 +403,16 @@ impl Pipelines {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         cache: &mut Cache,
-        input: &RgbaImage,
+        input: Picture,
         c: &Config,
         signal: &Target,
     ) {
-        let size = input.dimensions();
+        let size = input.size();
         let signal_size = (signal.width, signal.height);
         let source = match cache.input.take() {
             Some(target) if (target.width, target.height) == size => target,
             _ => Target::new(device, "source image", size),
         };
-        source.upload(queue, input);
-        let source = cache.input.insert(source);
 
         let lut = match &c.lut_in_use() {
             Some(lut) => {
@@ -410,7 +432,7 @@ impl Pipelines {
             bytemuck::bytes_of(&Params::new(size, signal_size, c)),
             wgpu::BufferUsages::UNIFORM,
         );
-        let bind = |input: &Target, kernel: &KernelTextures| {
+        let bind = |input: &wgpu::TextureView, kernel: &KernelTextures| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None,
                 layout: &self.layout,
@@ -421,7 +443,7 @@ impl Pipelines {
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&input.view),
+                        resource: wgpu::BindingResource::TextureView(input),
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,
@@ -438,13 +460,24 @@ impl Pipelines {
                 ],
             })
         };
+        match input {
+            Picture::Image(image) => source.upload(queue, image),
+            Picture::Texture(texture) => gpu::fullscreen(
+                encoder,
+                &source,
+                &self.copy_in[usize::from(texture.format().is_srgb())],
+                &bind(&texture.create_view(&Default::default()), &self.no_kernel),
+                &[],
+            ),
+        }
+        let source = cache.input.insert(source);
 
         if c.edits_source() {
             gpu::fullscreen(
                 encoder,
                 signal,
                 &self.edit,
-                &bind(source, &self.no_kernel),
+                &bind(&source.view, &self.no_kernel),
                 &[],
             );
             return;
@@ -480,14 +513,14 @@ impl Pipelines {
             encoder,
             &resample.between,
             &self.rows,
-            &bind(source, &resample.rows),
+            &bind(&source.view, &resample.rows),
             &[],
         );
         gpu::fullscreen(
             encoder,
             signal,
             &self.columns,
-            &bind(&resample.between, &resample.columns),
+            &bind(&resample.between.view, &resample.columns),
             &[],
         );
     }

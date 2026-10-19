@@ -158,3 +158,16 @@ fn edit_sample(ix: i32, iy: i32, bg: vec3<f32>) -> vec3<f32> {
     }
     return finish(quantize(color,255.));
 }
+
+// A host's picture, already on the device, copied texel for texel into the input the passes
+// above read. An sRGB texture reads as the colours it encodes, so those are encoded again.
+fn srgb_encode(c: vec3<f32>) -> vec3<f32> {
+    return select(1.055*pow(max(c,vec3(0.)),vec3(1./2.4))-vec3(0.055),c*12.92,c<=vec3(0.0031308));
+}
+@fragment fn copy_in(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
+    return textureLoad(input,vec2<u32>(at.xy),0);
+}
+@fragment fn copy_in_srgb(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
+    let c=textureLoad(input,vec2<u32>(at.xy),0);
+    return vec4(srgb_encode(c.rgb),c.a);
+}

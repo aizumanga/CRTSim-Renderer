@@ -3,7 +3,8 @@
 //! with a look's settings and read the last back. It needs an X display, which Xvfb provides.
 
 use anyhow::{ensure, Context, Result};
-use crtsim_core::{config::Config, ports};
+use crtsim_core::config::Config;
+use crtsim_shader_ports as ports;
 use image::RgbaImage;
 use std::path::{Path, PathBuf};
 use std::process::Command;

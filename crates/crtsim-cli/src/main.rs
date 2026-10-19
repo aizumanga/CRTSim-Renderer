@@ -2,8 +2,9 @@ use anyhow::{ensure, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use crtsim_core::{
     config::{self, Config, Phase},
-    mesh, ports, presets, sheet, PrepareOn, Renderer, Sequence,
+    mesh, presets, sheet, PrepareOn, Renderer, Sequence,
 };
+use crtsim_shader_ports as ports;
 use image::{DynamicImage, ImageOutputFormat};
 use std::{
     fs::{self, OpenOptions},

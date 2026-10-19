@@ -1,9 +1,9 @@
 //! Looks as shader ports: the effect rewritten in a host's own shader language, which the host
 //! runs on every frame of its picture. See
-//! [the decision](../../../../docs/adr/0003-games-get-shader-ports-not-the-renderer.md).
+//! [the decision](../../../docs/adr/0003-games-get-shader-ports-not-the-renderer.md).
 //!
 //! Every port draws what the renderer draws, pass for pass, from the passes in `ports/passes`,
-//! which each host's shaders include. This module holds what the ports' exports share: the
+//! which each host's shaders include. This crate holds what the ports' exports share: the
 //! parameters a look becomes, the images the passes read, the looks a release ships, and
 //! writing an export's files. Each host's module writes its own files around them.
 
@@ -11,10 +11,10 @@ pub mod obs;
 pub mod reshade;
 pub mod retroarch;
 
-use crate::config::{ColorMode, Config, Filter, Fit, MaskRepeats, Phase, Signal};
-use crate::settings::{Control, SETTINGS};
-use crate::workflow::{Lut, Sampling};
 use anyhow::{ensure, Result};
+use crtsim_core::config::{ColorMode, Config, Filter, Fit, MaskRepeats, Phase, Signal};
+use crtsim_core::settings::{Control, SETTINGS};
+use crtsim_core::workflow::{Lut, Sampling};
 use image::{ImageFormat, Rgba, RgbaImage};
 use std::ops::Bound;
 
@@ -28,31 +28,28 @@ pub struct File {
 const PASSES: &[(&str, &str)] = &[
     (
         "common.inc",
-        include_str!("../../../../ports/passes/common.inc"),
+        include_str!("../../../ports/passes/common.inc"),
     ),
     (
         "resize.inc",
-        include_str!("../../../../ports/passes/resize.inc"),
+        include_str!("../../../ports/passes/resize.inc"),
     ),
     (
         "prepare.inc",
-        include_str!("../../../../ports/passes/prepare.inc"),
+        include_str!("../../../ports/passes/prepare.inc"),
     ),
     (
         "composite.inc",
-        include_str!("../../../../ports/passes/composite.inc"),
+        include_str!("../../../ports/passes/composite.inc"),
     ),
     (
         "surface.inc",
-        include_str!("../../../../ports/passes/surface.inc"),
+        include_str!("../../../ports/passes/surface.inc"),
     ),
-    (
-        "bloom.inc",
-        include_str!("../../../../ports/passes/bloom.inc"),
-    ),
+    ("bloom.inc", include_str!("../../../ports/passes/bloom.inc")),
     (
         "present.inc",
-        include_str!("../../../../ports/passes/present.inc"),
+        include_str!("../../../ports/passes/present.inc"),
     ),
 ];
 
@@ -149,12 +146,12 @@ pub const IMAGES: [Image; 7] = [
     Image {
         file: "artifacts.png",
         reading: Reading::Texels,
-        picture: crate::gpu::artifacts_image,
+        picture: crtsim_core::textures::artifacts,
     },
     Image {
         file: "mask.png",
         reading: Reading::Mipmapped,
-        picture: crate::gpu::mask_image,
+        picture: crtsim_core::textures::shadow_mask,
     },
     Image {
         file: NO_TABLE,
@@ -164,22 +161,22 @@ pub const IMAGES: [Image; 7] = [
     Image {
         file: "bezel-shape.png",
         reading: Reading::AlsoFiltered,
-        picture: || Ok(crate::bezel::maps()?.shape),
+        picture: || Ok(crtsim_core::bezel::maps()?.shape),
     },
     Image {
         file: "bezel-uv.png",
         reading: Reading::Texels,
-        picture: || Ok(crate::bezel::maps()?.uv),
+        picture: || Ok(crtsim_core::bezel::maps()?.uv),
     },
     Image {
         file: "bezel-normal.png",
         reading: Reading::Texels,
-        picture: || Ok(crate::bezel::maps()?.normal),
+        picture: || Ok(crtsim_core::bezel::maps()?.normal),
     },
     Image {
         file: "glass.png",
         reading: Reading::Texels,
-        picture: crate::glass::map,
+        picture: crtsim_core::glass::map,
     },
 ];
 
@@ -565,7 +562,7 @@ pub fn parameters(host: Host) -> Vec<Parameter> {
             4096.,
             1.,
             ALL,
-            |c| c.mask_repeats.fixed().map_or(0., |[x, _]| x),
+            |c| fixed(c.mask_repeats).map_or(0., |[x, _]| x),
         ),
         number(
             "CRTSIM_MASK_ROWS",
@@ -574,7 +571,7 @@ pub fn parameters(host: Host) -> Vec<Parameter> {
             4096.,
             1.,
             ALL,
-            |c| c.mask_repeats.fixed().map_or(0., |[_, y]| y),
+            |c| fixed(c.mask_repeats).map_or(0., |[_, y]| y),
         ),
     ];
     for (key, names, hosts) in NUMBERS {
@@ -642,12 +639,11 @@ impl Parameter {
     }
 }
 
-impl MaskRepeats {
-    fn fixed(self) -> Option<[f32; 2]> {
-        match self {
-            Self::Signal => None,
-            Self::Fixed(repeats) => Some(repeats),
-        }
+/// The mask's columns and rows when they are fixed, none when they follow the signal.
+fn fixed(repeats: MaskRepeats) -> Option<[f32; 2]> {
+    match repeats {
+        MaskRepeats::Signal => None,
+        MaskRepeats::Fixed(repeats) => Some(repeats),
     }
 }
 
@@ -809,7 +805,7 @@ mod tests {
 
     #[test]
     fn a_colour_table_becomes_a_strip_of_its_lattice() {
-        let lut = crate::nes_luts::load(0).unwrap();
+        let lut = crtsim_core::nes_luts::load(0).unwrap();
         let image = strip(&lut);
         let n = lut.size as u32;
         assert_eq!(image.dimensions(), (n * n, n));

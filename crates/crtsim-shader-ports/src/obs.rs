@@ -9,13 +9,13 @@
 //! properties load.
 
 use super::{File, Host, Kind, Reading, Table};
-use crate::config::Config;
 use anyhow::Result;
+use crtsim_core::config::Config;
 use serde_json::{json, Map, Value};
 use std::fmt::Write as _;
 
-pub(super) const EFFECT: &str = include_str!("../../../../ports/obs/crtsim.effect");
-const README: &str = include_str!("../../../../ports/obs/README.md");
+pub(super) const EFFECT: &str = include_str!("../../../ports/obs/crtsim.effect");
+const README: &str = include_str!("../../../ports/obs/README.md");
 /// The key of a look's colour table, a path relative to the look; empty when it has none.
 const TABLE_FILE: &str = "table_file";
 

@@ -245,9 +245,20 @@ pub(crate) fn fullscreen(
     bindings: &wgpu::BindGroup,
     offsets: &[u32],
 ) {
+    draw(encoder, &dst.view, pipeline, bindings, offsets);
+}
+
+/// `fullscreen` into any view, such as a host's own target.
+pub(crate) fn draw(
+    encoder: &mut wgpu::CommandEncoder,
+    dst: &wgpu::TextureView,
+    pipeline: &wgpu::RenderPipeline,
+    bindings: &wgpu::BindGroup,
+    offsets: &[u32],
+) {
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("fullscreen pass"),
-        color_attachments: &[cleared(&dst.view)],
+        color_attachments: &[cleared(dst)],
         depth_stencil_attachment: None,
         timestamp_writes: None,
         occlusion_query_set: None,
@@ -263,15 +274,13 @@ fn bmp(bytes: &[u8]) -> Result<RgbaImage> {
 }
 
 /// The artifact pattern the composite pass tints neighbouring pixels by.
-pub(crate) fn artifacts_image() -> Result<RgbaImage> {
-    bmp(include_bytes!(
-        "../../../assets/original-crtsim/artifacts.bmp"
-    ))
+pub fn artifacts_image() -> Result<RgbaImage> {
+    bmp(include_bytes!("../assets/original-crtsim/artifacts.bmp"))
 }
 
 /// The shadow mask at full size.
-pub(crate) fn mask_image() -> Result<RgbaImage> {
-    bmp(include_bytes!("../../../assets/original-crtsim/mask.bmp"))
+pub fn mask_image() -> Result<RgbaImage> {
+    bmp(include_bytes!("../assets/original-crtsim/mask.bmp"))
 }
 
 pub(crate) fn artifacts(device: &wgpu::Device, queue: &wgpu::Queue) -> Result<Target> {
@@ -330,7 +339,7 @@ mod tests {
         assert_eq!(halve(&last), last);
         // The original's 64×32 mask keeps its average all the way down, give or take the
         // rounding of six halvings.
-        let mask = bmp(include_bytes!("../../../assets/original-crtsim/mask.bmp")).unwrap();
+        let mask = bmp(include_bytes!("../assets/original-crtsim/mask.bmp")).unwrap();
         let mean = |image: &RgbaImage, channel: usize| {
             let total: f64 = image.pixels().map(|p| f64::from(p[channel])).sum();
             total / image.pixels().len() as f64

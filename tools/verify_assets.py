@@ -4,7 +4,7 @@ import pathlib
 import re
 import struct
 
-root = pathlib.Path(__file__).resolve().parents[1] / "assets" / "original-crtsim"
+root = pathlib.Path(__file__).resolve().parents[1] / "crates" / "crtsim-core" / "assets" / "original-crtsim"
 entries = re.findall(r"^([0-9a-f]{64}) (\S+)$", (root / "SOURCES.md").read_text(), re.M)
 assert len(entries) == 11, "missing asset digests"
 for digest, name in entries:

@@ -99,6 +99,164 @@ fn an_editing_sequence_follows_edits_on_its_history_and_restarts_for_new_sizes()
         "a video's sequence never restarts by itself"
     );
 }
+/// A host's texture of `format` and `size`, holding `image` when one is given.
+fn host_texture(
+    r: &Renderer,
+    format: wgpu::TextureFormat,
+    (width, height): (u32, u32),
+    image: Option<&RgbaImage>,
+) -> wgpu::Texture {
+    let texture = r.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("host texture"),
+        size: gpu::extent(width, height),
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    if let Some(image) = image {
+        let view = texture.create_view(&Default::default());
+        Target {
+            texture: texture.clone(),
+            view,
+            width,
+            height,
+        }
+        .upload(&r.queue, image);
+    }
+    texture
+}
+
+/// A host's texture's bytes, read back as they are stored.
+fn host_bytes(r: &Renderer, texture: &wgpu::Texture) -> RgbaImage {
+    let target = Target {
+        texture: texture.clone(),
+        view: texture.create_view(&Default::default()),
+        width: texture.width(),
+        height: texture.height(),
+    };
+    pollster::block_on(r.read_target(&target)).unwrap()
+}
+
+/// `sequence`'s next frame recorded for a host, from `source` into `target`, and submitted.
+fn hosted(
+    r: &Renderer,
+    sequence: &mut Sequence,
+    source: &wgpu::Texture,
+    target: &wgpu::Texture,
+    c: &Config,
+) {
+    let mut encoder = r.device.create_command_encoder(&Default::default());
+    let frame = HostFrame {
+        source,
+        target,
+        seconds: 1. / 60.,
+    };
+    r.encode(&mut encoder, sequence, &frame, c).unwrap();
+    r.queue.submit(Some(encoder.finish()));
+}
+
+#[test]
+#[ignore = "requires a Vulkan adapter"]
+fn a_host_frame_draws_what_a_video_frame_draws_and_keeps_its_glow_at_a_new_size() {
+    let r = pollster::block_on(Renderer::new(wgpu::Backends::VULKAN)).unwrap();
+    // A video's sequence with no warm-up, at 60 frames a second, runs as a host's does.
+    let c = Config {
+        output: "320x240".into(),
+        warmup: 0,
+        persistence: [0.9; 3],
+        ..Config::general()
+    };
+    let card = config::test_card();
+    let black = RgbaImage::from_pixel(256, 224, image::Rgba([0, 0, 0, 255]));
+    let mut video = Sequence::video(Timing::Stable, 60.);
+    next(&r, &mut video, &card, &c);
+    let expected = next(&r, &mut video, &black, &c);
+
+    use wgpu::TextureFormat::{Bgra8UnormSrgb, Rgba8Unorm, Rgba8UnormSrgb};
+    let first = host_texture(&r, Rgba8Unorm, (256, 224), Some(&card));
+    let second = host_texture(&r, Rgba8Unorm, (256, 224), Some(&black));
+    let target = host_texture(&r, Rgba8Unorm, (320, 240), None);
+    let mut host = Sequence::host();
+    hosted(&r, &mut host, &first, &target, &c);
+    hosted(&r, &mut host, &second, &target, &c);
+    assert_eq!(host_bytes(&r, &target), expected);
+
+    // sRGB textures hold the same bytes, which read and write as the colours they encode.
+    let first = host_texture(&r, Rgba8UnormSrgb, (256, 224), Some(&card));
+    let second = host_texture(&r, Rgba8UnormSrgb, (256, 224), Some(&black));
+    let target = host_texture(&r, Bgra8UnormSrgb, (320, 240), None);
+    let mut host = Sequence::host();
+    hosted(&r, &mut host, &first, &target, &c);
+    hosted(&r, &mut host, &second, &target, &c);
+    let mut bgra = host_bytes(&r, &target);
+    for pixel in bgra.pixels_mut() {
+        pixel.0.swap(0, 2);
+    }
+    let most = bgra
+        .pixels()
+        .zip(expected.pixels())
+        .flat_map(|(a, b)| (0..3).map(move |i| a[i].abs_diff(b[i])))
+        .max();
+    assert!(most <= Some(1), "sRGB textures differ by {most:?} steps");
+
+    // A new output size keeps the glow: the card still shows behind black at twice the size.
+    let card = host_texture(&r, Rgba8Unorm, (256, 224), Some(&card));
+    let black = host_texture(&r, Rgba8Unorm, (256, 224), Some(&black));
+    let small = host_texture(&r, Rgba8Unorm, (320, 240), None);
+    let large = host_texture(&r, Rgba8Unorm, (640, 480), None);
+    let mut host = Sequence::host();
+    hosted(&r, &mut host, &card, &small, &c);
+    hosted(&r, &mut host, &black, &large, &c);
+    assert_eq!(host.tick, 2, "the sequence went on");
+    let alone = host_texture(&r, Rgba8Unorm, (640, 480), None);
+    hosted(&r, &mut Sequence::host(), &black, &alone, &c);
+    assert_ne!(host_bytes(&r, &large), host_bytes(&r, &alone));
+}
+
+#[test]
+#[ignore = "requires a Vulkan adapter"]
+fn a_host_frame_needs_a_host_sequence_and_usable_textures() {
+    let r = pollster::block_on(Renderer::new(wgpu::Backends::VULKAN)).unwrap();
+    let texture = host_texture(&r, wgpu::TextureFormat::Rgba8Unorm, (16, 16), None);
+    let mut encoder = r.device.create_command_encoder(&Default::default());
+    let frame = HostFrame {
+        source: &texture,
+        target: &texture,
+        seconds: 1. / 60.,
+    };
+    let c = Config::default();
+    let error = r
+        .encode(&mut encoder, &mut Sequence::still(), &frame, &c)
+        .unwrap_err();
+    assert!(error.to_string().contains("Sequence::host"), "{error}");
+    let depth = r.device.create_texture(&wgpu::TextureDescriptor {
+        label: None,
+        size: gpu::extent(16, 16),
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Depth32Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    for (source, target) in [(&depth, &texture), (&texture, &depth)] {
+        let frame = HostFrame {
+            source,
+            target,
+            seconds: 1. / 60.,
+        };
+        assert!(r
+            .encode(&mut encoder, &mut Sequence::host(), &frame, &c)
+            .is_err());
+    }
+}
+
 #[test]
 #[ignore = "requires a Vulkan adapter"]
 fn preview_frame_matches_the_pixels_a_read_back_render_produces() {

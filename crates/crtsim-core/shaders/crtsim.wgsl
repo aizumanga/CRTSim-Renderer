@@ -305,3 +305,13 @@ fn blur(uv: vec2<f32>, swap: bool) -> vec4<f32> {
     let result=base+colored*p.bloom.x;
     return vec4(select(result,srgb_encode(result),p.processing.x>0.5),1.);
 }
+
+// A frame handed to its host: the final picture, texel for texel, into the host's target. An
+// sRGB target encodes what it is given, so it is given the colours decoded.
+@fragment fn deliver(q: Quad) -> @location(0) vec4<f32> {
+    return textureLoad(source,vec2<i32>(q.position.xy),0);
+}
+@fragment fn deliver_srgb(q: Quad) -> @location(0) vec4<f32> {
+    let c=textureLoad(source,vec2<i32>(q.position.xy),0);
+    return vec4(srgb_decode(c.rgb),1.);
+}
