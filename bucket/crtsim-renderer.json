@@ -1,5 +1,5 @@
 {
-    "version": "1.4.0",
+    "version": "1.5.0",
     "description": "Renders images and video through J. Kyle Pittman's CRTSim, a simulated CRT television.",
     "homepage": "https://github.com/aizumanga/CRTSim-Renderer",
     "license": "CC0-1.0",
@@ -12,8 +12,8 @@
     },
     "architecture": {
         "64bit": {
-            "url": "https://github.com/aizumanga/CRTSim-Renderer/releases/download/v1.4.0/CRTSim-Renderer-v1.4.0-windows-x86_64.zip",
-            "hash": "fbcf1ecb92b0e1ae618bb581e2ecc868c0fd7393ab5b487943f94c971f738c1f"
+            "url": "https://github.com/aizumanga/CRTSim-Renderer/releases/download/v1.5.0/CRTSim-Renderer-v1.5.0-windows-x86_64.zip",
+            "hash": "aee914c7c02a08587700901e6154bb3b259e5a73a59d64c5f062b934ed43f1e3"
         }
     },
     "bin": "crtsim.exe",
