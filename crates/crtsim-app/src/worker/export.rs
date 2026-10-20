@@ -184,31 +184,20 @@ pub(super) async fn export_animation_here(
     cancel: &Arc<AtomicBool>,
     progress: &dyn Fn(Progress),
 ) -> Result<()> {
-    use crtsim_media::jobs;
-    let format = crtsim_media::AnimationFormat::of(path)
-        .ok_or_else(|| anyhow::anyhow!("Choose a GIF, WebP or PNG filename"))?;
     let renderer = graphics.renderer(|| {}).await?;
-    let bytes = jobs::export_animation(
+    let (bytes, format) = crtsim_media::jobs::animation_here(
         video,
-        format,
+        path,
         config,
         options,
+        renderer,
         async |span| crate::frames::open(video, span, cancel).await,
-        async |sequence, frame, config| {
-            jobs::render(renderer, sequence, frame, config, cancel).await
-        },
         async |frame, quality| lossy_webp(frame, quality).await,
         cancel,
         progress,
     )
     .await?;
-    ensure!(!cancel.load(Ordering::Relaxed), "Render cancelled");
-    let mime = match format {
-        crtsim_media::AnimationFormat::Gif => "image/gif",
-        crtsim_media::AnimationFormat::Webp => "image/webp",
-        crtsim_media::AnimationFormat::Apng => "image/png",
-    };
-    files::deliver(path, &bytes, mime)
+    files::deliver(path, &bytes, format.mime())
 }
 
 /// A whole video exported in a browser without FFmpeg, and downloaded. Its frames and sound

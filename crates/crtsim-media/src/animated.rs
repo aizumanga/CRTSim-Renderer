@@ -52,6 +52,15 @@ impl AnimationFormat {
         }
     }
 
+    /// The file's media type, for a page to download it as.
+    pub fn mime(self) -> &'static str {
+        match self {
+            Self::Gif => "image/gif",
+            Self::Webp => "image/webp",
+            Self::Apng => "image/png",
+        }
+    }
+
     /// The format a file name asks for, by its extension.
     pub fn of(path: &Path) -> Option<Self> {
         let extension = path.extension()?.to_str()?;
