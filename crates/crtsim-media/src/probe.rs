@@ -60,6 +60,9 @@ pub enum Source {
         format: AnimationFormat,
         delays: std::sync::Arc<[u32]>,
     },
+    /// A sprite sheet with its JSON, whose frames are cut from its picture here, and which
+    /// says how long each shows. It has no other tracks.
+    Sheet(std::sync::Arc<crate::Sheet>),
     /// A video whose container is read here and whose frames the host decodes, as a
     /// browser does with WebCodecs.
     Demuxed(std::sync::Arc<crate::demux::Demuxed>),
@@ -69,6 +72,15 @@ pub enum Source {
 }
 
 impl Video {
+    /// Whether its frames are made here, without FFmpeg: an animation's, a sprite sheet's or
+    /// the video test card's.
+    pub fn made_here(&self) -> bool {
+        matches!(
+            self.source,
+            Source::Animated { .. } | Source::Sheet(_) | Source::TestClip
+        )
+    }
+
     /// The tracks that hold `kind`, in the file's order.
     pub fn tracks_of(&self, kind: TrackKind) -> impl Iterator<Item = &Track> {
         self.tracks.iter().filter(move |track| track.kind == kind)
@@ -97,10 +109,8 @@ impl Video {
     /// animation, whose frame times are known, and at the average rate for a video.
     pub fn frame_time(&self, frame: u64) -> f64 {
         match &self.source {
-            Source::Animated { delays, .. } => {
-                let shown = delays.iter().take(frame as usize);
-                shown.map(|&delay| f64::from(delay)).sum::<f64>() / 1000.
-            }
+            Source::Animated { delays, .. } => shown_before(delays, frame),
+            Source::Sheet(sheet) => shown_before(sheet.delays(), frame),
             Source::Demuxed(demuxed) => {
                 let video = &demuxed.video;
                 video
@@ -112,6 +122,13 @@ impl Video {
         }
         .min(self.duration)
     }
+}
+
+/// How long the frames before `frame` show, in seconds, when each shows for `delays`
+/// milliseconds.
+fn shown_before(delays: &[u32], frame: u64) -> f64 {
+    let shown = delays.iter().take(frame as usize);
+    shown.map(|&delay| f64::from(delay)).sum::<f64>() / 1000.
 }
 
 #[derive(Clone, Debug)]
@@ -260,8 +277,10 @@ fn positive_integer(value: &Value) -> Option<u64> {
 pub fn probe(path: &Path, cancel: &Arc<AtomicBool>) -> Result<Video> {
     let path = path.canonicalize().context("Cannot open video")?;
     ensure!(path.is_file(), "Choose a local video file");
-    if let MediaKind::Animation(format) = MediaKind::of(&path) {
-        return animated::probe(path, format, cancel);
+    match MediaKind::of(&path) {
+        MediaKind::Animation(format) => return animated::probe(path, format, cancel),
+        MediaKind::Sheet => return animated::probe_sheet(path),
+        MediaKind::Still | MediaKind::Video => {}
     }
     let mut cmd = Tool::Ffprobe.command();
     cmd.args(["-show_streams", "-show_format", "-of", "json"])

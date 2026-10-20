@@ -27,8 +27,11 @@ enum Command {
     /// Render an image, video or animation; the built-in test card, or the video test card for
     /// a moving output, if --input is omitted. The output's extension picks what is made:
     /// .mp4, .mkv or .webm a video; .gif or .webp an animation; .png a still, or an animated
-    /// PNG of a moving input. Video and animation output, and video input, need FFmpeg.
+    /// PNG of a moving input. Video output and video input need FFmpeg, as does a lossy WebP;
+    /// without it, an animation of a GIF, WebP or sprite sheet is written here.
     Render {
+        /// A picture, a video, an animated GIF or WebP, or a sprite sheet's JSON as Aseprite
+        /// and TexturePacker write it, beside its picture.
         #[arg(short, long)]
         input: Option<PathBuf>,
         #[arg(short, long)]
@@ -400,9 +403,20 @@ fn render_moving(
             lossless: moving.lossless,
             ..AnimationOptions::default()
         };
-        crtsim_media::export_animation(
-            &video, output, config, &options, &renderer, &cancel, progress,
-        )?;
+        // FFmpeg encodes animations where it is installed. Without it, one made here is
+        // written as a browser page writes it.
+        let lossy = crtsim_media::AnimationFormat::of(output)
+            == Some(crtsim_media::AnimationFormat::Webp)
+            && !moving.lossless;
+        if video.made_here() && !lossy && !crtsim_media::ToolCheck::run(&cancel).ready() {
+            crtsim_media::export_animation_here(
+                &video, output, config, &options, &renderer, &cancel, progress,
+            )?;
+        } else {
+            crtsim_media::export_animation(
+                &video, output, config, &options, &renderer, &cancel, progress,
+            )?;
+        }
     } else {
         let options = Options {
             timing,

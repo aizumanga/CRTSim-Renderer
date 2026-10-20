@@ -10,6 +10,7 @@ on:
       - tools/licenses.py
       - tools/build_web.py
       - packaging/**
+      - extensions/**
       - ports/**
       - web/**
       - Cargo.lock
@@ -75,11 +76,12 @@ jobs:
           echo "PACKAGE_VERSION=$version" >> "$GITHUB_ENV"
           python tools/package.py --platform "$PACKAGE_PLATFORM" --version "$version"
           python tools/package.py --platform "editors-$PACKAGE_PLATFORM" --version "$version"
-          # The RetroArch and ReShade presets are the same on every system, so one build writes
-          # them.
+          # The RetroArch and ReShade presets and the Aseprite extension are the same on every
+          # system, so one build writes them.
           if [ "$PACKAGE_PLATFORM" = linux-x86_64 ]; then
             python tools/package.py --platform retroarch --version "$version"
             python tools/package.py --platform reshade --version "$version"
+            python tools/package.py --platform aseprite --version "$version"
           fi
       - name: Build Linux AppImage
         if: runner.os == 'Linux'
@@ -113,13 +115,14 @@ jobs:
           xvfb-run -a -s '-screen 0 1440x1000x24' ./dist/*.AppImage "$PWD/package-smoke/input.mkv" --backend vulkan --smoke-test "$PWD/package-smoke/video.png"
       - name: Package checksums
         shell: bash
-        run: python -c "from pathlib import Path; import hashlib; p=Path('dist'); fs=sorted(f for f in p.iterdir() if f.is_file() and (f.suffix in ('.zip','.AppImage') or f.name.endswith('.tar.gz'))); (p/'SHA256SUMS-${{ matrix.platform }}.txt').write_text(''.join(hashlib.sha256(f.read_bytes()).hexdigest()+'  '+f.name+'\n' for f in fs))"
+        run: python -c "from pathlib import Path; import hashlib; p=Path('dist'); fs=sorted(f for f in p.iterdir() if f.is_file() and (f.suffix in ('.zip','.AppImage','.aseprite-extension') or f.name.endswith('.tar.gz'))); (p/'SHA256SUMS-${{ matrix.platform }}.txt').write_text(''.join(hashlib.sha256(f.read_bytes()).hexdigest()+'  '+f.name+'\n' for f in fs))"
       - uses: actions/upload-artifact@v4
         with:
           name: CRTSim-Renderer-${{ matrix.platform }}
           path: |
             dist/*.zip
             dist/*.tar.gz
+            dist/*.aseprite-extension
             dist/*.AppImage
             dist/*.AppImage.zsync
             dist/*.txt
@@ -237,9 +240,9 @@ jobs:
         shell: bash
         run: |
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release create "$RELEASE_TAG" --verify-tag --draft --title "CRTSim Renderer $RELEASE_TAG" --notes 'Portable desktop and CLI packages, the web app the site serves, the CRT as RetroArch shader presets, ReShade presets and an OBS filter for Linux, and as an OpenFX effect and a frei0r filter for video editors (see docs/EDITORS.md). See the included README and docs/RELEASES.md. Video requires a separate FFmpeg/ffprobe installation. macOS is ad-hoc signed only, without Apple Developer ID signing or notarization.'
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "CRTSim Renderer $RELEASE_TAG" --notes 'Portable desktop and CLI packages, the web app the site serves, the CRT as RetroArch shader presets, ReShade presets and an OBS filter for Linux, as an OpenFX effect and a frei0r filter for video editors (see docs/EDITORS.md), and an Aseprite extension (see docs/ASEPRITE.md). See the included README and docs/RELEASES.md. Video requires a separate FFmpeg/ffprobe installation. macOS is ad-hoc signed only, without Apple Developer ID signing or notarization.'
           fi
-          gh release upload "$RELEASE_TAG" packages/dist/*.zip packages/dist/*.tar.gz packages/dist/*.AppImage packages/dist/*.AppImage.zsync packages/dist/SHA256SUMS-*.txt --clobber
+          gh release upload "$RELEASE_TAG" packages/dist/*.zip packages/dist/*.tar.gz packages/dist/*.aseprite-extension packages/dist/*.AppImage packages/dist/*.AppImage.zsync packages/dist/SHA256SUMS-*.txt --clobber
   # The web app for a release published before its package existed, such as v0.7.0.
   add-web:
     if: inputs.release_tag != ''

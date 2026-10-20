@@ -225,7 +225,7 @@ Every port is checked against the renderer: the RetroArch port through librashad
 filter in OBS itself, picture for picture, and the ReShade effect compiled by ReShade's own
 compiler as each shipped look sets it.
 
-## In video editors: OpenFX and frei0r
+## In video editors and Aseprite
 
 The renderer also runs as an effect over a clip, at the clip's own size, with the app's looks or a preset it saved,
 carrying the glow from frame to frame in whatever order the editor renders them:
@@ -236,6 +236,9 @@ carrying the glow from frame to frame in whatever order the editor renders them:
 Each release has an `-editors-<system>.zip` of both. See [the editors' guide](docs/EDITORS.md) for where they go and
 how they handle frames rendered out of order. They are checked in FFmpeg, `melt` and Natron against the command line's
 render of the same clip.
+
+**Aseprite** has an extension, `.aseprite-extension` in each release, that draws a sprite's frame or its animation
+through the CRT with the command line and opens the result as a new sprite. See [the Aseprite guide](docs/ASEPRITE.md).
 
 ## As a service
 
@@ -270,7 +273,7 @@ The app looks for the programs, in order, where `CRTSIM_FFMPEG` and `CRTSIM_FFPR
 `ffmpeg` or `ffmpeg/bin` folder next to it; in Homebrew's and MacPorts' folders on macOS, and winget's, Scoop's and
 Chocolatey's on Windows, which apps started from the desktop may not have on their PATH; and finally on PATH.
 FFmpeg must include `libx264` for MP4/MKV, `libvpx-vp9` for WebM, `libwebp` for animated WebP export, and AAC/Opus encoders when converting audio.
-Animated GIF and WebP open and play without FFmpeg; exporting any video or animation needs it.
+Animated GIF and WebP, and a sprite sheet's JSON as Aseprite writes it, open and play without FFmpeg; exporting any video or animation from the app needs it.
 Nothing is downloaded automatically.
 
 1. Choose **Open File…**, drop a video or an animated GIF/WebP, or pass its path on the command line.
@@ -322,12 +325,19 @@ cargo run --release -p crtsim-cli -- contact-sheet --preset "Clean RGB" --look M
 
 `render` also makes videos and animations, the output's extension choosing which: `.mp4`, `.mkv` or `.webm` a video,
 `.gif` or `.webp` an animation, and `.png` a still, or an animated PNG when the input is a video or animation. Without
-`--input`, a moving output renders the video test card. They need FFmpeg, as the desktop's do.
+`--input`, a moving output renders the video test card. They need FFmpeg, as the desktop's do, except an animation
+(a GIF, a lossless WebP or an animated PNG) of an animated GIF or WebP, a sprite sheet or the video test card, which is
+written without it where FFmpeg is not installed.
+
+A sprite sheet's JSON, as Aseprite's **Export Sprite Sheet** and TexturePacker write it, renders as an animation of its
+frames, each shown as long as the JSON says; see [the Aseprite extension](docs/ASEPRITE.md), which renders a sprite
+this way from inside Aseprite.
 
 ```sh
 cargo run --release -p crtsim-cli -- render -i clip.mp4 -o crt.mp4 --preset "NTSC 240p" --size 1080p
 cargo run --release -p crtsim-cli -- render -i clip.mp4 -o crt.mkv --quality lossless --timing ntsc60
 cargo run --release -p crtsim-cli -- render -i clip.mp4 -o crt.gif --max-side 480 --fps 24 --seconds 5
+cargo run --release -p crtsim-cli -- render -i walk.json -o walk-crt.webp --lossless --fps 12 --seconds 0
 ```
 
 `--quality` (draft, balanced, high, archival or lossless), `--timing` (stable, ntsc60 or off), `--audio` and

@@ -14,8 +14,9 @@ parser = argparse.ArgumentParser()
 # `retroarch` and `reshade` package the shipped looks as those ports' presets, written by the release CLI.
 # `obs-linux-x86_64` packages the OBS filter that CMake built into build/obs, with its data folder.
 # `editors-<system>` packages the OpenFX effect and the frei0r filter that Cargo built for that system.
+# `aseprite` packages the Aseprite extension, which runs the command line of a system's package.
 SYSTEMS = ['linux-x86_64', 'windows-x86_64', 'macos-arm64']
-parser.add_argument('--platform', choices=SYSTEMS + ['web', 'retroarch', 'reshade', 'obs-linux-x86_64']
+parser.add_argument('--platform', choices=SYSTEMS + ['web', 'retroarch', 'reshade', 'obs-linux-x86_64', 'aseprite']
                     + [f'editors-{system}' for system in SYSTEMS],
                     required=True)
 parser.add_argument('--version', required=True)
@@ -74,6 +75,21 @@ def write_zip(archive, folder, within):
                 output.write(path, path.relative_to(within))
 
 
+if args.platform == 'aseprite':
+    # Aseprite installs an extension from a ZIP named .aseprite-extension with its manifest at
+    # the root. The script and its manifest are CC0, and carry no dependency's code.
+    version = check_version(licenses_of.metadata())
+    extension = root / 'extensions' / 'aseprite'
+    manifest = json.loads((extension / 'package.json').read_text(encoding='utf-8'))
+    manifest['version'] = version
+    (stage / 'package.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+    shutil.copy2(extension / 'crtsim.lua', stage)
+    shutil.copy2(root / 'docs' / 'ASEPRITE.md', stage / 'README.md')
+    shutil.copy2(root / 'LICENSE', stage)
+    archive = dist / f'CRTSim-Renderer-{args.version}.aseprite-extension'
+    write_zip(archive, stage, stage)
+    print(archive)
+    raise SystemExit
 if args.platform.startswith('editors-'):
     # The OpenFX bundle and the frei0r filter, each as its host finds it, with Kdenlive's
     # description of the filter: see docs/EDITORS.md.

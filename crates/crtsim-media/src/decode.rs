@@ -68,7 +68,7 @@ impl Decoder {
                 }
             }
             Source::Demuxed(_) => anyhow::bail!("This video is decoded by the browser"),
-            Source::Animated { .. } | Source::TestClip => {
+            Source::Animated { .. } | Source::Sheet(_) | Source::TestClip => {
                 let plan = animated::Plan::new(video, request)?;
                 let (decoding, frames) = animated::Decoding::start(plan, QUEUED_FRAMES, cancel);
                 Self {

@@ -254,7 +254,34 @@ fn probe_in(
         delays.push(frame?.1);
         ensure!(delays.len() <= MAX_FRAMES, "Animation has too many frames");
     }
+    let contents = match origin {
+        Origin::Bytes(contents) => Some(contents),
+        Origin::Path(_) => None,
+    };
+    let source = |delays| Source::Animated { format, delays };
+    video(path, size, delays, format.extension(), source, contents)
+}
+
+/// A sprite sheet's frames as a video, cut from its picture as they are read.
+pub(crate) fn probe_sheet(path: PathBuf) -> Result<Video> {
+    let sheet = Arc::new(crate::Sheet::read(&path)?);
+    let size = sheet.size;
+    let delays = sheet.delays().to_vec();
+    let source = |_| Source::Sheet(sheet);
+    video(path, size, delays, "sprite sheet", source, None)
+}
+
+/// An animation made here, as a video whose frames show for `delays` milliseconds each.
+fn video(
+    path: PathBuf,
+    size: (u32, u32),
+    delays: Vec<u32>,
+    codec: &str,
+    source: impl FnOnce(Arc<[u32]>) -> Source,
+    contents: Option<Contents>,
+) -> Result<Video> {
     ensure!(!delays.is_empty(), "Animation contains no frames");
+    ensure!(delays.len() <= MAX_FRAMES, "Animation has too many frames");
     let total: u64 = delays.iter().map(|&delay| u64::from(delay)).sum();
     let duration = total as f64 / 1000.;
     ensure!(
@@ -267,7 +294,7 @@ fn probe_in(
         tracks: vec![Track {
             index: 0,
             kind: TrackKind::Video,
-            codec: format.extension().into(),
+            codec: codec.into(),
             offset: 0.,
             language: None,
             title: None,
@@ -283,14 +310,8 @@ fn probe_in(
         hdr: false,
         stream: 0,
         frames: Some(delays.len() as u64),
-        source: Source::Animated {
-            format,
-            delays: delays.into(),
-        },
-        contents: match origin {
-            Origin::Bytes(contents) => Some(contents),
-            Origin::Path(_) => None,
-        },
+        source: source(delays.into()),
+        contents,
         subtitle: None,
     })
 }
@@ -401,6 +422,8 @@ fn schedule_starts(starts: &[f64], end: f64, request: &Request) -> Result<Vec<us
 enum Maker {
     /// Decoded from an animated GIF or WebP.
     File(Origin, AnimationFormat),
+    /// Cut from a sprite sheet.
+    Sheet(Arc<crate::Sheet>),
     /// Drawn by the video test card.
     TestClip,
 }
@@ -419,6 +442,10 @@ impl Plan {
             Source::Animated { format, delays } => Ok(Self {
                 maker: Maker::File(Origin::of(video), *format),
                 frames: schedule(delays, request)?,
+            }),
+            Source::Sheet(sheet) => Ok(Self {
+                maker: Maker::Sheet(sheet.clone()),
+                frames: schedule(sheet.delays(), request)?,
             }),
             Source::TestClip => {
                 let fps = f64::from(test_clip::FPS);
@@ -446,6 +473,7 @@ impl Plan {
                 decoded: 0,
                 current: RgbaImage::new(0, 0),
             }),
+            Maker::Sheet(sheet) => Planned(Making::Cut(sheet, self.frames.into_iter())),
             Maker::TestClip => Planned(Making::Drawn(self.frames.into_iter())),
         })
     }
@@ -469,6 +497,8 @@ enum Making {
     },
     /// Drawn each on its own, so a frame far into the clip is as quick as the first.
     Drawn(std::vec::IntoIter<usize>),
+    /// Cut from a sprite sheet each on its own.
+    Cut(Arc<crate::Sheet>, std::vec::IntoIter<usize>),
 }
 
 impl Iterator for Planned {
@@ -477,6 +507,7 @@ impl Iterator for Planned {
     fn next(&mut self) -> Option<Self::Item> {
         match &mut self.0 {
             Making::Drawn(plan) => plan.next().map(|frame| Ok(test_clip::frame(frame as u64))),
+            Making::Cut(sheet, plan) => plan.next().map(|frame| Ok(sheet.frame(frame))),
             Making::Decoded {
                 frames,
                 plan,

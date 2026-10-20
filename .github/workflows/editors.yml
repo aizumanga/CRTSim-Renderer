@@ -1,15 +1,19 @@
 name: Editor effects
 # The frei0r filter in FFmpeg and in MLT's melt, and the OpenFX effect in Natron, each rendering
 # a clip that tools/check_editors.py compares frame by frame with the command line's render of
-# it, on software Vulkan. The effects' own tests run with the others in the validation workflow.
+# it; and the Aseprite extension, rendering through the command line from a stand-in for
+# Aseprite. All on software Vulkan; the crates' own tests run in the validation workflow.
 on:
   push:
     branches: [main]
     paths:
       - crates/crtsim-core/**
+      - crates/crtsim-media/**
+      - crates/crtsim-cli/**
       - crates/crtsim-plugin/**
       - crates/crtsim-frei0r/**
       - crates/crtsim-ofx/**
+      - extensions/**
       - tools/check_editors.py
       - tools/editors/**
       - .github/workflows/editors.yml
@@ -17,9 +21,12 @@ on:
   pull_request:
     paths:
       - crates/crtsim-core/**
+      - crates/crtsim-media/**
+      - crates/crtsim-cli/**
       - crates/crtsim-plugin/**
       - crates/crtsim-frei0r/**
       - crates/crtsim-ofx/**
+      - extensions/**
       - tools/check_editors.py
       - tools/editors/**
       - .github/workflows/editors.yml
@@ -60,3 +67,15 @@ jobs:
         with:
           name: editor-frames
           path: editor-frames
+  aseprite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install software Vulkan and Lua
+        run: sudo apt-get update -qq && sudo apt-get install -y mesa-vulkan-drivers lua5.4
+      - run: cargo build --locked -p crtsim-cli
+      - run: lua5.4 extensions/aseprite/tests/run.lua target/debug/crtsim

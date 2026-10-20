@@ -202,6 +202,12 @@ person chooses Help → Check for updates, or at each start once they have turne
 (`crates/crtsim-app/src/updates.rs`). It tells; it never downloads a release, which package
 managers and AppImage tools do instead. See [the decision](docs/adr/0004-check-for-updates-never-download-them.md).
 
+**Sprite sheet**: an animation's frames laid out in one picture, with JSON saying where each is
+and how long it shows, as Aseprite and TexturePacker write it (`crates/crtsim-media/src/sheet.rs`).
+It opens as an animation made here, each frame cut from the picture as it is read. The Aseprite
+extension hands a sprite's animation to the command line this way (`extensions/aseprite`, see
+[Aseprite](docs/ASEPRITE.md)).
+
 **Render service**: the renderer behind HTTP, headless (`crates/crtsim-service`, see
 [the service](docs/SERVICE.md)). A request's picture, animation or video becomes a **job**,
 known by 128 random bits, which waits in a queue of bounded length for the one worker that owns
