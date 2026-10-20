@@ -48,8 +48,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Install software Vulkan, FFmpeg and melt
-        run: sudo apt-get update -qq && sudo apt-get install -y mesa-vulkan-drivers ffmpeg melt
+      # And the system libraries Natron's Linux build loads rather than carries.
+      - name: Install software Vulkan, FFmpeg, melt and Natron's libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y mesa-vulkan-drivers ffmpeg melt libglu1-mesa libgl1 libopengl0 \
+            libsm6 libice6 libxi6 libxinerama1 libxrandr2 libxcursor1 libxrender1 libcairo2 liblcms2-2
       - uses: actions/cache@v4
         with:
           path: natron.tar.xz
