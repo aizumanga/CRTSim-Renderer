@@ -76,11 +76,12 @@ jobs:
           echo "PACKAGE_VERSION=$version" >> "$GITHUB_ENV"
           python tools/package.py --platform "$PACKAGE_PLATFORM" --version "$version"
           python tools/package.py --platform "editors-$PACKAGE_PLATFORM" --version "$version"
-          # The RetroArch and ReShade presets and the Aseprite extension are the same on every
-          # system, so one build writes them.
+          # The RetroArch and ReShade presets, the Godot add-on and the Aseprite extension are
+          # the same on every system, so one build writes them.
           if [ "$PACKAGE_PLATFORM" = linux-x86_64 ]; then
             python tools/package.py --platform retroarch --version "$version"
             python tools/package.py --platform reshade --version "$version"
+            python tools/package.py --platform godot --version "$version"
             python tools/package.py --platform aseprite --version "$version"
           fi
       - name: Build Linux AppImage

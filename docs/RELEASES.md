@@ -1,5 +1,26 @@
 # Portable releases (Phase 4)
 
+## Unreleased
+
+The CRT runs in games made with Bevy, as the renderer itself, and in Godot 4, as a compositor effect; and a video
+playing goes on through a new preview size with its glow.
+
+- **Bevy.** The [`crtsim-bevy`](../crates/crtsim-bevy) crate, published on crates.io with each release, draws every
+  camera holding a `Crt` through the CRT with the renderer itself, on Bevy's own device, after Bevy's post-processing
+  and its interface. Any included look, saved settings or `Config` will do, HDR cameras included. It is for Bevy 0.20
+  ([ADR 6](adr/0006-bevy-embeds-the-renderer-godot-gets-a-compositor-port.md)).
+- **Godot.** `CRTSim-Renderer-<version>-godot.zip` holds the Godot add-on with the shipped looks: a `CRTSimEffect` for a
+  camera's or an environment's compositor, every setting in the inspector, keeping the glow between frames. A 2D game
+  draws through it with the environment's Canvas background. **Export → Godot effect…** and `crtsim export-godot` write
+  the add-on with any look as a saved effect. It needs Godot 4.3 or later with Forward+ or Mobile, and is checked
+  against the renderer in Godot itself. See [`ports/godot`](../ports/godot).
+- **Playback** goes on through a new output size, such as another preview quality, without stopping and without the
+  glow starting over, as long as frames of the new size fit its buffer. Another signal size or colour mode still plays
+  again from the frame on screen.
+- `crtsim-core`: a host frame reads and draws a float texture, as an engine's HDR target is, as linear light, as it
+  does an sRGB one; a host frame of no time, as an engine's first can be, holds the glow rather than being refused; and
+  a video sequence goes on with its glow through a new output size.
+
 ## v1.5.0
 
 The CRT goes where pictures are made: into video editors as an OpenFX effect and a frei0r filter, into Aseprite as an
@@ -324,25 +345,42 @@ They must include the codecs described in [VIDEO_PIPELINE.md](VIDEO_PIPELINE.md)
 There are no runtime downloads; the desktop reaches the network only when asked to check for a newer release. Personal presets remain in the normal per-user app-data directory;
 updating or replacing a portable package does not delete them. Use `CRTSIM_DATA_DIR` for an explicit alternate directory.
 
-## crtsim-core on crates.io
+## crtsim-core and crtsim-bevy on crates.io
 
 The renderer is published as the [`crtsim-core`](https://crates.io/crates/crtsim-core) crate, for Rust programs to
 depend on: stills, video sequences, and `Renderer::encode` for a game's or an engine's own frames. It is versioned
 with the app, from v1.5.0: each release's crate is the renderer that release's app draws with. Semantic versioning
 then holds for both, so a change that breaks a caller of the crate needs a new major version of the app too.
+
+The Bevy plugin is published beside it as [`crtsim-bevy`](https://crates.io/crates/crtsim-bevy), at the same
+version, asking for that release's `crtsim-core`; a test fails when the two versions part. It runs on Bevy's own wgpu
+device, so it follows a Bevy release only once the renderer is on that release's wgpu.
 Everything it embeds, its shaders, the original meshes and textures, and the NES LUTs, lives in its folder,
 `crates/crtsim-core`, so the crate builds from its package alone; CI packages it on every change to prove that.
 
-A crate version cannot be taken back, so it is published when a person publishes the release, not when its tag is
-pushed: the `publish-core.yml` workflow runs on the release's publication, checks out its tag, checks the tag names
-the crate's version, tests the crate and publishes it, with a token crates.io issues for that run alone. A version
-already on crates.io is left as it is. To set it up:
+A crate version cannot be taken back, so they are published when a person publishes the release, not when its tag
+is pushed: the `publish-core.yml` workflow runs on the release's publication, checks out its tag, checks the tag
+names both crates' version, tests them and publishes the renderer and then the plugin, with a token crates.io issues
+for that run alone. A version already on crates.io is left as it is. To set it up, for each crate:
 
-1. The first version only, from the release's tag: `cargo publish -p crtsim-core` with a crates.io token.
+1. The first version only, from the release's tag: `cargo publish -p crtsim-core`, then `cargo publish -p
+   crtsim-bevy`, with a crates.io token.
 2. Add this repository's `publish-core.yml` workflow as the crate's trusted publisher on crates.io (crate settings →
    Trusted Publishing, environment `crates-io`), and make a `crates-io` environment in the repository's settings.
-3. From then on, publishing a release publishes its crate. Running the workflow by hand with a release's tag
-   publishes that one, if it is not already.
+3. From then on, publishing a release publishes its crates. Running the workflow by hand with a release's tag
+   publishes that one's, where crates.io does not have them already.
+
+## The Godot Asset Library
+
+Each release's `-godot.zip` is the add-on as the [Godot Asset Library](https://godotengine.org/asset-library/)
+installs it: its `addons/crtsim_renderer` folder goes into a project as it is, with its licence. The library takes a
+new version from a person, so after publishing a release:
+
+1. The first time only: submit the asset (Godot 4.3 or later, category 3D Tools or Shaders, licence CC0), with
+   **Download provider** Custom, the release's `-godot.zip` as the download URL, and `ports/godot/README.md`'s
+   opening as its description.
+2. Each release: edit the asset to the release's version and its `-godot.zip`, which the library's moderators then
+   approve.
 
 ## itch.io
 

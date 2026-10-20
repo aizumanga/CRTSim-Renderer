@@ -13,10 +13,11 @@ parser = argparse.ArgumentParser()
 # `web` packages the web app that tools/build_web.py left in web/dist, for a website to serve.
 # `retroarch` and `reshade` package the shipped looks as those ports' presets, written by the release CLI.
 # `obs-linux-x86_64` packages the OBS filter that CMake built into build/obs, with its data folder.
+# `godot` packages the Godot add-on with the shipped looks, as the Godot Asset Library installs it.
 # `editors-<system>` packages the OpenFX effect and the frei0r filter that Cargo built for that system.
 # `aseprite` packages the Aseprite extension, which runs the command line of a system's package.
 SYSTEMS = ['linux-x86_64', 'windows-x86_64', 'macos-arm64']
-parser.add_argument('--platform', choices=SYSTEMS + ['web', 'retroarch', 'reshade', 'obs-linux-x86_64', 'aseprite']
+parser.add_argument('--platform', choices=SYSTEMS + ['web', 'retroarch', 'reshade', 'obs-linux-x86_64', 'godot', 'aseprite']
                     + [f'editors-{system}' for system in SYSTEMS],
                     required=True)
 parser.add_argument('--version', required=True)
@@ -34,7 +35,7 @@ cli = str(root / 'target' / 'release' / 'crtsim')
 ASSETS = root / 'crates' / 'crtsim-core' / 'assets'
 
 
-if args.platform in ('retroarch', 'reshade', 'obs-linux-x86_64'):
+if args.platform in ('retroarch', 'reshade', 'obs-linux-x86_64', 'godot'):
     # One folder to copy where its host looks. The shaders, textures and plugin are CC0 and hold
     # no dependency's code; the plugin links OBS's own library only as OBS loads it. So the
     # package carries only the original assets' sources.
@@ -48,8 +49,11 @@ if args.platform in ('retroarch', 'reshade', 'obs-linux-x86_64'):
     else:
         subprocess.run([cli, f'export-{args.platform}', '--output-dir', str(folder)], check=True,
                        stdout=subprocess.DEVNULL)
-    shutil.copy2(root / 'LICENSE', folder)
-    shutil.copy2(ASSETS / 'original-crtsim/SOURCES.md', folder / 'ORIGINAL_ASSETS.md')
+    # The Asset Library installs a zip's addons folder into a project, so the add-on carries
+    # its own licence.
+    notices = folder / 'addons' / 'crtsim_renderer' if args.platform == 'godot' else folder
+    shutil.copy2(root / 'LICENSE', notices)
+    shutil.copy2(ASSETS / 'original-crtsim/SOURCES.md', notices / 'ORIGINAL_ASSETS.md')
     archive = dist / (name + '.zip')
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as output:
         for path in sorted(folder.rglob('*')):
