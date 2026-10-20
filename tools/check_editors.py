@@ -90,8 +90,10 @@ def natron(args, work, plugin, **settings):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
-    parser.add_argument('--target', type=pathlib.Path, default=ROOT / 'target/debug')
-    parser.add_argument('--natron', type=pathlib.Path, help='an unpacked Natron for Linux')
+    # Natron runs in the work folder, so the paths are made absolute.
+    absolute = lambda path: pathlib.Path(path).resolve()
+    parser.add_argument('--target', type=absolute, default=ROOT / 'target/debug')
+    parser.add_argument('--natron', type=absolute, help='an unpacked Natron for Linux')
     parser.add_argument('--keep', type=pathlib.Path, help='a NEW directory to keep the frames in')
     args = parser.parse_args()
     work = pathlib.Path(tempfile.mkdtemp(prefix='crtsim-editors-'))

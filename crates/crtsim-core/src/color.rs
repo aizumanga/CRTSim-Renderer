@@ -256,7 +256,7 @@ impl Source {
                 transform.transform(&probe, &mut out).is_ok()
                     && probe
                         .iter()
-                        .zip(out.chunks_exact(3))
+                        .zip(out.as_chunks::<3>().0)
                         .all(|(v, rgb)| rgb.iter().all(|c| c.abs_diff(*v) <= 1))
             }
             _ => false,
@@ -338,7 +338,9 @@ impl Pixels {
     /// Puts the input's alpha on each converted pixel, as it was: only colour converts.
     fn keep_alpha<T: Copy>(self, input: &[T], out: &mut [T], opaque: T) {
         for (o, i) in out
-            .chunks_exact_mut(4)
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
             .zip(input.chunks_exact(self.channels()))
         {
             o[3] = match self {
