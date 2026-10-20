@@ -45,6 +45,16 @@ _Avoid_: live sequence, since live preview means something else.
 **Host**: the program whose picture the CRT is drawn from and into, such as an emulator or a
 game, as opposed to the app, which renders files.
 
+**Clip sequence**: a host sequence whose first frame is warmed up, as a clip in an editor starts
+from a picture that was already on screen (`Sequence::clip`).
+
+**Editor effect**: the renderer itself running inside a video editor or compositor, drawing each
+frame of a clip through the CRT as a filter: the OpenFX effect (`crates/crtsim-ofx`) and the
+frei0r filter (`crates/crtsim-frei0r`), which share `crates/crtsim-plugin`; see
+[the editors](docs/EDITORS.md). A frame that follows the last one rendered goes on with its
+glow; any other is rendered after its **history**, the frames before it that its glow needs,
+back until older glow has faded below half an 8-bit step, where the host can give them.
+
 **Shader port**: the effect rewritten in a host's own shader language, as passes the host runs
 on every frame of its picture, rather than this renderer running inside the host: for
 RetroArch, ReShade and OBS (`ports/`, exported by `crtsim_shader_ports`). See

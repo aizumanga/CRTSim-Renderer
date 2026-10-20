@@ -225,6 +225,18 @@ Every port is checked against the renderer: the RetroArch port through librashad
 filter in OBS itself, picture for picture, and the ReShade effect compiled by ReShade's own
 compiler as each shipped look sets it.
 
+## In video editors: OpenFX and frei0r
+
+The renderer also runs as an effect over a clip, at the clip's own size, with the app's looks or a preset it saved,
+carrying the glow from frame to frame in whatever order the editor renders them:
+
+- **DaVinci Resolve, Natron, Nuke** and other OpenFX hosts, as `CRTSim.ofx.bundle`.
+- **Kdenlive**, MLT's `melt` and FFmpeg, as the `crtsim` frei0r filter, with a description that lists it in Kdenlive.
+
+Each release has an `-editors-<system>.zip` of both. See [the editors' guide](docs/EDITORS.md) for where they go and
+how they handle frames rendered out of order. They are checked in FFmpeg, `melt` and Natron against the command line's
+render of the same clip.
+
 ## As a service
 
 `crtsim-service` renders pictures, animations and videos sent over HTTP, for a chat bot or a batch of renders on a

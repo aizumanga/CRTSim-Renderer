@@ -59,7 +59,7 @@ jobs:
         if: github.event_name != 'pull_request'
         run: cargo test --workspace --exclude crtsim-ports --locked
       - name: Build
-        run: cargo build --release --locked -p crtsim-app -p crtsim-cli
+        run: cargo build --release --locked -p crtsim-app -p crtsim-cli -p crtsim-ofx -p crtsim-frei0r
       - name: Package binaries and licenses
         shell: bash
         env:
@@ -74,6 +74,7 @@ jobs:
           fi
           echo "PACKAGE_VERSION=$version" >> "$GITHUB_ENV"
           python tools/package.py --platform "$PACKAGE_PLATFORM" --version "$version"
+          python tools/package.py --platform "editors-$PACKAGE_PLATFORM" --version "$version"
           # The RetroArch and ReShade presets are the same on every system, so one build writes
           # them.
           if [ "$PACKAGE_PLATFORM" = linux-x86_64 ]; then
@@ -236,7 +237,7 @@ jobs:
         shell: bash
         run: |
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release create "$RELEASE_TAG" --verify-tag --draft --title "CRTSim Renderer $RELEASE_TAG" --notes 'Portable desktop and CLI packages, the web app the site serves, and the CRT as RetroArch shader presets, ReShade presets and an OBS filter for Linux. See the included README and docs/RELEASES.md. Video requires a separate FFmpeg/ffprobe installation. macOS is ad-hoc signed only, without Apple Developer ID signing or notarization.'
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "CRTSim Renderer $RELEASE_TAG" --notes 'Portable desktop and CLI packages, the web app the site serves, the CRT as RetroArch shader presets, ReShade presets and an OBS filter for Linux, and as an OpenFX effect and a frei0r filter for video editors (see docs/EDITORS.md). See the included README and docs/RELEASES.md. Video requires a separate FFmpeg/ffprobe installation. macOS is ad-hoc signed only, without Apple Developer ID signing or notarization.'
           fi
           gh release upload "$RELEASE_TAG" packages/dist/*.zip packages/dist/*.tar.gz packages/dist/*.AppImage packages/dist/*.AppImage.zsync packages/dist/SHA256SUMS-*.txt --clobber
   # The web app for a release published before its package existed, such as v0.7.0.

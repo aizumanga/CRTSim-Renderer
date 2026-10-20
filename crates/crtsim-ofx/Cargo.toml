@@ -1,0 +1,16 @@
+[package]
+name = "crtsim-ofx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CRTSim Renderer as an OpenFX effect, for DaVinci Resolve, Natron, Nuke and other OpenFX hosts."
+publish = false
+
+[lib]
+# Installed as CRTSim.ofx inside CRTSim.ofx.bundle, in a folder OpenFX hosts search.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+crtsim-plugin = { path = "../crtsim-plugin" }
+anyhow.workspace = true
+image.workspace = true

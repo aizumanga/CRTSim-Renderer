@@ -107,7 +107,9 @@ handles). Porting the shaders is less work and more robust.
   renderer ([ADR 5](adr/0005-the-ports-share-one-translation-of-the-passes.md)).
 - **Video editors via OpenFX** (DaVinci Resolve, Natron, Nuke). This matches the app's strength:
   deterministic, high-quality offline renders. Editors do not render frames in order, so a
-  plugin must warm up from a few frames earlier each time, as stills already do.
+  plugin must warm up from a few frames earlier each time, as stills already do. Done: an
+  OpenFX effect that renders a frame after the ones its glow needs, and a frei0r filter for
+  Kdenlive, `melt` and FFmpeg (see [the editors](EDITORS.md)).
 - **A headless service**: the CLI with software Vulkan (lavapipe), as CI already runs it, can
   power a chat bot or batch service. Done: `crtsim-service`, with a queue and limits, and a
   container image on lavapipe (see [the service](SERVICE.md)).

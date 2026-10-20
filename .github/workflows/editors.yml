@@ -1,0 +1,62 @@
+name: Editor effects
+# The frei0r filter in FFmpeg and in MLT's melt, and the OpenFX effect in Natron, each rendering
+# a clip that tools/check_editors.py compares frame by frame with the command line's render of
+# it, on software Vulkan. The effects' own tests run with the others in the validation workflow.
+on:
+  push:
+    branches: [main]
+    paths:
+      - crates/crtsim-core/**
+      - crates/crtsim-plugin/**
+      - crates/crtsim-frei0r/**
+      - crates/crtsim-ofx/**
+      - tools/check_editors.py
+      - tools/editors/**
+      - .github/workflows/editors.yml
+      - Cargo.lock
+  pull_request:
+    paths:
+      - crates/crtsim-core/**
+      - crates/crtsim-plugin/**
+      - crates/crtsim-frei0r/**
+      - crates/crtsim-ofx/**
+      - tools/check_editors.py
+      - tools/editors/**
+      - .github/workflows/editors.yml
+      - Cargo.lock
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  hosts:
+    runs-on: ubuntu-latest
+    env:
+      NATRON: Natron-2.3.14-Linux-x86_64bit
+      NATRON_SHA256: f8e860ef081466f9d23d96b7a087efe0416ca06bf3e5428eec70c0b3b8c9752a
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install software Vulkan, FFmpeg and melt
+        run: sudo apt-get update -qq && sudo apt-get install -y mesa-vulkan-drivers ffmpeg melt
+      - uses: actions/cache@v4
+        with:
+          path: natron.tar.xz
+          key: ${{ env.NATRON }}-${{ env.NATRON_SHA256 }}
+      - name: Fetch Natron
+        run: |
+          test -f natron.tar.xz || curl -fsSL --retry 3 -o natron.tar.xz \
+            "https://sourceforge.net/projects/natron/files/Linux/64/releases/$NATRON-portable.tar.xz/download"
+          echo "$NATRON_SHA256  natron.tar.xz" | sha256sum -c
+          tar -xJf natron.tar.xz
+      - run: cargo build --locked -p crtsim-cli -p crtsim-frei0r -p crtsim-ofx
+      - run: python3 tools/check_editors.py --natron "$NATRON" --keep editor-frames
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: editor-frames
+          path: editor-frames

@@ -13,8 +13,10 @@ parser = argparse.ArgumentParser()
 # `web` packages the web app that tools/build_web.py left in web/dist, for a website to serve.
 # `retroarch` and `reshade` package the shipped looks as those ports' presets, written by the release CLI.
 # `obs-linux-x86_64` packages the OBS filter that CMake built into build/obs, with its data folder.
-parser.add_argument('--platform', choices=['linux-x86_64', 'windows-x86_64', 'macos-arm64', 'web', 'retroarch',
-                                           'reshade', 'obs-linux-x86_64'],
+# `editors-<system>` packages the OpenFX effect and the frei0r filter that Cargo built for that system.
+SYSTEMS = ['linux-x86_64', 'windows-x86_64', 'macos-arm64']
+parser.add_argument('--platform', choices=SYSTEMS + ['web', 'retroarch', 'reshade', 'obs-linux-x86_64']
+                    + [f'editors-{system}' for system in SYSTEMS],
                     required=True)
 parser.add_argument('--version', required=True)
 args = parser.parse_args()
@@ -54,6 +56,67 @@ if args.platform in ('retroarch', 'reshade', 'obs-linux-x86_64'):
                 output.write(path, path.relative_to(stage))
     print(archive)
     raise SystemExit
+
+
+def check_version(metadata):
+    """The app's own version, which a release tag must name."""
+    version = next(p['version'] for p in metadata['packages'] if p['name'] == 'crtsim-app' and p['source'] is None)
+    if args.version.startswith('v') and args.version != f'v{version}':
+        raise SystemExit(f'Release {args.version} does not match the version in Cargo.toml, {version}')
+    return version
+
+
+def write_zip(archive, folder, within):
+    # Cargo sources can carry Unix-epoch timestamps, older than ZIP's 1980 minimum.
+    with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, strict_timestamps=False) as output:
+        for path in sorted(folder.rglob('*')):
+            if path.is_file():
+                output.write(path, path.relative_to(within))
+
+
+if args.platform.startswith('editors-'):
+    # The OpenFX bundle and the frei0r filter, each as its host finds it, with Kdenlive's
+    # description of the filter: see docs/EDITORS.md.
+    system = args.platform.removeprefix('editors-')
+    library, bundle_folder, frei0r_name = {
+        'linux-x86_64': ('lib{}.so', 'Linux-x86-64', 'crtsim.so'),
+        'windows-x86_64': ('{}.dll', 'Win64', 'crtsim.dll'),
+        # MLT looks for frei0r filters named .so on macOS too.
+        'macos-arm64': ('lib{}.dylib', 'MacOS', 'crtsim.so'),
+    }[system]
+    release = root / 'target' / 'release'
+    metadata = licenses_of.metadata()
+    version = check_version(metadata)
+    contents = stage / 'CRTSim.ofx.bundle' / 'Contents'
+    (contents / bundle_folder).mkdir(parents=True)
+    shutil.copy2(release / library.format('crtsim_ofx'), contents / bundle_folder / 'CRTSim.ofx')
+    (stage / 'frei0r').mkdir()
+    shutil.copy2(release / library.format('crtsim_frei0r'), stage / 'frei0r' / frei0r_name)
+    (stage / 'kdenlive').mkdir()
+    shutil.copy2(root / 'crates/crtsim-frei0r/kdenlive/crtsim.xml', stage / 'kdenlive')
+    if system == 'macos-arm64':
+        import plistlib
+        with (contents / 'Info.plist').open('wb') as output:
+            plistlib.dump({'CFBundleName': 'CRTSim', 'CFBundleIdentifier': 'io.github.aizumanga.CRTSimRenderer',
+                           'CFBundleExecutable': 'CRTSim.ofx', 'CFBundlePackageType': 'BNDL',
+                           'CFBundleVersion': version, 'CFBundleShortVersionString': version}, output)
+        # Ad-hoc signing permits loading on Apple Silicon; it is not Developer ID signing.
+        for path in [stage / 'frei0r' / frei0r_name, contents.parent]:
+            subprocess.run(['codesign', '--force', '--sign', '-', str(path)], check=True)
+    shutil.copy2(root / 'docs' / 'EDITORS.md', stage / 'README.md')
+    for doc in ['LICENSE', 'THIRD_PARTY_NOTICES.md']:
+        shutil.copy2(root / doc, stage)
+    shutil.copy2(ASSETS / 'original-crtsim/SOURCES.md', stage / 'ORIGINAL_ASSETS.md')
+    licenses = stage / 'dependency-licenses'
+    licenses.mkdir()
+    licenses_of.collect(metadata, licenses_of.shipped(metadata, ('crtsim-ofx', 'crtsim-frei0r')), licenses)
+    (stage / 'BUILD.txt').write_text(
+        f"Version: {args.version}\nPlatform: {args.platform}\nCommit: "
+        + subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() + '\n', encoding='utf-8')
+    archive = dist / (name + '.zip')
+    write_zip(archive, stage, dist)
+    print(archive)
+    raise SystemExit
 web = args.platform == 'web'
 exe = '.exe' if args.platform.startswith('windows') else ''
 if web:
@@ -79,9 +142,7 @@ for source, destination in [
 metadata = licenses_of.metadata()
 # The app's own version, as it reports it in its status bar and compares with the latest release
 # when asked to check for updates. A release tag must name that same version.
-app_version = next(p['version'] for p in metadata['packages'] if p['name'] == 'crtsim-app' and p['source'] is None)
-if args.version.startswith('v') and args.version != f'v{app_version}':
-    raise SystemExit(f'Release {args.version} does not match the version in Cargo.toml, {app_version}')
+app_version = check_version(metadata)
 licenses = stage / 'dependency-licenses'
 licenses.mkdir()
 index = licenses_of.collect(metadata, licenses_of.shipped(metadata, ('crtsim-app', 'crtsim-cli')), licenses)

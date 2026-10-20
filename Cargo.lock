@@ -941,6 +941,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "crtsim-frei0r"
+version = "1.4.0"
+dependencies = [
+ "anyhow",
+ "crtsim-plugin",
+ "image 0.24.9",
+]
+
+[[package]]
 name = "crtsim-media"
 version = "1.4.0"
 dependencies = [
@@ -957,6 +966,27 @@ dependencies = [
  "serde_json",
  "tempfile",
  "web-time",
+ "wgpu",
+]
+
+[[package]]
+name = "crtsim-ofx"
+version = "1.4.0"
+dependencies = [
+ "anyhow",
+ "crtsim-plugin",
+ "image 0.24.9",
+]
+
+[[package]]
+name = "crtsim-plugin"
+version = "1.4.0"
+dependencies = [
+ "anyhow",
+ "crtsim-core",
+ "image 0.24.9",
+ "pollster 0.3.0",
+ "serde_json",
  "wgpu",
 ]
 

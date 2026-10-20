@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/crtsim-core", "crates/crtsim-cli", "crates/crtsim-app", "crates/crtsim-media", "crates/crtsim-ports", "crates/crtsim-shader-ports", "crates/crtsim-service"]
+members = ["crates/crtsim-core", "crates/crtsim-cli", "crates/crtsim-app", "crates/crtsim-media", "crates/crtsim-ports", "crates/crtsim-shader-ports", "crates/crtsim-service", "crates/crtsim-plugin", "crates/crtsim-ofx", "crates/crtsim-frei0r"]
 resolver = "2"
 
 [workspace.package]
