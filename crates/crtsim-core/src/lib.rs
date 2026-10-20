@@ -149,12 +149,13 @@ pub struct Renderer {
 pub struct HostFrame<'a> {
     /// The host's picture: a 2D texture on the renderer's device, bound for sampling, of a
     /// color format with float samples, such as `Rgba8Unorm`, `Bgra8UnormSrgb` or
-    /// `Rgba16Float`. An sRGB format reads as the colors it encodes, so it is read as such.
+    /// `Rgba16Float`. An sRGB or float format holds linear light, as an engine's HDR target
+    /// does, so it is read as the colors it encodes; any other holds them encoded.
     pub source: &'a wgpu::Texture,
     /// Where the CRT is drawn, filling it: a 2D texture of a color format with float samples,
     /// bound as a render attachment, such as a window's surface texture. Its size is the
-    /// output's, whatever the settings' export size says. An sRGB format is given the colors
-    /// it is to encode.
+    /// output's, whatever the settings' export size says. An sRGB or float format is given
+    /// linear light, the colors it is to encode.
     pub target: &'a wgpu::Texture,
     /// How long the frame before this one was on screen, in seconds, which this one's glow
     /// decays by: a sixtieth for a host running at 60 frames a second.
@@ -653,7 +654,7 @@ impl Renderer {
             .lock()
             .map_err(|_| anyhow::anyhow!("a frame for a host failed while making its pass"))?;
         let deliver = pipelines.entry(format).or_insert_with(|| {
-            let entry = if format.is_srgb() {
+            let entry = if gpu::holds_linear_light(format) {
                 "deliver_srgb"
             } else {
                 "deliver"

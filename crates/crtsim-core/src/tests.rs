@@ -187,6 +187,55 @@ fn host_bytes(r: &Renderer, texture: &wgpu::Texture) -> RgbaImage {
 }
 
 /// `sequence`'s next frame recorded for a host, from `source` into `target`, and submitted.
+/// The colours a float texture of linear light holds, encoded as sRGB bytes.
+fn float_bytes(r: &Renderer, texture: &wgpu::Texture) -> RgbaImage {
+    let (width, height) = (texture.width(), texture.height());
+    let pitch = (width * 8).div_ceil(256) * 256;
+    let buffer = r.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("float readback"),
+        size: u64::from(pitch * height),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = r.device.create_command_encoder(&Default::default());
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(pitch),
+                rows_per_image: None,
+            },
+        },
+        gpu::extent(width, height),
+    );
+    r.queue.submit(Some(encoder.finish()));
+    buffer
+        .slice(..)
+        .map_async(wgpu::MapMode::Read, |result| result.unwrap());
+    r.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    let bytes = buffer.slice(..).get_mapped_range().unwrap();
+    let encode = |v: f32| {
+        let v = v.clamp(0., 1.);
+        let v = if v <= 0.0031308 {
+            v * 12.92
+        } else {
+            1.055 * v.powf(1. / 2.4) - 0.055
+        };
+        (v * 255.).round() as u8
+    };
+    RgbaImage::from_fn(width, height, |x, y| {
+        let at = (y * pitch + x * 8) as usize;
+        let texel: &[half::f16] = bytemuck::cast_slice(&bytes[at..at + 8]);
+        image::Rgba([
+            encode(texel[0].to_f32()),
+            encode(texel[1].to_f32()),
+            encode(texel[2].to_f32()),
+            255,
+        ])
+    })
+}
 fn hosted(
     r: &Renderer,
     sequence: &mut Sequence,
@@ -221,7 +270,7 @@ fn a_host_frame_draws_what_a_video_frame_draws_and_keeps_its_glow_at_a_new_size(
     next(&r, &mut video, &card, &c);
     let expected = next(&r, &mut video, &black, &c);
 
-    use wgpu::TextureFormat::{Bgra8UnormSrgb, Rgba8Unorm, Rgba8UnormSrgb};
+    use wgpu::TextureFormat::{Bgra8UnormSrgb, Rgba16Float, Rgba8Unorm, Rgba8UnormSrgb};
     let first = host_texture(&r, Rgba8Unorm, (256, 224), Some(&card));
     let second = host_texture(&r, Rgba8Unorm, (256, 224), Some(&black));
     let target = host_texture(&r, Rgba8Unorm, (320, 240), None);
@@ -247,6 +296,50 @@ fn a_host_frame_draws_what_a_video_frame_draws_and_keeps_its_glow_at_a_new_size(
         .flat_map(|(a, b)| (0..3).map(move |i| a[i].abs_diff(b[i])))
         .max();
     assert!(most <= Some(1), "sRGB textures differ by {most:?} steps");
+
+    // Float textures hold linear light, as an engine's HDR target does: read and drawn as the
+    // colours they encode, they give what sRGB textures give.
+    let linear = |image: &RgbaImage| {
+        let texture = host_texture(&r, Rgba16Float, image.dimensions(), None);
+        let texels: Vec<half::f16> = image
+            .pixels()
+            .flat_map(|pixel| {
+                let decode = |v: u8| {
+                    let v = f32::from(v) / 255.;
+                    if v <= 0.04045 {
+                        v / 12.92
+                    } else {
+                        ((v + 0.055) / 1.055).powf(2.4)
+                    }
+                };
+                [decode(pixel[0]), decode(pixel[1]), decode(pixel[2]), 1.]
+            })
+            .map(half::f16::from_f32)
+            .collect();
+        r.queue.write_texture(
+            texture.as_image_copy(),
+            bytemuck::cast_slice(&texels),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(8 * image.width()),
+                rows_per_image: None,
+            },
+            gpu::extent(image.width(), image.height()),
+        );
+        texture
+    };
+    let first = linear(&card);
+    let second = linear(&black);
+    let target = host_texture(&r, Rgba16Float, (320, 240), None);
+    let mut host = Sequence::host();
+    hosted(&r, &mut host, &first, &target, &c);
+    hosted(&r, &mut host, &second, &target, &c);
+    let most = float_bytes(&r, &target)
+        .pixels()
+        .zip(expected.pixels())
+        .flat_map(|(a, b)| (0..3).map(move |i| a[i].abs_diff(b[i])))
+        .max();
+    assert!(most <= Some(1), "float textures differ by {most:?} steps");
 
     // A new output size keeps the glow: the card still shows behind black at twice the size.
     let card = host_texture(&r, Rgba8Unorm, (256, 224), Some(&card));
