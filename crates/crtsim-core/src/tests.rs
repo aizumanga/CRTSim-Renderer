@@ -59,7 +59,7 @@ fn video_history_survives_between_frames_and_resets_for_new_sequence() {
 }
 #[test]
 #[ignore = "requires a Vulkan adapter"]
-fn an_editing_sequence_follows_edits_on_its_history_and_restarts_for_new_sizes() {
+fn an_editing_sequence_follows_edits_on_its_history_and_restarts_for_a_new_signal() {
     let r = pollster::block_on(Renderer::new(wgpu::Backends::VULKAN)).unwrap();
     let c = Config {
         output: "160x120".into(),
@@ -86,17 +86,59 @@ fn an_editing_sequence_follows_edits_on_its_history_and_restarts_for_new_sizes()
     );
     let resized = Config {
         output: "200x150".into(),
-        ..edited
+        ..edited.clone()
+    };
+    let at_new_size = next(&r, &mut editing, &card, &resized);
+    assert_eq!(at_new_size.dimensions(), (200, 150));
+    assert_ne!(
+        at_new_size,
+        render(&r, &card, &resized).unwrap().crt,
+        "a new output size runs on from the glow before it"
+    );
+    let resampled = Config {
+        signal: "64x64".into(),
+        ..resized.clone()
     };
     assert_eq!(
-        next(&r, &mut editing, &card, &resized),
-        render(&r, &card, &resized).unwrap().crt,
-        "a new output size starts again from a still"
+        next(&r, &mut editing, &card, &resampled),
+        render(&r, &card, &resampled).unwrap().crt,
+        "a new signal size starts again from a still"
     );
-    let mut video = Sequence::video(crate::Timing::Stable, 60.);
-    next(&r, &mut video, &card, &c);
+}
+
+#[test]
+#[ignore = "requires a Vulkan adapter"]
+fn a_video_keeps_its_glow_at_a_new_output_size_and_refuses_a_new_signal() {
+    let r = pollster::block_on(Renderer::new(wgpu::Backends::VULKAN)).unwrap();
+    let c = Config {
+        output: "160x120".into(),
+        signal: "32x32".into(),
+        warmup: 0,
+        persistence: [0.9; 3],
+        ..Config::default()
+    };
+    let white = RgbaImage::from_pixel(32, 32, image::Rgba([255; 4]));
+    let black = RgbaImage::from_pixel(32, 32, image::Rgba([0, 0, 0, 255]));
+    let resized = Config {
+        output: "320x240".into(),
+        ..c.clone()
+    };
+    let mut video = Sequence::video(Timing::Stable, 60.);
+    next(&r, &mut video, &white, &c);
+    let trailing = next(&r, &mut video, &black, &resized);
+    assert_eq!(trailing.dimensions(), (320, 240));
+    let mut fresh = Sequence::video(Timing::Stable, 60.);
+    assert_ne!(
+        trailing,
+        next(&r, &mut fresh, &black, &resized),
+        "the white still glows behind the black at the new size"
+    );
+    let resampled = Config {
+        signal: "64x64".into(),
+        ..resized
+    };
     assert!(
-        pollster::block_on(r.frame(&mut video, &card, &resized, None, |_| {})).is_err(),
+        pollster::block_on(r.frame(&mut video, &black, &resampled, None, |_| {})).is_err(),
         "a video's sequence never restarts by itself"
     );
 }

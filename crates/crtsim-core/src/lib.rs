@@ -39,6 +39,7 @@ use std::sync::{
 };
 
 pub use gpu_prepare::PrepareOn;
+use sequence::Follow;
 pub use sequence::{Sequence, Shape, Timing};
 
 pub const SHADER: &str = include_str!("../shaders/crtsim.wgsl");
@@ -439,21 +440,9 @@ impl Renderer {
         } else {
             Some(config::prepare(input, c)?)
         };
-        if sequence
-            .workspace
-            .as_ref()
-            .is_some_and(|workspace| workspace.shape != plan.shape)
-        {
-            ensure!(
-                sequence.restarts(),
-                "Start a new video sequence after changing signal size, output size or color mode"
-            );
-            sequence.restart();
-        }
+        self.follow(sequence, plan.shape)?;
         let ticks = sequence.ticks(c.warmup);
-        let workspace = sequence
-            .workspace
-            .get_or_insert_with(|| self.workspace(plan.shape));
+        let workspace = sequence.workspace.as_mut().expect("made by follow");
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -642,23 +631,8 @@ impl Renderer {
             color_mode: c.color_mode,
         };
         self.fits(shape)?;
-        sequence.workspace = match sequence.workspace.take() {
-            Some(workspace) if workspace.shape == shape => Some(workspace),
-            Some(workspace)
-                if workspace.shape.signal == shape.signal
-                    && workspace.shape.color_mode == shape.color_mode =>
-            {
-                Some(self.reshaped(workspace, shape.output))
-            }
-            Some(_) => {
-                sequence.restart();
-                None
-            }
-            None => None,
-        };
-        let workspace = sequence
-            .workspace
-            .get_or_insert_with(|| self.workspace(shape));
+        self.follow(sequence, shape)?;
+        let workspace = sequence.workspace.as_mut().expect("made by follow");
         self.prepare_pipelines.encode(
             &self.device,
             &self.queue,
@@ -734,6 +708,27 @@ impl Renderer {
             &[offset],
         );
         offset
+    }
+
+    /// Makes `sequence` ready for a frame of `shape`, as the sequence says it follows into
+    /// one: its workspace kept, drawn at the new output size with its history, or made afresh.
+    fn follow(&self, sequence: &mut Sequence, shape: Shape) -> Result<()> {
+        let from = sequence.workspace.as_ref().map(|workspace| workspace.shape);
+        match from.map_or(Ok(Follow::Same), |from| sequence.follow(&from, &shape))? {
+            Follow::Same => {}
+            Follow::Reshape => {
+                let workspace = sequence
+                    .workspace
+                    .take()
+                    .expect("a sequence that reshapes has one");
+                sequence.workspace = Some(self.reshaped(workspace, shape.output));
+            }
+            Follow::Restart => sequence.restart(),
+        }
+        sequence
+            .workspace
+            .get_or_insert_with(|| self.workspace(shape));
+        Ok(())
     }
 
     /// The targets for `shape`, and the bind groups their passes use.
