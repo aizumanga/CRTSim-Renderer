@@ -27,7 +27,8 @@ be widescreen.
 - **Render service.** `crtsim-service` renders pictures, animations and videos sent over HTTP, with a token, a
   bounded queue and limits on every request, and a container image on software Vulkan. See [the service](SERVICE.md).
 - `crtsim-core` records a game's or an engine's frames into its own command encoder (`Renderer::encode`), and is
-  ready for crates.io.
+  published on crates.io with each release, at the release's version.
+- Releases are pushed to itch.io too, a channel for each package, once the itch.io page is set up.
 
 ## v1.4.0
 
@@ -342,6 +343,37 @@ already on crates.io is left as it is. To set it up:
    Trusted Publishing, environment `crates-io`), and make a `crates-io` environment in the repository's settings.
 3. From then on, publishing a release publishes its crate. Running the workflow by hand with a release's tag
    publishes that one, if it is not already.
+
+## itch.io
+
+Publishing a release also pushes its packages to itch.io, with [butler](https://itch.io/docs/butler/), from the
+`itch.yml` workflow: each package to a channel of its own, unpacked as people use it, so the itch app installs,
+launches and updates the desktop app, and butler uploads only what changed since the last release. Each channel's
+version on itch.io is the release's, without its `v`. `tools/itch.py` lays the channels out from the release's
+downloads, after their SHA256SUMS are checked:
+
+| Channel | From | Holds |
+| --- | --- | --- |
+| `windows` | `-windows-x86_64.zip` | The app and command line; the itch app launches `crtsim-desktop.exe` |
+| `mac` | `-macos-arm64.tar.gz` | `CRTSim Renderer.app` and the command line; the itch app launches the app |
+| `linux` | `-linux-x86_64.AppImage` | The AppImage, which the itch app launches |
+| `web` | `-web.zip` | The web app, to play in the browser |
+| `editors-windows`, `editors-mac`, `editors-linux` | `-editors-<system>.zip` | The OpenFX effect and the frei0r filter |
+| `aseprite` | `.aseprite-extension` | The Aseprite extension, as the file Aseprite installs |
+| `retroarch`, `reshade`, `obs-linux` | Their ZIPs | The shader presets and the OBS filter |
+
+To set it up, once:
+
+1. Make the project on itch.io, as a tool, and make an API key for butler in itch.io's settings (API keys).
+2. In the repository's settings, add a variable `ITCH_GAME` naming the project as `user/project`, and an
+   environment `itch-io` with a secret `BUTLER_API_KEY` holding the key. A variable `ITCH_CHANNELS`, such as
+   `windows mac linux`, pushes only those channels.
+3. After the first push, edit the project on itch.io: mark the `web` upload **This file will be played in the
+   browser** if the page should run the web app (it needs a browser with WebGPU), and the others' descriptions as
+   wanted. Later pushes keep those settings.
+
+Without `ITCH_GAME` the workflow does nothing; pre-releases are left off itch.io. Running it by hand with a published
+release's tag pushes that release, as when a push failed or for the releases before it, whose packages it has.
 
 ## Local packaging
 
