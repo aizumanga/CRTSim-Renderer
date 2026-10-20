@@ -365,9 +365,11 @@ downloads, after their SHA256SUMS are checked:
 To set it up, once:
 
 1. Make the project on itch.io, as a tool, and make an API key for butler in itch.io's settings (API keys).
-2. In the repository's settings, add a variable `ITCH_GAME` naming the project as `user/project`, and an
-   environment `itch-io` with a secret `BUTLER_API_KEY` holding the key. A variable `ITCH_CHANNELS`, such as
-   `windows mac linux`, pushes only those channels.
+2. In the repository's **Settings → Secrets and variables → Actions**: on the **Secrets** tab, a repository secret
+   `BUTLER_API_KEY` holding the key; on the **Variables** tab, a variable `ITCH_GAME` naming the project as
+   `user/project`, as its page's address `https://user.itch.io/project` has it. A variable `ITCH_CHANNELS`, such as
+   `windows mac linux`, pushes only those channels. The workflow runs in an `itch-io` environment, which GitHub makes
+   the first time; the secret can go there instead, to limit which branches and tags may use it.
 3. After the first push, edit the project on itch.io: mark the `web` upload **This file will be played in the
    browser** if the page should run the web app (it needs a browser with WebGPU), and the others' descriptions as
    wanted. Later pushes keep those settings.
