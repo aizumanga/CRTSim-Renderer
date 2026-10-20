@@ -5,7 +5,7 @@
 //! frame that follows the last, as an export's frames do, goes on with its glow, which decays by
 //! how long the frame before lasted; one after a jump starts afresh, warmed up as a still is.
 
-use crtsim_plugin::{Clip, Look, Timing, TUBES};
+use crtsim_plugin::{Choice, Clip, Look, Timing, TUBES};
 use std::ffi::{c_char, c_double, c_int, c_uint, c_void, CStr, CString};
 
 /// The ABI of frei0r.h, version 1.2: a filter's description, its parameters' and the colour
@@ -58,10 +58,13 @@ const PARAMS: [(&CStr, &CStr); 4] = [
     ),
 ];
 
-/// The names `Tube` takes, in `TUBES`' order.
-const TUBE_NAMES: [&str; 4] = ["look", "4:3", "16:10", "16:9"];
-/// The names `Timing` takes, in `Timing::ALL`'s order.
-const TIMING_NAMES: [&str; 3] = ["stable", "alternating", "off"];
+/// What the choice named `key` chooses, whatever its case.
+fn chosen<T: Copy>(choices: &[Choice<T>], key: &str) -> Option<T> {
+    choices
+        .iter()
+        .find(|choice| choice.key.eq_ignore_ascii_case(key))
+        .map(|choice| choice.value)
+}
 
 /// The longest a frame may follow the last and still go on with its glow: a frame rate of at
 /// least four a second.
@@ -91,8 +94,8 @@ impl Instance {
         let values = [
             CString::new(look.preset.as_str()).expect("a name with no NUL"),
             CString::default(),
-            CString::new(TUBE_NAMES[0]).expect("no NUL"),
-            CString::new(TIMING_NAMES[0]).expect("no NUL"),
+            CString::new(TUBES[0].key).expect("no NUL"),
+            CString::new(Timing::ALL[0].key).expect("no NUL"),
         ];
         Self {
             size,
@@ -119,22 +122,16 @@ impl Instance {
                 true
             }
             // FFmpeg's filter options take a colon as their own, so 16x9 or 16/9 will do too.
-            2 => match TUBE_NAMES
-                .iter()
-                .position(|n| n.eq_ignore_ascii_case(&value.replace(['x', 'X', '/'], ":")))
-            {
-                Some(i) => {
-                    self.look.tube = TUBES[i].1;
+            2 => match chosen(&TUBES, &value.replace(['x', 'X', '/'], ":")) {
+                Some(tube) => {
+                    self.look.tube = tube;
                     true
                 }
                 None => false,
             },
-            3 => match TIMING_NAMES
-                .iter()
-                .position(|n| n.eq_ignore_ascii_case(value))
-            {
-                Some(i) => {
-                    self.look.timing = Timing::ALL[i].0;
+            3 => match chosen(&Timing::ALL, value) {
+                Some(timing) => {
+                    self.look.timing = timing;
                     true
                 }
                 None => false,
@@ -374,8 +371,15 @@ mod tests {
         assert_eq!(instance.look.timing, Timing::Alternating);
         assert_eq!(instance.look.file, None);
         assert_eq!(instance.values[3].to_str().unwrap(), "ALTERNATING");
-        assert_eq!(TUBE_NAMES.len(), TUBES.len());
-        assert_eq!(TIMING_NAMES.len(), Timing::ALL.len());
+    }
+
+    /// The keys of `choices`, as Kdenlive's description lists them.
+    fn keys<T>(choices: &[Choice<T>]) -> String {
+        choices
+            .iter()
+            .map(|choice| choice.key)
+            .collect::<Vec<_>>()
+            .join(";")
     }
 
     #[test]
@@ -401,8 +405,8 @@ mod tests {
             crtsim_plugin::preset_names().join(";")
         );
         assert_eq!(attribute("Look", "default"), crtsim_plugin::DEFAULT_PRESET);
-        assert_eq!(attribute("Tube", "paramlist"), TUBE_NAMES.join(";"));
-        assert_eq!(attribute("Timing", "paramlist"), TIMING_NAMES.join(";"));
+        assert_eq!(attribute("Tube", "paramlist"), keys(&TUBES));
+        assert_eq!(attribute("Timing", "paramlist"), keys(&Timing::ALL));
     }
 
     #[test]

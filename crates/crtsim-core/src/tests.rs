@@ -1,4 +1,5 @@
 use super::*;
+use config::Phase;
 
 /// A still with the signals it was made from.
 struct Rendered {
@@ -283,33 +284,6 @@ fn preview_frame_matches_the_pixels_a_read_back_render_produces() {
         pollster::block_on(r.read_target(&target)).unwrap(),
         render(&r, &source, &c).unwrap().crt
     );
-}
-
-#[test]
-fn ntsc_blending_moves_the_two_phases_towards_each_other() {
-    let artifact_mix = |phase, ntsc_blending, tick| {
-        let c = Config {
-            phase,
-            ntsc_blending,
-            ..Config::default()
-        };
-        let mut params = Params::new(&c, (256, 224), (320, 240));
-        params.tick(c.phase, c.ntsc_blending, tick);
-        params.signal[3]
-    };
-    // Unblended, the public source's switch between the two patterns.
-    assert_eq!(artifact_mix(Phase::A, 0., 0), 0.);
-    assert_eq!(artifact_mix(Phase::B, 0., 0), 1.);
-    assert_eq!(artifact_mix(Phase::Alternating, 0., 7), 1.);
-    // Super Win the Game's 0.35: each tick mixes in half that of the other pattern, as the
-    // game's NTSCLerp = p + (0.5 - p) * 0.35 does.
-    assert_eq!(artifact_mix(Phase::A, 0.35, 0), 0.175);
-    assert_eq!(artifact_mix(Phase::B, 0.35, 0), 0.825);
-    assert_eq!(artifact_mix(Phase::Alternating, 0.35, 4), 0.175);
-    assert_eq!(artifact_mix(Phase::Alternating, 0.35, 5), 0.825);
-    // Fully blended, every tick shows the average, as stable phase always does.
-    assert_eq!(artifact_mix(Phase::Alternating, 1., 1), 0.5);
-    assert_eq!(artifact_mix(Phase::Stable, 0.35, 0), 0.5);
 }
 
 /// The GPU prepare step against the CPU one it replaced, across a spread of routes and

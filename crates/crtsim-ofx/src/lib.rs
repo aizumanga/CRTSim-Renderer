@@ -390,7 +390,7 @@ fn describe_in_context(effect: ImageEffect) -> Step {
     file.set_string(PARAM_STRING_MODE, PARAM_STRING_IS_FILE_PATH)?;
     file.set_int(PARAM_STRING_FILE_PATH_EXISTS, 1)?;
     file.set_string(PARAM_DEFAULT, c"")?;
-    let tubes: Vec<&str> = TUBES.iter().map(|(name, _)| *name).collect();
+    let tubes: Vec<&str> = TUBES.iter().map(|tube| tube.label).collect();
     choice(
         TUBE,
         c"Tube",
@@ -398,7 +398,7 @@ fn describe_in_context(effect: ImageEffect) -> Step {
         &c_strings(&tubes),
         0,
     )?;
-    let timings: Vec<&str> = Timing::ALL.iter().map(|(_, name)| *name).collect();
+    let timings: Vec<&str> = Timing::ALL.iter().map(|timing| timing.label).collect();
     choice(
         TIMING,
         c"Timing",
@@ -492,10 +492,10 @@ fn look_at(effect: ImageEffect, time: f64) -> Step<(Look, bool)> {
     let file = string_at(effect, LOOK_FILE, time)?;
     let tube = TUBES
         .get(int_at(effect, TUBE, time)? as usize)
-        .and_then(|(_, tube)| *tube);
+        .and_then(|tube| tube.value);
     let timing = Timing::ALL
         .get(int_at(effect, TIMING, time)? as usize)
-        .map_or(Timing::Stable, |(timing, _)| *timing);
+        .map_or(Timing::Stable, |timing| timing.value);
     let look = Look {
         preset: preset.into(),
         file: (!file.trim().is_empty()).then(|| file.trim().into()),
