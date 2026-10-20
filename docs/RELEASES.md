@@ -1,5 +1,34 @@
 # Portable releases (Phase 4)
 
+## v1.5.0
+
+The CRT goes where pictures are made: into video editors as an OpenFX effect and a frei0r filter, into Aseprite as an
+extension, and onto a server as a render service. Pictures keep their colours from their profiles, and the tube can
+be widescreen.
+
+- **Colour profiles.** A picture's ICC profile (PNG, JPEG including CMYK, WebP), or PNG's colour chunks, say what its
+  colours are, and they are converted into sRGB, the CRT's own. A profile that is sRGB in effect leaves every value as
+  it is, so palette art still matches its palette. **View → Pictures' colour profiles → Ignore**, or
+  `--ignore-profile`, reads the numbers as sRGB instead. PNG stills and contact sheets can be written in Display P3,
+  Adobe RGB, Rec. 2020, ProPhoto RGB or a profile from a file, at 16 bits with the profile embedded
+  (**Export → PNG colour space**, or `--color-space`).
+- **Tube** sits beside Fit: 4:3 as before, 16:10, 16:9, a portrait 3:4 or anything between. The glass and bezel keep
+  their shape, stretched; a 4:3 tube is the original's bit for bit. **Widescreen television** is a 16:9 tube showing
+  480 interlaced rows. The RetroArch, ReShade and OBS ports take the tube's shape too.
+- **Video editors.** An OpenFX effect for DaVinci Resolve, Natron, Nuke and other OpenFX hosts, and a frei0r filter
+  for Kdenlive, `melt` and FFmpeg, in an `-editors-<system>.zip` for each system. Frames rendered out of order come out
+  as they would in order. See [the editors' guide](EDITORS.md).
+- **Aseprite.** The `.aseprite-extension` adds **File → Export → CRTSim Renderer...**, drawing a sprite's frame, its
+  animation or a tag through the command line and opening the result as a new sprite. See [the guide](ASEPRITE.md).
+- **Sprite sheets.** A sprite sheet's JSON, as Aseprite and TexturePacker write it, opens in the app and renders from
+  the command line as an animation, each frame shown as long as the JSON says.
+- The command line writes a GIF, lossless WebP or animated PNG of an animated GIF or WebP, a sprite sheet or the video
+  test card without FFmpeg, when FFmpeg is not installed.
+- **Render service.** `crtsim-service` renders pictures, animations and videos sent over HTTP, with a token, a
+  bounded queue and limits on every request, and a container image on software Vulkan. See [the service](SERVICE.md).
+- `crtsim-core` records a game's or an engine's frames into its own command encoder (`Renderer::encode`), and is
+  ready for crates.io.
+
 ## v1.4.0
 
 The desktop and web app are easier to start with and to finish an export in: Open and Export sit under the source,
