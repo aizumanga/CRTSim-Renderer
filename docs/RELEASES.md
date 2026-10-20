@@ -338,7 +338,9 @@ pushed: the `publish-core.yml` workflow runs on the release's publication, check
 the crate's version, tests the crate and publishes it, with a token crates.io issues for that run alone. A version
 already on crates.io is left as it is. To set it up:
 
-1. The first version only, from the release's tag: `cargo publish -p crtsim-core` with a crates.io token.
+1. The first version only: make a crates.io API token (publish-new and publish-update), add it to the repository
+   as a secret `CRATES_IO_TOKEN`, and run the workflow by hand with the release's tag; or, with Rust installed,
+   `cargo publish -p crtsim-core` from the tag with the token. Delete the secret and the token afterwards.
 2. Add this repository's `publish-core.yml` workflow as the crate's trusted publisher on crates.io (crate settings →
    Trusted Publishing, environment `crates-io`), and make a `crates-io` environment in the repository's settings.
 3. From then on, publishing a release publishes its crate. Running the workflow by hand with a release's tag
