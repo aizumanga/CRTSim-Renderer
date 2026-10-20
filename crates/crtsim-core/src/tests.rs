@@ -391,6 +391,15 @@ fn a_host_frame_needs_a_host_sequence_and_usable_textures() {
             .encode(&mut encoder, &mut Sequence::host(), &frame, &c)
             .is_err());
     }
+    // A frame of no time, as an engine's first can be, holds the glow as it is.
+    let source = host_texture(&r, wgpu::TextureFormat::Rgba8Unorm, (16, 16), None);
+    let frame = HostFrame {
+        source: &source,
+        target: &texture,
+        seconds: 0.,
+    };
+    r.encode(&mut encoder, &mut Sequence::host(), &frame, &c)
+        .unwrap();
 }
 
 #[test]

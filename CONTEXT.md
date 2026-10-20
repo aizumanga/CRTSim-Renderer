@@ -57,6 +57,11 @@ frei0r filter (`crates/crtsim-frei0r`), which share `crates/crtsim-plugin`; see
 glow; any other is rendered after its **history**, the frames before it that its glow needs,
 back until older glow has faded below half an 8-bit step, where the host can give them.
 
+**Bevy plugin**: the renderer itself drawing a Bevy game's cameras through the CRT
+(`crates/crtsim-bevy`), on Bevy's own device, recording each camera's frame into Bevy's as a
+host frame, every camera a host sequence of its own. See
+[the decision](docs/adr/0006-bevy-embeds-the-renderer-godot-gets-a-compositor-port.md).
+
 **Shader port**: the effect rewritten in a host's own shader language, as passes the host runs
 on every frame of its picture, rather than this renderer running inside the host: for
 RetroArch, ReShade and OBS (`ports/`, exported by `crtsim_shader_ports`). See

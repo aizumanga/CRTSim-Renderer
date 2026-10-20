@@ -1,6 +1,7 @@
 # 3. Games get the effect as shader ports, not the renderer
 
-Status: accepted.
+Status: accepted. [ADR 6](0006-bevy-embeds-the-renderer-godot-gets-a-compositor-port.md)
+narrows it: Bevy embeds the renderer, and Godot gets a shader port.
 
 Games get the CRT as a **shader port**: the effect rewritten in the host's own shader language
 and run by the host on every frame, first as a RetroArch shader preset (`.slangp`), then as a

@@ -434,6 +434,7 @@ impl Renderer {
         ensure!(!cancelled(), "Render cancelled");
         let mut report = |fraction, stage| progress(RenderProgress { fraction, stage });
         report(0., Stage::Preparing);
+        config.validate()?;
         let c = &sequence.timed(config);
         let plan = self.plan(input, c)?;
         let clean = if plan.prepare_on_gpu {
@@ -618,8 +619,10 @@ impl Renderer {
              attachment"
         );
         sequence.lasted(frame.seconds);
+        // The settings as given, since a frame of no time holds the glow as it is, which
+        // settings could not ask for.
+        config.validate()?;
         let c = &sequence.timed(config);
-        c.validate()?;
         let input = (source.width(), source.height());
         let limit = self.device.limits().max_texture_dimension_2d;
         ensure!(
@@ -808,8 +811,8 @@ impl Renderer {
         }
     }
 
+    /// How to render `input` with `c`, settings already checked before being timed.
     fn plan(&self, input: &RgbaImage, c: &Config) -> Result<Plan> {
-        c.validate()?;
         let shape = c.sequence_shape(input.dimensions())?;
         let estimated = self.fits(shape)?;
         // Preparing on the device puts the input there as it is, plus the resize's intermediate.
