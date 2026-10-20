@@ -327,18 +327,21 @@ updating or replacing a portable package does not delete them. Use `CRTSIM_DATA_
 
 The renderer is published as the [`crtsim-core`](https://crates.io/crates/crtsim-core) crate, for Rust programs to
 depend on: stills, video sequences, and `Renderer::encode` for a game's or an engine's own frames. It is versioned
-on its own, not with the app: 0.x while its interface settles, a change that breaks a caller raising the minor
-version. Everything it embeds, its shaders, the original meshes and textures, and the NES LUTs, lives in its folder,
+with the app, from v1.5.0: each release's crate is the renderer that release's app draws with. Semantic versioning
+then holds for both, so a change that breaks a caller of the crate needs a new major version of the app too.
+Everything it embeds, its shaders, the original meshes and textures, and the NES LUTs, lives in its folder,
 `crates/crtsim-core`, so the crate builds from its package alone; CI packages it on every change to prove that.
 
-Publishing is never part of an app release. A crate version cannot be taken back, so a person publishes it:
+A crate version cannot be taken back, so it is published when a person publishes the release, not when its tag is
+pushed: the `publish-core.yml` workflow runs on the release's publication, checks out its tag, checks the tag names
+the crate's version, tests the crate and publishes it, with a token crates.io issues for that run alone. A version
+already on crates.io is left as it is. To set it up:
 
-1. Raise `version` in `crates/crtsim-core/Cargo.toml` and merge it.
-2. The first version only: `cargo publish -p crtsim-core` with a crates.io token, then add this repository's
-   `publish-core.yml` workflow as the crate's trusted publisher on crates.io (crate settings → Trusted Publishing,
-   environment `crates-io`).
-3. Later versions: push a tag `crtsim-core-v<version>`, such as `crtsim-core-v0.2.0`. The workflow checks the tag
-   names the crate's version, tests it and publishes it, with a token crates.io issues for that run alone.
+1. The first version only, from the release's tag: `cargo publish -p crtsim-core` with a crates.io token.
+2. Add this repository's `publish-core.yml` workflow as the crate's trusted publisher on crates.io (crate settings →
+   Trusted Publishing, environment `crates-io`), and make a `crates-io` environment in the repository's settings.
+3. From then on, publishing a release publishes its crate. Running the workflow by hand with a release's tag
+   publishes that one, if it is not already.
 
 ## Local packaging
 

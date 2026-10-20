@@ -1,8 +1,8 @@
 [package]
 name = "crtsim-core"
-# A library on crates.io, versioned on its own rather than with the app: 0.x while its
-# interface settles, so a change that breaks a caller raises the minor version.
-version = "0.1.0"
+# A library on crates.io, versioned with the app and published with its releases: a change
+# that breaks a caller of the library needs a new major version of both.
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version = "1.90"
