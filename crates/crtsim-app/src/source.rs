@@ -38,13 +38,13 @@ pub enum Kind {
     },
 }
 
-/// What restoring a project needs next.
+/// What restoring a project needs next. Both are boxed, being large and of different sizes.
 pub enum Restoring {
     /// Its source loading. The project is held until it has, then applies.
-    Open(Job),
+    Open(Box<Job>),
     /// It applies now, its source already in place, with why its source is not open, if not.
     Apply {
-        project: Project,
+        project: Box<Project>,
         error: Option<String>,
     },
 }
@@ -188,7 +188,7 @@ impl Source {
                 );
                 self.missing(path.clone(), project.frame, "Missing");
                 return Restoring::Apply {
-                    project,
+                    project: Box::new(project),
                     error: Some(error),
                 };
             }
@@ -200,7 +200,7 @@ impl Source {
             (None, BuiltIn::TestCard) => {
                 self.test_card();
                 return Restoring::Apply {
-                    project,
+                    project: Box::new(project),
                     error: None,
                 };
             }
@@ -208,7 +208,7 @@ impl Source {
         if let Some(pending) = &mut self.pending {
             pending.project = Some(project);
         }
-        Restoring::Open(opening)
+        Restoring::Open(Box::new(opening))
     }
 
     /// Whether a project is waiting for its source to load, its settings not yet applied.

@@ -190,10 +190,10 @@ impl App {
             format!("Loading {}…", source.display())
         });
         match self.source.restore(p) {
-            source::Restoring::Open(opening) => self.start_opening(opening, status),
+            source::Restoring::Open(opening) => self.start_opening(*opening, status),
             source::Restoring::Apply { project, error } => {
                 self.source_changed();
-                self.apply_project(project);
+                self.apply_project(*project);
                 // Any error already showing stays, unless this one replaces it.
                 if let Some(error) = error {
                     self.notices.failed(Topic::Opening, error);
