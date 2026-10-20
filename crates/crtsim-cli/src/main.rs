@@ -1,9 +1,11 @@
 use anyhow::{ensure, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use crtsim_core::{
+    color,
     config::{self, Config, Phase},
-    mesh, ports, presets, sheet, PrepareOn, Renderer, Sequence,
+    input, mesh, presets, sheet, PrepareOn, Renderer, Sequence,
 };
+use crtsim_shader_ports as ports;
 use image::{DynamicImage, ImageOutputFormat};
 use std::{
     fs::{self, OpenOptions},
@@ -25,8 +27,11 @@ enum Command {
     /// Render an image, video or animation; the built-in test card, or the video test card for
     /// a moving output, if --input is omitted. The output's extension picks what is made:
     /// .mp4, .mkv or .webm a video; .gif or .webp an animation; .png a still, or an animated
-    /// PNG of a moving input. Video and animation output, and video input, need FFmpeg.
+    /// PNG of a moving input. Video output and video input need FFmpeg, as does a lossy WebP;
+    /// without it, an animation of a GIF, WebP or sprite sheet is written here.
     Render {
+        /// A picture, a video, an animated GIF or WebP, or a sprite sheet's JSON as Aseprite
+        /// and TexturePacker write it, beside its picture.
         #[arg(short, long)]
         input: Option<PathBuf>,
         #[arg(short, long)]
@@ -58,6 +63,8 @@ enum Command {
         #[arg(long)]
         debug_dir: Option<PathBuf>,
         #[command(flatten)]
+        colors: Colors,
+        #[command(flatten)]
         moving: Moving,
     },
     /// Print the included presets and the resolution presets.
@@ -83,6 +90,8 @@ enum Command {
         columns: u32,
         #[arg(long, value_enum, default_value = "auto")]
         backend: Backend,
+        #[command(flatten)]
+        colors: Colors,
     },
     /// Write a starting configuration. Never overwrites an existing file.
     Config {
@@ -118,6 +127,35 @@ struct PortExport {
     #[arg(long = "look", value_name = "NAME=SETTINGS.json")]
     looks: Vec<String>,
 }
+/// How colours are read and written.
+#[derive(clap::Args)]
+#[command(next_help_heading = "Colour")]
+struct Colors {
+    /// The colour space of a PNG still: srgb, display-p3, adobe-rgb, rec2020, prophoto-rgb, or
+    /// an RGB .icc or .icm profile. Other than sRGB, it is written at 16 bits with the profile
+    /// embedded. Videos and animations are sRGB.
+    #[arg(long, default_value = "srgb", value_name = "SPACE")]
+    color_space: String,
+    /// Read the input's numbers as sRGB, rather than converting them from the colour profile
+    /// its file carries: for art in exact palette values that a program tagged with its own.
+    #[arg(long)]
+    ignore_profile: bool,
+}
+
+impl Colors {
+    fn space(&self) -> Result<color::Space> {
+        color::Space::parse(&self.color_space)
+    }
+
+    fn profiles(&self) -> input::Profiles {
+        if self.ignore_profile {
+            input::Profiles::Ignore
+        } else {
+            input::Profiles::Convert
+        }
+    }
+}
+
 /// How a video or animation is made.
 #[derive(clap::Args)]
 #[command(next_help_heading = "Videos and animations")]
@@ -217,6 +255,17 @@ fn save_png(path: &Path, img: image::RgbaImage) -> Result<()> {
     file.flush()?;
     Ok(())
 }
+
+/// A still delivered as a PNG in `space`.
+fn save_still(path: &Path, img: &image::RgbaImage, space: &color::Space) -> Result<()> {
+    let bytes = space.png(img)?;
+    let mut file = new_file(path)?;
+    file.write_all(&bytes)?;
+    if *space != color::Space::Srgb {
+        eprintln!("Written in {}, at 16 bits, with its profile", space.name());
+    }
+    Ok(())
+}
 /// The included preset called `name`, or an error listing them.
 fn preset(name: &str) -> Result<Config> {
     presets::named(name).map(|p| p.config).with_context(|| {
@@ -273,10 +322,17 @@ fn renderer(backend: Backend) -> Result<Renderer> {
     Ok(renderer)
 }
 
-/// The image at `input`, or the built-in test card.
-fn source(input: Option<&Path>) -> Result<image::RgbaImage> {
+/// The image at `input` in sRGB, saying what became of its colour profile, or the built-in
+/// test card.
+fn source(input: Option<&Path>, profiles: input::Profiles) -> Result<image::RgbaImage> {
     match input {
-        Some(path) => crtsim_core::input::load_image(path),
+        Some(path) => {
+            let decoded = input::read(path, profiles)?;
+            if let Some(note) = decoded.note {
+                eprintln!("{note}");
+            }
+            Ok(decoded.image)
+        }
         None => Ok(config::test_card()),
     }
 }
@@ -347,9 +403,20 @@ fn render_moving(
             lossless: moving.lossless,
             ..AnimationOptions::default()
         };
-        crtsim_media::export_animation(
-            &video, output, config, &options, &renderer, &cancel, progress,
-        )?;
+        // FFmpeg encodes animations where it is installed. Without it, one made here is
+        // written as a browser page writes it.
+        let lossy = crtsim_media::AnimationFormat::of(output)
+            == Some(crtsim_media::AnimationFormat::Webp)
+            && !moving.lossless;
+        if video.made_here() && !lossy && !crtsim_media::ToolCheck::run(&cancel).ready() {
+            crtsim_media::export_animation_here(
+                &video, output, config, &options, &renderer, &cancel, progress,
+            )?;
+        } else {
+            crtsim_media::export_animation(
+                &video, output, config, &options, &renderer, &cancel, progress,
+            )?;
+        }
     } else {
         let options = Options {
             timing,
@@ -430,8 +497,10 @@ fn main() -> Result<()> {
             tile,
             columns,
             backend,
+            colors,
         } => {
             ensure_new_png(&output)?;
+            let space = colors.space()?;
             let size = |text: &str| -> Option<(u32, u32)> {
                 let (w, h) = text.split_once('x')?;
                 Some((w.parse().ok()?, h.parse().ok()?))
@@ -462,7 +531,7 @@ fn main() -> Result<()> {
                     })
                     .collect();
             }
-            let src = source(input.as_deref())?;
+            let src = source(input.as_deref(), colors.profiles())?;
             let renderer = renderer(backend)?;
             let started = std::time::Instant::now();
             let count = chosen.len();
@@ -475,7 +544,7 @@ fn main() -> Result<()> {
                 None,
                 |done| eprintln!("Rendered {done} of {count}: {}", chosen[done - 1].name),
             ))?;
-            save_png(&output, made)?;
+            save_still(&output, &made, &space)?;
             eprintln!(
                 "Saved {} in {:.2}s",
                 output.display(),
@@ -513,9 +582,11 @@ fn main() -> Result<()> {
             backend,
             prepare,
             debug_dir,
+            colors,
             moving,
         } => {
             let making = making(input.as_deref(), &output)?;
+            let space = colors.space()?;
             ensure!(!output.exists(), "Output already exists; choose a new path");
             if !matches!(making, Making::Still) {
                 ensure!(debug_dir.is_none(), "--debug-dir is for stills");
@@ -549,10 +620,14 @@ fn main() -> Result<()> {
             }
             c.validate()?;
             if let Making::Video | Making::Animation = making {
+                ensure!(
+                    space == color::Space::Srgb,
+                    "--color-space is for PNG stills; videos and animations are sRGB"
+                );
                 let animation = matches!(making, Making::Animation);
                 return render_moving(input.as_deref(), &output, &c, &moving, animation, backend);
             }
-            let src = source(input.as_deref())?;
+            let src = source(input.as_deref(), colors.profiles())?;
             let sig = c.signal_size(src.dimensions())?;
             let out = c.output_size(src.dimensions())?;
             eprintln!(
@@ -573,7 +648,11 @@ fn main() -> Result<()> {
             let started = std::time::Instant::now();
             let mut sequence = Sequence::still();
             pollster::block_on(renderer.frame(&mut sequence, &src, &c, None, |_| {}))?;
-            save_png(&output, pollster::block_on(renderer.read(&mut sequence))?)?;
+            save_still(
+                &output,
+                &pollster::block_on(renderer.read(&mut sequence))?,
+                &space,
+            )?;
             // Only a debug run reads back the images the frame was made from.
             if let Some(dir) = debug_dir {
                 fs::create_dir(&dir)?;

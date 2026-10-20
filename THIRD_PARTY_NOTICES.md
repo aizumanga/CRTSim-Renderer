@@ -4,9 +4,9 @@ The root CC0 dedication applies to this project's original contributions, not to
 
 ## CRTSim
 
-J. Kyle Pittman, CC0 1.0. Original dedication: `assets/original-crtsim/COPYING.txt`.
-Repository and exact source commit: `assets/original-crtsim/SOURCES.md`.
-The CRT shader, `shaders/crtsim.wgsl`, is a translation/adaptation of the shared effect. `shaders/prepare.wgsl` is original to this project.
+J. Kyle Pittman, CC0 1.0. Original dedication: `crates/crtsim-core/assets/original-crtsim/COPYING.txt`.
+Repository and exact source commit: `crates/crtsim-core/assets/original-crtsim/SOURCES.md`.
+The CRT shader, `crates/crtsim-core/shaders/crtsim.wgsl`, is a translation/adaptation of the shared effect. `crates/crtsim-core/shaders/prepare.wgsl` is original to this project.
 
 ## Rust dependencies
 
@@ -38,6 +38,15 @@ public domain VGA fonts. The glyphs are embedded in `crates/crtsim-core/src/shee
 ## FFmpeg
 
 Phase 3 invokes a user-installed FFmpeg and ffprobe as separate executables. Neither is bundled, linked or downloaded by this application.
+
+## The render service's image
+
+`packaging/service/Dockerfile` builds `crtsim-service` into an image on Debian's `trixie-slim`, with Debian's
+`ffmpeg` (built by Debian with GPL components, so GPL-2.0-or-later as a whole), `mesa-vulkan-drivers` (MIT) and
+`libvulkan1` (Apache-2.0) installed unmodified from Debian, each with its copyright file under `/usr/share/doc`; their
+sources are Debian's (`apt-get source`, or sources.debian.org). The service runs FFmpeg as a separate program, as the
+desktop does. The image carries this project's license and notices, and the license text of every Rust dependency
+the service builds with, gathered by `tools/licenses.py`, in `/usr/share/doc/crtsim-service`.
 The installed build determines codec availability and its license obligations; builds containing libx264 generally enable GPL components.
 Before distributing FFmpeg with a future release, collect the exact build configuration, applicable licenses and corresponding source obligations.
 
@@ -51,7 +60,7 @@ and other creators identified in the original palette names, which are preserved
 
 [Author's announcement](https://www.reddit.com/r/emulation/comments/1oopf1i/updated_nes_luts_for_mame/).
 The unmodified PNGs, upstream dedication, source notes and SHA-256 digests are in
-`assets/nes-luts/`. Release packages include `NES_LUTS_README.md`, `NES_LUTS_SOURCES.md`
+`crates/crtsim-core/assets/nes-luts/`. Release packages include `NES_LUTS_README.md`, `NES_LUTS_SOURCES.md`
 and `NES_LUTS_SHA256SUMS`; the LUT data is embedded in the executable.
 
 ## NES palette generator

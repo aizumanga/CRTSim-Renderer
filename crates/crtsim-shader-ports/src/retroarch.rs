@@ -6,8 +6,8 @@
 //! RetroArch -- resizing, source edits, the export size and warm-up -- a preset does not hold.
 
 use super::{File, Host, Kind, Parameter, Table};
-use crate::config::{ColorMode, Config};
 use anyhow::Result;
+use crtsim_core::config::{ColorMode, Config};
 use std::fmt::Write as _;
 
 /// Where a preset finds the port's shaders and textures, relative to it.
@@ -18,39 +18,39 @@ const SHADERS: &str = "shaders/crtsim-renderer";
 pub(super) const SOURCES: &[(&str, &str)] = &[
     (
         "dialect.inc",
-        include_str!("../../../../ports/retroarch/dialect.inc"),
+        include_str!("../../../ports/retroarch/dialect.inc"),
     ),
     (
         "bloom.inc",
-        include_str!("../../../../ports/retroarch/bloom.inc"),
+        include_str!("../../../ports/retroarch/bloom.inc"),
     ),
     (
         "prepare.slang",
-        include_str!("../../../../ports/retroarch/prepare.slang"),
+        include_str!("../../../ports/retroarch/prepare.slang"),
     ),
     (
         "composite.slang",
-        include_str!("../../../../ports/retroarch/composite.slang"),
+        include_str!("../../../ports/retroarch/composite.slang"),
     ),
     (
         "surface.slang",
-        include_str!("../../../../ports/retroarch/surface.slang"),
+        include_str!("../../../ports/retroarch/surface.slang"),
     ),
     (
         "bloom-down.slang",
-        include_str!("../../../../ports/retroarch/bloom-down.slang"),
+        include_str!("../../../ports/retroarch/bloom-down.slang"),
     ),
     (
         "bloom-up.slang",
-        include_str!("../../../../ports/retroarch/bloom-up.slang"),
+        include_str!("../../../ports/retroarch/bloom-up.slang"),
     ),
     (
         "present.slang",
-        include_str!("../../../../ports/retroarch/present.slang"),
+        include_str!("../../../ports/retroarch/present.slang"),
     ),
 ];
 
-const README: &str = include_str!("../../../../ports/retroarch/README.md");
+const README: &str = include_str!("../../../ports/retroarch/README.md");
 
 /// The files that make `looks` RetroArch presets, each look named by its preset's file name
 /// without `.slangp`. They share one copy of the shaders.
@@ -317,7 +317,7 @@ mod tests {
             "#pragma parameter CRTSIM_PERSISTENCE_R \"Red persistence\" 0.7 0 0.999 0.01\n"
         ));
         assert!(pragmas.contains(
-            "#pragma parameter CRTSIM_FIT \"Fit on 4:3 tube (original, contain, cover, stretch)\" 0 0 3 1\n"
+            "#pragma parameter CRTSIM_FIT \"Fit on the tube (original, contain, cover, stretch)\" 0 0 3 1\n"
         ));
         assert!(pragmas.contains("CRTSIM_MASK_ROWS \"Mask rows (0 follows the signal)\" 0 "));
         file(&files, "shaders/crtsim-renderer/passes/surface.inc");

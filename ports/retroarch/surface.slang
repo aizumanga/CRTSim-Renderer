@@ -14,6 +14,7 @@ layout(std140, set = 0, binding = 0) uniform UBO {
     float CRTSIM_FIT;
     float CRTSIM_OVERSCAN;
     float CRTSIM_BARREL;
+    float CRTSIM_TUBE_ASPECT;
     float CRTSIM_SATURATION;
     float CRTSIM_MASK_BRIGHTNESS;
     float CRTSIM_MASK_OPACITY;

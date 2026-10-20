@@ -245,6 +245,30 @@ fn cases(renderer: &Renderer) -> Vec<(&'static str, RgbaImage)> {
         .crt,
     ));
 
+    // Tubes of other shapes: a widescreen one in a 4:3 frame, which it fills across with its
+    // bezel above and below, reflecting a picture fitted inside it; and a portrait one, its
+    // bezel's middle taken out, in the goldens' 16:9 frame.
+    cases.push((
+        "widescreen-tube",
+        render(&Config {
+            tube_aspect: 16. / 9.,
+            output: "240x180".into(),
+            fit: config::Fit::Contain,
+            reflection: 2.,
+            ..base()
+        })
+        .crt,
+    ));
+    cases.push((
+        "portrait-tube",
+        render(&Config {
+            tube_aspect: 0.75,
+            reflection: 2.,
+            ..base()
+        })
+        .crt,
+    ));
+
     // Interlaced scanning: a 480-row signal whose last tick scanned one field, the other left
     // to decay, as a still of an interlaced set shows it.
     cases.push((

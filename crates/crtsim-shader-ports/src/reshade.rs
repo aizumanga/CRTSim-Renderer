@@ -9,8 +9,8 @@
 //! the effect's own files sit in a folder of their own beside it.
 
 use super::{File, Host, Kind, Parameter, Reading, Table};
-use crate::config::Config;
 use anyhow::Result;
+use crtsim_core::config::Config;
 
 /// Where ReShade looks for effects and their textures, relative to the export.
 const SHADERS: &str = "reshade-shaders/Shaders";
@@ -20,8 +20,8 @@ const OWN: &str = "crtsim-renderer";
 const EFFECT: &str = "CRTSimRenderer.fx";
 const TECHNIQUE: &str = "CRTSimRenderer";
 
-pub(super) const SOURCE: &str = include_str!("../../../../ports/reshade/CRTSimRenderer.fx");
-const README: &str = include_str!("../../../../ports/reshade/README.md");
+pub(super) const SOURCE: &str = include_str!("../../../ports/reshade/CRTSimRenderer.fx");
+const README: &str = include_str!("../../../ports/reshade/README.md");
 
 /// The parameters ReShade reads as preprocessor definitions, since textures depend on them.
 const DEFINITIONS: [&str; 3] = [
@@ -193,7 +193,7 @@ fn preset(c: &Config, table: Option<&Table>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::ColorMode;
+    use crtsim_core::config::ColorMode;
 
     fn text<'a>(files: &'a [File], path: &str) -> &'a str {
         let file = files
@@ -231,7 +231,7 @@ mod tests {
     fn a_preset_holds_its_look_and_the_header_the_reference() {
         let mut look = Config::general();
         look.bloom = 0.5;
-        look.fit = crate::config::Fit::Cover;
+        look.fit = crtsim_core::config::Fit::Cover;
         look.color_mode = ColorMode::LinearLight;
         let files = export(&[("general", &look)]).unwrap();
         let preset = text(&files, "general.ini");
@@ -259,7 +259,7 @@ mod tests {
             "#define CRTSIM_BEZEL_WIDTH 1024\n",
             "#ifndef CRTSIM_SIGNAL_HEIGHT\n#define CRTSIM_SIGNAL_HEIGHT 224\n#endif\n",
             "#define CRTSIM_TABLE_FILE \"crtsim-renderer/no-table.png\"\n",
-            "uniform int CRTSIM_FIT <\n    ui_type = \"combo\";\n    ui_label = \"Fit on 4:3 tube\";\n    ui_items = \"original\\0contain\\0cover\\0stretch\\0\";\n> = 0;\n",
+            "uniform int CRTSIM_FIT <\n    ui_type = \"combo\";\n    ui_label = \"Fit on the tube\";\n    ui_items = \"original\\0contain\\0cover\\0stretch\\0\";\n> = 0;\n",
             "uniform float CRTSIM_BLOOM <\n    ui_type = \"slider\";\n    ui_label = \"Bloom amount\";\n",
         ] {
             assert!(header.contains(expected), "{expected:?} in\n{header}");

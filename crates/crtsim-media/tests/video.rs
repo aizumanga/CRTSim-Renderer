@@ -961,3 +961,81 @@ fn lossless_video_keeps_every_pixel_of_the_crt() {
     assert_eq!(decoded.stdout.len(), first.as_raw().len());
     assert!(decoded.stdout == *first.as_raw(), "not the rendered frame");
 }
+
+#[test]
+#[ignore = "requires a Vulkan adapter"]
+fn a_sprite_sheet_renders_as_an_animation_without_ffmpeg() {
+    use crtsim_media::{AnimationOptions, MediaKind, Source};
+    use image::{AnimationDecoder, Rgba, RgbaImage};
+    let dir = tempfile::tempdir().unwrap();
+    // Three 32x24 frames side by side, red, green and blue, shown 100, 100 and 200 ms.
+    let mut sheet = RgbaImage::new(96, 24);
+    for (x, _, pixel) in sheet.enumerate_pixels_mut() {
+        let mut colour = [0, 0, 0, 255];
+        colour[(x / 32) as usize] = 255;
+        *pixel = Rgba(colour);
+    }
+    sheet.save(dir.path().join("sheet.png")).unwrap();
+    let frames: Vec<String> = [100, 100, 200]
+        .iter()
+        .enumerate()
+        .map(|(n, ms)| {
+            format!(
+                r#""frame {n}": {{ "frame": {{ "x": {}, "y": 0, "w": 32, "h": 24 }},
+                "rotated": false, "trimmed": false,
+                "spriteSourceSize": {{ "x": 0, "y": 0, "w": 32, "h": 24 }},
+                "sourceSize": {{ "w": 32, "h": 24 }}, "duration": {ms} }}"#,
+                n * 32
+            )
+        })
+        .collect();
+    let json = dir.path().join("sheet.json");
+    std::fs::write(
+        &json,
+        format!(
+            r#"{{ "frames": {{ {} }}, "meta": {{ "image": "sheet.png" }} }}"#,
+            frames.join(",")
+        ),
+    )
+    .unwrap();
+    assert_eq!(MediaKind::of(&json), MediaKind::Sheet);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let video = crtsim_media::probe(&json, &cancel).unwrap();
+    assert!(matches!(video.source, Source::Sheet(_)) && video.made_here());
+    assert_eq!((video.size, video.frames), ((32, 24), Some(3)));
+    assert!((video.duration - 0.4).abs() < 1e-9);
+
+    let renderer = pollster::block_on(crtsim_core::Renderer::new(wgpu::Backends::VULKAN)).unwrap();
+    let output = dir.path().join("crt.png");
+    let options = AnimationOptions {
+        fps: 10,
+        max_side: 160,
+        max_seconds: None,
+        ..AnimationOptions::default()
+    };
+    let config = crtsim_core::presets::named("Clean RGB").unwrap().config;
+    crtsim_media::export_animation_here(
+        &video,
+        &output,
+        &config,
+        &options,
+        &renderer,
+        &cancel,
+        |_| {},
+    )
+    .unwrap();
+    let decoder = image::codecs::png::PngDecoder::new(std::fs::File::open(&output).unwrap())
+        .unwrap()
+        .apng();
+    let frames: Vec<RgbaImage> = decoder
+        .into_frames()
+        .map(|frame| frame.unwrap().into_buffer())
+        .collect();
+    // Ten a second: the blue frame, twice as long, is held for two.
+    assert_eq!(frames.len(), 4);
+    let centre = |frame: &RgbaImage| frame.get_pixel(frame.width() / 2, frame.height() / 2).0;
+    let (red, green, blue) = (centre(&frames[0]), centre(&frames[1]), centre(&frames[3]));
+    assert!(red[0] > red[1] && red[0] > red[2], "{red:?}");
+    assert!(green[1] > green[0] && green[1] > green[2], "{green:?}");
+    assert!(blue[2] > blue[0] && blue[2] > blue[1], "{blue:?}");
+}

@@ -231,6 +231,7 @@ mod tests {
                     | "Pixel art 240p"
                     | "NTSC 240p"
                     | "NTSC 480i"
+                    | "Widescreen television"
                     | "PAL 288p"
                     | "PAL 576i"
             );

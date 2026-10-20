@@ -12,6 +12,7 @@ pub mod mux;
 mod plan;
 mod probe;
 mod process;
+mod sheet;
 mod tools;
 mod webp_writer;
 
@@ -19,9 +20,13 @@ pub use animated::{detect_bytes, probe_bytes, test_clip, AnimationFormat};
 pub use animation::{AnimationOptions, AnimationSummary, Dither};
 pub use crtsim_core::Timing;
 pub use decode::{playback, preview, preview_frame};
-pub use export::{export, export_animation, export_animation_with, export_with, Progress, Rate};
+pub use export::{
+    export, export_animation, export_animation_here, export_animation_with, export_with, Progress,
+    Rate,
+};
 use probe::is_text_subtitle;
 pub use probe::{frame_count, probe, probe_demuxed, Contents, Source, Track, TrackKind, Video};
+pub use sheet::Sheet;
 pub use tools::{Found, Tool, ToolCheck};
 
 use anyhow::{ensure, Context, Result};
@@ -49,11 +54,14 @@ pub enum MediaKind {
     Video,
     /// A GIF or WebP with more than one frame, decoded here.
     Animation(AnimationFormat),
+    /// A sprite sheet's JSON, as Aseprite and TexturePacker write it, whose frames are cut
+    /// from the picture beside it.
+    Sheet,
 }
 
 impl MediaKind {
     /// Reads the file's header, and for a GIF up to two frames, to tell an animation from a
-    /// still image of the same format.
+    /// still image of the same format; and a JSON file whole, to tell a sprite sheet's.
     pub fn of(path: &Path) -> Self {
         let video = path
             .extension()
@@ -63,6 +71,8 @@ impl MediaKind {
             Self::Video
         } else if let Some(format) = animated::detect(path) {
             Self::Animation(format)
+        } else if sheet::detect(path) {
+            Self::Sheet
         } else {
             Self::Still
         }
@@ -76,7 +86,10 @@ impl MediaKind {
     /// Whether a batch renders it to a video rather than to a PNG. An animated WebP stays a
     /// PNG of its first frame, as batches made it before animations could be opened.
     pub fn batch_as_video(self) -> bool {
-        matches!(self, Self::Video | Self::Animation(AnimationFormat::Gif))
+        matches!(
+            self,
+            Self::Video | Self::Animation(AnimationFormat::Gif) | Self::Sheet
+        )
     }
 }
 

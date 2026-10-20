@@ -1,8 +1,20 @@
 [package]
 name = "crtsim-core"
+# A library on crates.io, versioned with the app and published with its releases: a change
+# that breaks a caller of the library needs a new major version of both.
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version = "1.90"
+description = "J. Kyle Pittman's CRTSim on wgpu: composite artifacts, persistence, a ray-traced curved screen and bezel, shadow mask and bloom, for stills, video and a host's own frames."
+repository = "https://github.com/aizumanga/CRTSim-Renderer"
+homepage = "https://github.com/aizumanga/CRTSim-Renderer"
+readme = "README.md"
+keywords = ["crt", "shader", "wgpu", "retro", "ntsc"]
+categories = ["rendering", "graphics", "multimedia::images", "game-development"]
+# What the crate embeds and documents. The golden images its tests compare with stay in the
+# repository.
+include = ["/src/**/*.rs", "/shaders/*.wgsl", "/assets/**", "/README.md"]
 
 [dependencies]
 anyhow.workspace = true
@@ -13,6 +25,11 @@ serde_json.workspace = true
 wgpu.workspace = true
 glam = "0.27"
 futures-channel = "0.3"
+# Colour management: ICC profiles read and converted, in Rust, on the desktop and the web.
+moxcms = { version = "0.8", features = ["options"] }
+# A PNG's colour chunks and a JPEG's CMYK inks, which the image crate does not hand over.
+png = "0.17"
+jpeg-decoder = "0.3"
 
 [dev-dependencies]
 naga = { version = "30.0.1", features = ["wgsl-in"] }

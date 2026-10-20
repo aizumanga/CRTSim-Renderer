@@ -6,9 +6,9 @@
 //! cargo test -p crtsim-ports --test retroarch_parity -- --ignored --nocapture
 //! ```
 
-use crtsim_core::ports;
 use crtsim_ports::parity::{self, Case, Timing};
 use crtsim_ports::retroarch::{Port, RetroArch};
+use crtsim_shader_ports as ports;
 use image::RgbaImage;
 use std::path::Path;
 
@@ -32,7 +32,7 @@ fn port(case: &Case, folder: &Path) -> RgbaImage {
         picture = Some(
             port.render(
                 input,
-                parity::OUTPUT,
+                parity::output(case),
                 *frames,
                 frame_time_us,
                 parity::aspect(case),

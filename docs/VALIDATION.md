@@ -30,7 +30,7 @@ is therefore a deliberate review point, not a silent shift.
 
 ## GPU prepare step
 
-Resize, alpha composite, source edits, LUT and grade run on the GPU (`shaders/prepare.wgsl`).
+Resize, alpha composite, source edits, LUT and grade run on the GPU (`crates/crtsim-core/shaders/prepare.wgsl`).
 The shader repeats the CPU implementation's arithmetic rather than improving on it -- the image
 crate's separable resize with weights computed on the CPU exactly as that crate computes them,
 and the rounding to 8 bits between stages -- so the move changes where the work runs and not
@@ -56,6 +56,29 @@ A mismatch writes the rendered frame and a 64x-amplified difference image into
 `$CRTSIM_TEST_OUTPUT/golden-failures/`, which the Vulkan job uploads with the other fixtures
 even when it fails. When the goldens have to be regenerated against a driver only CI has, an
 update run there leaves them in the same uploaded directory to download and commit.
+
+## Colour management
+
+A picture is read into sRGB from the profile its file carries, with moxcms (`crtsim_core::color`).
+`python3 tools/check_icc.py` converts the same pictures with lcms 2.14, through ImageMagick, and
+with the renderer, and compares them. Recorded on 2026-10-19:
+
+| Profile | Most steps apart | Within 1 step | Within 2 |
+| --- | --- | --- | --- |
+| Adobe RGB (1998), colord's | 2 | 99.9% | 100% |
+| ProPhoto RGB | 2 | 99.9% | 100% |
+| Apple RGB, gamma 1.8 | 2 | 100% | 100% |
+| Rec. 709 | 1 | 100% | 100% |
+| FOGRA39 coated, a CMYK JPEG | 7 | 91.0% | 99.7% |
+
+The CMYK differences are where a colour lies outside sRGB. On a picture with more saturated cyans
+than the script's, a few pixels in a thousand came out up to 18 steps apart: lcms clips their red
+to 0, moxcms leaves it at up to 18 (a linear 0.006). In-gamut colours agree.
+
+Unit tests (`color::tests`, `input::tests`) check without either program that a file's profile is
+found in PNG, JPEG and WebP and in PNG's order of chunks, that a program's own copy of sRGB and a
+gAMA of 1/2.2 leave every value as it is, that 16-bit and grey pictures convert through their
+own layouts, and that a still written in Display P3 reads back as the sRGB picture rendered.
 
 ## Phase 2 checks
 

@@ -1,5 +1,5 @@
 /* CC0. Written by CRTSim Renderer's exporter from its settings table; edit that, not
- * this. `cargo test -p crtsim-core obs` says when it is out of date, and
+ * this. `cargo test -p crtsim-shader-ports obs` says when it is out of date, and
  * CRTSIM_WRITE_OBS_HEADER=1 rewrites it. */
 
 #pragma once
@@ -55,6 +55,7 @@ enum crtsim_parameter_index {
 	CRTSIM_NTSC_BLENDING_INDEX,
 	CRTSIM_BARREL_INDEX,
 	CRTSIM_OVERSCAN_INDEX,
+	CRTSIM_TUBE_ASPECT_INDEX,
 	CRTSIM_DIMMING_INDEX,
 	CRTSIM_FOV_INDEX,
 	CRTSIM_MASK_OPACITY_INDEX,
@@ -92,7 +93,7 @@ static const struct crtsim_parameter crtsim_parameters[CRTSIM_PARAMETER_COUNT] =
 	{"CRTSIM_PHASE", "Phase", 0.0f, 3.0f, 1.0f, 0.0f, CRTSIM_PHASE_ITEMS},
 	{"CRTSIM_FLIP_ARTIFACTS", "Artifact pattern", 0.0f, 1.0f, 1.0f, 0.0f, CRTSIM_FLIP_ARTIFACTS_ITEMS},
 	{"CRTSIM_INTERLACE", "Interlaced fields", 0.0f, 2.0f, 1.0f, 2.0f, CRTSIM_INTERLACE_ITEMS},
-	{"CRTSIM_FIT", "Fit on 4:3 tube", 0.0f, 3.0f, 1.0f, 1.0f, CRTSIM_FIT_ITEMS},
+	{"CRTSIM_FIT", "Fit on the tube", 0.0f, 3.0f, 1.0f, 1.0f, CRTSIM_FIT_ITEMS},
 	{"CRTSIM_SCREEN_ONLY", "Screen only, without the bezel", 0.0f, 1.0f, 1.0f, 0.0f, CRTSIM_SCREEN_ONLY_ITEMS},
 	{"CRTSIM_REFLECTION_AS_SCREEN", "Bezel reflection", 0.0f, 1.0f, 1.0f, 0.0f, CRTSIM_REFLECTION_AS_SCREEN_ITEMS},
 	{"CRTSIM_MASK_ANTIALIAS", "Filter mask when shrinking", 0.0f, 1.0f, 1.0f, 1.0f, CRTSIM_MASK_ANTIALIAS_ITEMS},
@@ -109,6 +110,7 @@ static const struct crtsim_parameter crtsim_parameters[CRTSIM_PARAMETER_COUNT] =
 	{"CRTSIM_NTSC_BLENDING", "NTSC blending", 0.0f, 2.0f, 0.02f, 0.0f, NULL},
 	{"CRTSIM_BARREL", "Barrel distortion", -2.0f, 2.0f, 0.04f, -0.115f, NULL},
 	{"CRTSIM_OVERSCAN", "Overscan", 0.1f, 3.0f, 0.03f, 1.0f, NULL},
+	{"CRTSIM_TUBE_ASPECT", "Tube aspect (width ÷ height)", 0.75f, 2.0f, 0.01f, 1.3333334f, NULL},
 	{"CRTSIM_DIMMING", "Edge dimming", 0.0f, 1.0f, 0.01f, 0.5f, NULL},
 	{"CRTSIM_FOV", "Camera field of view", 5.0f, 90.0f, 0.9f, 15.0f, NULL},
 	{"CRTSIM_MASK_OPACITY", "Mask opacity", 0.0f, 1.0f, 0.01f, 1.0f, NULL},

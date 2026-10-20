@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 crtsim-core = { path = "../crtsim-core" }
+crtsim-shader-ports = { path = "../crtsim-shader-ports" }
 # Videos and animations: FFmpeg runs as it does for the desktop, and GIF and WebP decode here.
 crtsim-media = { path = "../crtsim-media" }
 anyhow.workspace = true

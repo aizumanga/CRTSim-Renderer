@@ -1,5 +1,35 @@
 # Portable releases (Phase 4)
 
+## v1.5.0
+
+The CRT goes where pictures are made: into video editors as an OpenFX effect and a frei0r filter, into Aseprite as an
+extension, and onto a server as a render service. Pictures keep their colours from their profiles, and the tube can
+be widescreen.
+
+- **Colour profiles.** A picture's ICC profile (PNG, JPEG including CMYK, WebP), or PNG's colour chunks, say what its
+  colours are, and they are converted into sRGB, the CRT's own. A profile that is sRGB in effect leaves every value as
+  it is, so palette art still matches its palette. **View → Pictures' colour profiles → Ignore**, or
+  `--ignore-profile`, reads the numbers as sRGB instead. PNG stills and contact sheets can be written in Display P3,
+  Adobe RGB, Rec. 2020, ProPhoto RGB or a profile from a file, at 16 bits with the profile embedded
+  (**Export → PNG colour space**, or `--color-space`).
+- **Tube** sits beside Fit: 4:3 as before, 16:10, 16:9, a portrait 3:4 or anything between. The glass and bezel keep
+  their shape, stretched; a 4:3 tube is the original's bit for bit. **Widescreen television** is a 16:9 tube showing
+  480 interlaced rows. The RetroArch, ReShade and OBS ports take the tube's shape too.
+- **Video editors.** An OpenFX effect for DaVinci Resolve, Natron, Nuke and other OpenFX hosts, and a frei0r filter
+  for Kdenlive, `melt` and FFmpeg, in an `-editors-<system>.zip` for each system. Frames rendered out of order come out
+  as they would in order. See [the editors' guide](EDITORS.md).
+- **Aseprite.** The `.aseprite-extension` adds **File → Export → CRTSim Renderer...**, drawing a sprite's frame, its
+  animation or a tag through the command line and opening the result as a new sprite. See [the guide](ASEPRITE.md).
+- **Sprite sheets.** A sprite sheet's JSON, as Aseprite and TexturePacker write it, opens in the app and renders from
+  the command line as an animation, each frame shown as long as the JSON says.
+- The command line writes a GIF, lossless WebP or animated PNG of an animated GIF or WebP, a sprite sheet or the video
+  test card without FFmpeg, when FFmpeg is not installed.
+- **Render service.** `crtsim-service` renders pictures, animations and videos sent over HTTP, with a token, a
+  bounded queue and limits on every request, and a container image on software Vulkan. See [the service](SERVICE.md).
+- `crtsim-core` records a game's or an engine's frames into its own command encoder (`Renderer::encode`), and is
+  published on crates.io with each release, at the release's version.
+- Releases are pushed to itch.io too, a channel for each package, once the itch.io page is set up.
+
 ## v1.4.0
 
 The desktop and web app are easier to start with and to finish an export in: Open and Export sit under the source,
@@ -293,6 +323,59 @@ in a folder named `ffmpeg` next to the app (the Windows ZIP and Linux tarball), 
 They must include the codecs described in [VIDEO_PIPELINE.md](VIDEO_PIPELINE.md). Image rendering works without FFmpeg.
 There are no runtime downloads; the desktop reaches the network only when asked to check for a newer release. Personal presets remain in the normal per-user app-data directory;
 updating or replacing a portable package does not delete them. Use `CRTSIM_DATA_DIR` for an explicit alternate directory.
+
+## crtsim-core on crates.io
+
+The renderer is published as the [`crtsim-core`](https://crates.io/crates/crtsim-core) crate, for Rust programs to
+depend on: stills, video sequences, and `Renderer::encode` for a game's or an engine's own frames. It is versioned
+with the app, from v1.5.0: each release's crate is the renderer that release's app draws with. Semantic versioning
+then holds for both, so a change that breaks a caller of the crate needs a new major version of the app too.
+Everything it embeds, its shaders, the original meshes and textures, and the NES LUTs, lives in its folder,
+`crates/crtsim-core`, so the crate builds from its package alone; CI packages it on every change to prove that.
+
+A crate version cannot be taken back, so it is published when a person publishes the release, not when its tag is
+pushed: the `publish-core.yml` workflow runs on the release's publication, checks out its tag, checks the tag names
+the crate's version, tests the crate and publishes it, with a token crates.io issues for that run alone. A version
+already on crates.io is left as it is. To set it up:
+
+1. The first version only, from the release's tag: `cargo publish -p crtsim-core` with a crates.io token.
+2. Add this repository's `publish-core.yml` workflow as the crate's trusted publisher on crates.io (crate settings →
+   Trusted Publishing, environment `crates-io`), and make a `crates-io` environment in the repository's settings.
+3. From then on, publishing a release publishes its crate. Running the workflow by hand with a release's tag
+   publishes that one, if it is not already.
+
+## itch.io
+
+Publishing a release also pushes its packages to itch.io, with [butler](https://itch.io/docs/butler/), from the
+`itch.yml` workflow: each package to a channel of its own, unpacked as people use it, so the itch app installs,
+launches and updates the desktop app, and butler uploads only what changed since the last release. Each channel's
+version on itch.io is the release's, without its `v`. `tools/itch.py` lays the channels out from the release's
+downloads, after their SHA256SUMS are checked:
+
+| Channel | From | Holds |
+| --- | --- | --- |
+| `windows` | `-windows-x86_64.zip` | The app and command line; the itch app launches `crtsim-desktop.exe` |
+| `mac` | `-macos-arm64.tar.gz` | `CRTSim Renderer.app` and the command line; the itch app launches the app |
+| `linux` | `-linux-x86_64.AppImage` | The AppImage, which the itch app launches |
+| `web` | `-web.zip` | The web app, to play in the browser |
+| `editors-windows`, `editors-mac`, `editors-linux` | `-editors-<system>.zip` | The OpenFX effect and the frei0r filter |
+| `aseprite` | `.aseprite-extension` | The Aseprite extension, as the file Aseprite installs |
+| `retroarch`, `reshade`, `obs-linux` | Their ZIPs | The shader presets and the OBS filter |
+
+To set it up, once:
+
+1. Make the project on itch.io, as a tool, and make an API key for butler in itch.io's settings (API keys).
+2. In the repository's **Settings → Secrets and variables → Actions**: on the **Secrets** tab, a repository secret
+   `BUTLER_API_KEY` holding the key; on the **Variables** tab, a variable `ITCH_GAME` naming the project as
+   `user/project`, as its page's address `https://user.itch.io/project` has it. A variable `ITCH_CHANNELS`, such as
+   `windows mac linux`, pushes only those channels. The workflow runs in an `itch-io` environment, which GitHub makes
+   the first time; the secret can go there instead, to limit which branches and tags may use it.
+3. After the first push, edit the project on itch.io: mark the `web` upload **This file will be played in the
+   browser** if the page should run the web app (it needs a browser with WebGPU), and the others' descriptions as
+   wanted. Later pushes keep those settings.
+
+Without `ITCH_GAME` the workflow does nothing; pre-releases are left off itch.io. Running it by hand with a published
+release's tag pushes that release, as when a push failed or for the releases before it, whose packages it has.
 
 ## Local packaging
 

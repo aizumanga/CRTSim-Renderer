@@ -4,8 +4,8 @@ use bytemuck::{Pod, Zeroable};
 use serde::Serialize;
 use std::io::{Cursor, Read};
 
-pub const SCREEN: &[u8] = include_bytes!("../../../assets/original-crtsim/screen.m3d");
-pub const BEZEL: &[u8] = include_bytes!("../../../assets/original-crtsim/frame.m3d");
+pub const SCREEN: &[u8] = include_bytes!("../assets/original-crtsim/screen.m3d");
+pub const BEZEL: &[u8] = include_bytes!("../assets/original-crtsim/frame.m3d");
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable, Serialize)]

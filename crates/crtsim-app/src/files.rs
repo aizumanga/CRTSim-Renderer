@@ -1,7 +1,8 @@
 use anyhow::{ensure, Context, Result};
-use crtsim_core::{config::Config, ports::Host};
-use image::{DynamicImage, ImageOutputFormat, RgbaImage};
-use std::{io::Cursor, path::Path};
+use crtsim_core::config::Config;
+use crtsim_shader_ports::Host;
+use image::RgbaImage;
+use std::path::Path;
 
 const PRESET_KEYWORD: &[u8] = b"CRTSim-Renderer-Preset";
 
@@ -96,21 +97,28 @@ pub fn show_in_folder(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// `image` delivered as a PNG, carrying `preset` when there is one.
-pub fn save_png(path: &Path, image: RgbaImage, preset: Option<&Config>) -> Result<()> {
+/// `image` delivered as a PNG in `space`, carrying `preset` when there is one.
+pub fn save_png(
+    path: &Path,
+    image: RgbaImage,
+    preset: Option<&Config>,
+    space: &crtsim_core::color::Space,
+) -> Result<()> {
     ensure!(
         path.extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("png")),
         "Export filename must end in .png"
     );
-    deliver(path, &png_bytes(image, preset)?, "image/png")
+    deliver(path, &png_bytes(image, preset, space)?, "image/png")
 }
 
-/// `image` as a PNG, carrying `preset` when there is one.
-pub fn png_bytes(image: RgbaImage, preset: Option<&Config>) -> Result<Vec<u8>> {
-    let mut encoded = Cursor::new(Vec::new());
-    DynamicImage::ImageRgba8(image).write_to(&mut encoded, ImageOutputFormat::Png)?;
-    let mut bytes = encoded.into_inner();
+/// `image` as a PNG in `space`, carrying `preset` when there is one.
+pub fn png_bytes(
+    image: RgbaImage,
+    preset: Option<&Config>,
+    space: &crtsim_core::color::Space,
+) -> Result<Vec<u8>> {
+    let mut bytes = space.png(&image)?;
     if let Some(config) = preset {
         let json = serde_json::to_vec(config)?;
         ensure!(
@@ -227,14 +235,14 @@ pub fn save_port(path: &Path, host: Host, c: &Config) -> Result<()> {
         .collect();
     let bytes = zip(
         &format!("{name}{suffix}"),
-        &crtsim_core::ports::export(host, &[(&name, c)])?,
+        &crtsim_shader_ports::export(host, &[(&name, c)])?,
     );
     deliver(path, &bytes, "application/zip")
 }
 
 /// `files` in a zip archive under `folder`, stored uncompressed: the PNGs are compressed
 /// already and the shaders are small, so storing keeps this short and free of dependencies.
-fn zip(folder: &str, files: &[crtsim_core::ports::File]) -> Vec<u8> {
+fn zip(folder: &str, files: &[crtsim_shader_ports::File]) -> Vec<u8> {
     let mut archive = Vec::new();
     let mut directory = Vec::new();
     for file in files {
@@ -366,7 +374,7 @@ mod tests {
         );
         let png = dir.path().join("nes-image.png");
         let source = RgbaImage::from_pixel(1, 1, image::Rgba([32, 64, 128, 255]));
-        save_png(&png, source.clone(), Some(&c)).unwrap();
+        save_png(&png, source.clone(), Some(&c), &Default::default()).unwrap();
         assert_eq!(crtsim_core::input::load_image(&png).unwrap(), source);
         assert_eq!(
             preset_from_png(&std::fs::read(&png).unwrap(), (1, 1)).unwrap(),
@@ -391,7 +399,7 @@ mod tests {
         );
         let png = dir.path().join("image.png");
         let src = crtsim_core::config::test_card();
-        save_png(&png, src.clone(), Some(&c)).unwrap();
+        save_png(&png, src.clone(), Some(&c), &Default::default()).unwrap();
         assert_eq!(crtsim_core::input::load_image(&png).unwrap(), src);
         assert_eq!(
             preset_from_png(&std::fs::read(&png).unwrap(), (1216, 832)).unwrap(),
@@ -404,7 +412,7 @@ mod tests {
             .unwrap();
         damaged[index + PRESET_KEYWORD.len() + 2] ^= 1;
         assert!(find_text_chunk(&damaged, PRESET_KEYWORD).is_none());
-        save_png(&png, RgbaImage::new(1, 1), None).unwrap();
+        save_png(&png, RgbaImage::new(1, 1), None, &Default::default()).unwrap();
         assert!(preset_from_png(&std::fs::read(&png).unwrap(), (1, 1)).is_err());
         let original = std::fs::read(&png).unwrap();
         assert!(save_atomic(&png, |f| {

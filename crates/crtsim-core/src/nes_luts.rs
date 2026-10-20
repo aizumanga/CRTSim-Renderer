@@ -13,155 +13,155 @@ pub struct NesLutEntry {
 pub static ENTRIES: &[NesLutEntry] = &[
     NesLutEntry {
         name: "00 - NES SMPTE-2025",
-        png: include_bytes!("../../../assets/nes-luts/00 - NES SMPTE-2025.png"),
+        png: include_bytes!("../assets/nes-luts/00 - NES SMPTE-2025.png"),
     },
     NesLutEntry {
         name: "01 - NES NTSC SAT_x1",
-        png: include_bytes!("../../../assets/nes-luts/01 - NES NTSC SAT_x1.png"),
+        png: include_bytes!("../assets/nes-luts/01 - NES NTSC SAT_x1.png"),
     },
     NesLutEntry {
         name: "01 - NES NTSC SAT_x2",
-        png: include_bytes!("../../../assets/nes-luts/01 - NES NTSC SAT_x2.png"),
+        png: include_bytes!("../assets/nes-luts/01 - NES NTSC SAT_x2.png"),
     },
     NesLutEntry {
         name: "02 - NES Classic (FBX)",
-        png: include_bytes!("../../../assets/nes-luts/02 - NES Classic (FBX).png"),
+        png: include_bytes!("../assets/nes-luts/02 - NES Classic (FBX).png"),
     },
     NesLutEntry {
         name: "03 - NES Composite Direct (FBX)",
-        png: include_bytes!("../../../assets/nes-luts/03 - NES Composite Direct (FBX).png"),
+        png: include_bytes!("../assets/nes-luts/03 - NES Composite Direct (FBX).png"),
     },
     NesLutEntry {
         name: "04 - NES PC-10",
-        png: include_bytes!("../../../assets/nes-luts/04 - NES PC-10.png"),
+        png: include_bytes!("../assets/nes-luts/04 - NES PC-10.png"),
     },
     NesLutEntry {
         name: "05 - NES PVM Style D93 (FBX)",
-        png: include_bytes!("../../../assets/nes-luts/05 - NES PVM Style D93 (FBX).png"),
+        png: include_bytes!("../assets/nes-luts/05 - NES PVM Style D93 (FBX).png"),
     },
     NesLutEntry {
         name: "06 - NES Smooth (FBX)",
-        png: include_bytes!("../../../assets/nes-luts/06 - NES Smooth (FBX).png"),
+        png: include_bytes!("../assets/nes-luts/06 - NES Smooth (FBX).png"),
     },
     NesLutEntry {
         name: "07 - NES Sony CXA",
-        png: include_bytes!("../../../assets/nes-luts/07 - NES Sony CXA.png"),
+        png: include_bytes!("../assets/nes-luts/07 - NES Sony CXA.png"),
     },
     NesLutEntry {
         name: "08 - NES Wavebeam",
-        png: include_bytes!("../../../assets/nes-luts/08 - NES Wavebeam.png"),
+        png: include_bytes!("../assets/nes-luts/08 - NES Wavebeam.png"),
     },
     NesLutEntry {
         name: "09 - NES ASQ_realityA",
-        png: include_bytes!("../../../assets/nes-luts/09 - NES ASQ_realityA.png"),
+        png: include_bytes!("../assets/nes-luts/09 - NES ASQ_realityA.png"),
     },
     NesLutEntry {
         name: "10 - NES ASQ_realityB",
-        png: include_bytes!("../../../assets/nes-luts/10 - NES ASQ_realityB.png"),
+        png: include_bytes!("../assets/nes-luts/10 - NES ASQ_realityB.png"),
     },
     NesLutEntry {
         name: "11 - NES BMF_final2",
-        png: include_bytes!("../../../assets/nes-luts/11 - NES BMF_final2.png"),
+        png: include_bytes!("../assets/nes-luts/11 - NES BMF_final2.png"),
     },
     NesLutEntry {
         name: "12 - NES BMF_final3",
-        png: include_bytes!("../../../assets/nes-luts/12 - NES BMF_final3.png"),
+        png: include_bytes!("../assets/nes-luts/12 - NES BMF_final3.png"),
     },
     NesLutEntry {
         name: "13 - NES FCEU-13-default_nitsuja",
-        png: include_bytes!("../../../assets/nes-luts/13 - NES FCEU-13-default_nitsuja.png"),
+        png: include_bytes!("../assets/nes-luts/13 - NES FCEU-13-default_nitsuja.png"),
     },
     NesLutEntry {
         name: "14 - NES FCEU-15-nitsuja_new",
-        png: include_bytes!("../../../assets/nes-luts/14 - NES FCEU-15-nitsuja_new.png"),
+        png: include_bytes!("../assets/nes-luts/14 - NES FCEU-15-nitsuja_new.png"),
     },
     NesLutEntry {
         name: "15 - NES FCEUX",
-        png: include_bytes!("../../../assets/nes-luts/15 - NES FCEUX.png"),
+        png: include_bytes!("../assets/nes-luts/15 - NES FCEUX.png"),
     },
     NesLutEntry {
         name: "16 - NES nestopia_rgb",
-        png: include_bytes!("../../../assets/nes-luts/16 - NES nestopia_rgb.png"),
+        png: include_bytes!("../assets/nes-luts/16 - NES nestopia_rgb.png"),
     },
     NesLutEntry {
         name: "17 - NES nestopia_yuv",
-        png: include_bytes!("../../../assets/nes-luts/17 - NES nestopia_yuv.png"),
+        png: include_bytes!("../assets/nes-luts/17 - NES nestopia_yuv.png"),
     },
     NesLutEntry {
         name: "18 - NES RP2C03",
-        png: include_bytes!("../../../assets/nes-luts/18 - NES RP2C03.png"),
+        png: include_bytes!("../assets/nes-luts/18 - NES RP2C03.png"),
     },
     NesLutEntry {
         name: "19 - NES SONY_CXA2025AS_US",
-        png: include_bytes!("../../../assets/nes-luts/19 - NES SONY_CXA2025AS_US.png"),
+        png: include_bytes!("../assets/nes-luts/19 - NES SONY_CXA2025AS_US.png"),
     },
     NesLutEntry {
         name: "20 - NES Unsaturated-V6",
-        png: include_bytes!("../../../assets/nes-luts/20 - NES Unsaturated-V6.png"),
+        png: include_bytes!("../assets/nes-luts/20 - NES Unsaturated-V6.png"),
     },
     NesLutEntry {
         name: "21 - NES YUV",
-        png: include_bytes!("../../../assets/nes-luts/21 - NES YUV.png"),
+        png: include_bytes!("../assets/nes-luts/21 - NES YUV.png"),
     },
     NesLutEntry {
         name: "22 - NES RGB",
-        png: include_bytes!("../../../assets/nes-luts/22 - NES RGB.png"),
+        png: include_bytes!("../assets/nes-luts/22 - NES RGB.png"),
     },
     NesLutEntry {
         name: "23 - NES Nintendulator NTSC",
-        png: include_bytes!("../../../assets/nes-luts/23 - NES Nintendulator NTSC.png"),
+        png: include_bytes!("../assets/nes-luts/23 - NES Nintendulator NTSC.png"),
     },
     NesLutEntry {
         name: "24 - NES PAL",
-        png: include_bytes!("../../../assets/nes-luts/24 - NES PAL.png"),
+        png: include_bytes!("../assets/nes-luts/24 - NES PAL.png"),
     },
     NesLutEntry {
         name: "25 - NES Rockman 9 - 21 to 2C",
-        png: include_bytes!("../../../assets/nes-luts/25 - NES Rockman 9 - 21 to 2C.png"),
+        png: include_bytes!("../assets/nes-luts/25 - NES Rockman 9 - 21 to 2C.png"),
     },
     NesLutEntry {
         name: "26 - NES Rockman 9",
-        png: include_bytes!("../../../assets/nes-luts/26 - NES Rockman 9.png"),
+        png: include_bytes!("../assets/nes-luts/26 - NES Rockman 9.png"),
     },
     NesLutEntry {
         name: "27 - NES Kizul's Definitive NES Palette",
-        png: include_bytes!("../../../assets/nes-luts/27 - NES Kizul's Definitive NES Palette.png"),
+        png: include_bytes!("../assets/nes-luts/27 - NES Kizul's Definitive NES Palette.png"),
     },
     NesLutEntry {
         name: "28 - NES NES Classic Edition",
-        png: include_bytes!("../../../assets/nes-luts/28 - NES NES Classic Edition.png"),
+        png: include_bytes!("../assets/nes-luts/28 - NES NES Classic Edition.png"),
     },
     NesLutEntry {
         name: "29 - NES 3DS VC",
-        png: include_bytes!("../../../assets/nes-luts/29 - NES 3DS VC.png"),
+        png: include_bytes!("../assets/nes-luts/29 - NES 3DS VC.png"),
     },
     NesLutEntry {
         name: "30 - NES HYBRID",
-        png: include_bytes!("../../../assets/nes-luts/30 - NES HYBRID.png"),
+        png: include_bytes!("../assets/nes-luts/30 - NES HYBRID.png"),
     },
     NesLutEntry {
         name: "31 - NES NESCAP",
-        png: include_bytes!("../../../assets/nes-luts/31 - NES NESCAP.png"),
+        png: include_bytes!("../assets/nes-luts/31 - NES NESCAP.png"),
     },
     NesLutEntry {
         name: "32 - NES NESCLASSIC",
-        png: include_bytes!("../../../assets/nes-luts/32 - NES NESCLASSIC.png"),
+        png: include_bytes!("../assets/nes-luts/32 - NES NESCLASSIC.png"),
     },
     NesLutEntry {
         name: "33 - NES RP2C04_0001",
-        png: include_bytes!("../../../assets/nes-luts/33 - NES RP2C04_0001.png"),
+        png: include_bytes!("../assets/nes-luts/33 - NES RP2C04_0001.png"),
     },
     NesLutEntry {
         name: "34 - NES RP2C04_0002",
-        png: include_bytes!("../../../assets/nes-luts/34 - NES RP2C04_0002.png"),
+        png: include_bytes!("../assets/nes-luts/34 - NES RP2C04_0002.png"),
     },
     NesLutEntry {
         name: "35 - NES RP2C04_0003",
-        png: include_bytes!("../../../assets/nes-luts/35 - NES RP2C04_0003.png"),
+        png: include_bytes!("../assets/nes-luts/35 - NES RP2C04_0003.png"),
     },
     NesLutEntry {
         name: "36 - NES RP2C04_0004",
-        png: include_bytes!("../../../assets/nes-luts/36 - NES RP2C04_0004.png"),
+        png: include_bytes!("../assets/nes-luts/36 - NES RP2C04_0004.png"),
     },
 ];
 

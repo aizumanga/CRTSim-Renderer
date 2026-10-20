@@ -9,13 +9,13 @@
 //! properties load.
 
 use super::{File, Host, Kind, Reading, Table};
-use crate::config::Config;
 use anyhow::Result;
+use crtsim_core::config::Config;
 use serde_json::{json, Map, Value};
 use std::fmt::Write as _;
 
-pub(super) const EFFECT: &str = include_str!("../../../../ports/obs/crtsim.effect");
-const README: &str = include_str!("../../../../ports/obs/README.md");
+pub(super) const EFFECT: &str = include_str!("../../../ports/obs/crtsim.effect");
+const README: &str = include_str!("../../../ports/obs/README.md");
 /// The key of a look's colour table, a path relative to the look; empty when it has none.
 const TABLE_FILE: &str = "table_file";
 
@@ -108,7 +108,7 @@ fn c_float(value: f32) -> String {
 pub fn header() -> String {
     let mut out = String::from(
         "/* CC0. Written by CRTSim Renderer's exporter from its settings table; edit that, not\n \
-         * this. `cargo test -p crtsim-core obs` says when it is out of date, and\n \
+         * this. `cargo test -p crtsim-shader-ports obs` says when it is out of date, and\n \
          * CRTSIM_WRITE_OBS_HEADER=1 rewrites it. */\n\n\
          #pragma once\n\n\
          #include <stdbool.h>\n\

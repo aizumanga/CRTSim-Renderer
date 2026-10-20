@@ -41,7 +41,7 @@ impl File {
     }
 
     /// Its contents, if they are at most `limit` bytes; `what` is what it is, for the error.
-    fn read(&self, limit: u64, what: &str) -> Result<Cow<'_, [u8]>> {
+    pub fn read(&self, limit: u64, what: &str) -> Result<Cow<'_, [u8]>> {
         let too_large = || format!("{what} exceeds {} MB", limit / (1024 * 1024));
         match self {
             Self::Path(path) => {
@@ -229,7 +229,13 @@ mod tests {
         let json = dir.path().join("my look.json");
         files::save_preset(&json, &saved).unwrap();
         let png = dir.path().join("render.png");
-        files::save_png(&png, crtsim_core::config::test_card(), Some(&saved)).unwrap();
+        files::save_png(
+            &png,
+            crtsim_core::config::test_card(),
+            Some(&saved),
+            &Default::default(),
+        )
+        .unwrap();
         let cube = dir.path().join("warm.cube");
         std::fs::write(
             &cube,
@@ -335,7 +341,8 @@ mod tests {
         );
         let plain = File::Bytes {
             name: "plain.png".into(),
-            bytes: files::png_bytes(image::RgbaImage::new(1, 1), None).unwrap(),
+            bytes: files::png_bytes(image::RgbaImage::new(1, 1), None, &Default::default())
+                .unwrap(),
         };
         let error = bring(Purpose::ImportPreset, &plain, &current, (1, 1)).unwrap_err();
         assert!(error.starts_with("Cannot import preset: "), "{error}");

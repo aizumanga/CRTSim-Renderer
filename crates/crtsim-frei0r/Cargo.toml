@@ -1,0 +1,16 @@
+[package]
+name = "crtsim-frei0r"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CRTSim Renderer as a frei0r filter, for Kdenlive and other programs built on MLT, and FFmpeg."
+publish = false
+
+[lib]
+# Installed as crtsim.so, crtsim.dll or crtsim.dylib in a folder frei0r hosts search.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+crtsim-plugin = { path = "../crtsim-plugin" }
+anyhow.workspace = true
+image.workspace = true

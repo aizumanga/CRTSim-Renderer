@@ -130,7 +130,7 @@ impl App {
         if shown.none() {
             ui.label("No setting differs from this preset.");
         }
-        let image = ["signal", "output", "fit", "filter"];
+        let image = ["signal", "output", "tube_aspect", "fit", "filter"];
         section(ui, &shown, "Image & output", &image, &[Image], |ui| {
             if shown.key("signal") {
                 resolution(
@@ -150,10 +150,24 @@ impl App {
                     &["720p", "1080p", "1440p", "4k", "reference", "match-input"],
                 );
             }
+            if shown.key("tube_aspect") {
+                // Any other shape is the Glass section's slider's.
+                choice(
+                    ui,
+                    "Tube",
+                    &mut self.config.tube_aspect,
+                    &[
+                        (4. / 3., "4:3"),
+                        (16. / 10., "16:10"),
+                        (16. / 9., "16:9"),
+                        (3. / 4., "3:4, portrait"),
+                    ],
+                );
+            }
             if shown.key("fit") {
                 choice(
                     ui,
-                    "Fit on 4:3 tube",
+                    "Fit on the tube",
                     &mut self.config.fit,
                     &[
                         (Fit::Contain, "Contain"),
@@ -204,7 +218,8 @@ impl App {
             notes(
                 ui,
                 "Rounded glass may hide extreme corners even with Contain. Alpha uses the \
-                 selected background. SDR output; no ICC color management.",
+                 selected background. SDR output, in sRGB or the PNG colour space chosen \
+                 under Export.",
             );
         });
         self.framing_and_color(ui, defaults, &shown);

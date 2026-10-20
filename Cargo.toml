@@ -1,9 +1,9 @@
 [workspace]
-members = ["crates/crtsim-core", "crates/crtsim-cli", "crates/crtsim-app", "crates/crtsim-media", "crates/crtsim-ports"]
+members = ["crates/crtsim-core", "crates/crtsim-cli", "crates/crtsim-app", "crates/crtsim-media", "crates/crtsim-ports", "crates/crtsim-shader-ports", "crates/crtsim-service", "crates/crtsim-plugin", "crates/crtsim-ofx", "crates/crtsim-frei0r"]
 resolver = "2"
 
 [workspace.package]
-version = "1.4.0"
+version = "1.5.0"
 edition = "2021"
 license = "CC0-1.0"
 

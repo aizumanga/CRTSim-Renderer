@@ -1,0 +1,61 @@
+name: itch.io
+# Pushes a published release's packages to itch.io with butler, a channel each, laid out by
+# tools/itch.py. It runs when a person publishes the release the release workflow drafted, so
+# itch.io offers what GitHub does. Needs the ITCH_GAME variable (user/game) and, in the itch-io
+# environment, a BUTLER_API_KEY secret; without them it does nothing. See docs/RELEASES.md.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: The published release to push, such as v1.5.0
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: itch-io
+  cancel-in-progress: false
+jobs:
+  push:
+    # Pre-releases stay off itch.io unless pushed by hand.
+    if: vars.ITCH_GAME != '' && (github.event_name == 'workflow_dispatch' || !github.event.release.prerelease)
+    runs-on: ubuntu-latest
+    environment: itch-io
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag || github.event.release.tag_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools/
+      - name: Download the release's packages and check their sums
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir assets
+          cd assets && cat SHA256SUMS-*.txt | sha256sum --check --strict
+      - name: Lay out the channels
+        env:
+          # Space-separated channel names, to push only those; every channel when empty.
+          ITCH_CHANNELS: ${{ vars.ITCH_CHANNELS }}
+        run: |
+          # shellcheck disable=SC2086
+          python3 tools/itch.py --assets assets --version "$RELEASE_TAG" --out channels \
+            ${ITCH_CHANNELS:+--only $ITCH_CHANNELS} > channels.txt
+          cat channels.txt
+      - name: Install butler
+        run: |
+          # itch.io serves butler's latest build; the version used is printed for the record.
+          curl --fail --location --retry 3 -o butler.zip https://broth.itch.zone/butler/linux-amd64/LATEST/archive/default
+          unzip -q butler.zip -d butler && chmod +x butler/butler
+          ./butler/butler -V
+      - name: Push each channel
+        env:
+          BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
+          ITCH_GAME: ${{ vars.ITCH_GAME }}
+        run: |
+          test -n "$BUTLER_API_KEY" || { echo "The itch-io environment has no BUTLER_API_KEY secret"; exit 1; }
+          # butler reads nothing from the list it is pushed from.
+          while IFS=$'\t' read -r channel folder; do
+            ./butler/butler push "$folder" "$ITCH_GAME:$channel" --userversion "${RELEASE_TAG#v}" --if-changed < /dev/null
+          done < channels.txt

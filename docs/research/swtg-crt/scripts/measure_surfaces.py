@@ -15,7 +15,7 @@ import surfaces as s
 
 maps, comp_path, out = sys.argv[1:4]
 W, H, FOV = (int(sys.argv[4]), int(sys.argv[5]), float(sys.argv[6])) if len(sys.argv) > 6 else (1280, 960, 30.)
-assets = os.path.join(os.path.dirname(__file__), '../../../../assets/original-crtsim')
+assets = os.path.join(os.path.dirname(__file__), '../../../../crates/crtsim-core/assets/original-crtsim')
 os.makedirs(out, exist_ok=True)
 ref = s.rasterize(s.read_m3d(f'{assets}/screen.m3d'), s.read_m3d(f'{assets}/frame.m3d'), W, H, FOV)
 app = s.approximate(s.Bezel(maps), W, H, FOV, formula=os.environ.get('GLASS') == 'formula')

@@ -2,6 +2,8 @@
 import argparse
 import json
 from pathlib import Path
+
+import licenses as licenses_of
 import shutil
 import subprocess
 import tarfile
@@ -11,8 +13,11 @@ parser = argparse.ArgumentParser()
 # `web` packages the web app that tools/build_web.py left in web/dist, for a website to serve.
 # `retroarch` and `reshade` package the shipped looks as those ports' presets, written by the release CLI.
 # `obs-linux-x86_64` packages the OBS filter that CMake built into build/obs, with its data folder.
-parser.add_argument('--platform', choices=['linux-x86_64', 'windows-x86_64', 'macos-arm64', 'web', 'retroarch',
-                                           'reshade', 'obs-linux-x86_64'],
+# `editors-<system>` packages the OpenFX effect and the frei0r filter that Cargo built for that system.
+# `aseprite` packages the Aseprite extension, which runs the command line of a system's package.
+SYSTEMS = ['linux-x86_64', 'windows-x86_64', 'macos-arm64']
+parser.add_argument('--platform', choices=SYSTEMS + ['web', 'retroarch', 'reshade', 'obs-linux-x86_64', 'aseprite']
+                    + [f'editors-{system}' for system in SYSTEMS],
                     required=True)
 parser.add_argument('--version', required=True)
 args = parser.parse_args()
@@ -25,6 +30,8 @@ name = f'CRTSim-Renderer-{args.version}-{args.platform}'
 stage = dist / name
 stage.mkdir()  # Refuse stale/reused staging folders.
 cli = str(root / 'target' / 'release' / 'crtsim')
+# The vendored assets live in the renderer's crate, which embeds them.
+ASSETS = root / 'crates' / 'crtsim-core' / 'assets'
 
 
 if args.platform in ('retroarch', 'reshade', 'obs-linux-x86_64'):
@@ -42,12 +49,88 @@ if args.platform in ('retroarch', 'reshade', 'obs-linux-x86_64'):
         subprocess.run([cli, f'export-{args.platform}', '--output-dir', str(folder)], check=True,
                        stdout=subprocess.DEVNULL)
     shutil.copy2(root / 'LICENSE', folder)
-    shutil.copy2(root / 'assets/original-crtsim/SOURCES.md', folder / 'ORIGINAL_ASSETS.md')
+    shutil.copy2(ASSETS / 'original-crtsim/SOURCES.md', folder / 'ORIGINAL_ASSETS.md')
     archive = dist / (name + '.zip')
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as output:
         for path in sorted(folder.rglob('*')):
             if path.is_file():
                 output.write(path, path.relative_to(stage))
+    print(archive)
+    raise SystemExit
+
+
+def check_version(metadata):
+    """The app's own version, which a release tag must name."""
+    version = next(p['version'] for p in metadata['packages'] if p['name'] == 'crtsim-app' and p['source'] is None)
+    if args.version.startswith('v') and args.version != f'v{version}':
+        raise SystemExit(f'Release {args.version} does not match the version in Cargo.toml, {version}')
+    return version
+
+
+def write_zip(archive, folder, within):
+    # Cargo sources can carry Unix-epoch timestamps, older than ZIP's 1980 minimum.
+    with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, strict_timestamps=False) as output:
+        for path in sorted(folder.rglob('*')):
+            if path.is_file():
+                output.write(path, path.relative_to(within))
+
+
+if args.platform == 'aseprite':
+    # Aseprite installs an extension from a ZIP named .aseprite-extension with its manifest at
+    # the root. The script and its manifest are CC0, and carry no dependency's code.
+    version = check_version(licenses_of.metadata())
+    extension = root / 'extensions' / 'aseprite'
+    manifest = json.loads((extension / 'package.json').read_text(encoding='utf-8'))
+    manifest['version'] = version
+    (stage / 'package.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+    shutil.copy2(extension / 'crtsim.lua', stage)
+    shutil.copy2(root / 'docs' / 'ASEPRITE.md', stage / 'README.md')
+    shutil.copy2(root / 'LICENSE', stage)
+    archive = dist / f'CRTSim-Renderer-{args.version}.aseprite-extension'
+    write_zip(archive, stage, stage)
+    print(archive)
+    raise SystemExit
+if args.platform.startswith('editors-'):
+    # The OpenFX bundle and the frei0r filter, each as its host finds it, with Kdenlive's
+    # description of the filter: see docs/EDITORS.md.
+    system = args.platform.removeprefix('editors-')
+    library, bundle_folder, frei0r_name = {
+        'linux-x86_64': ('lib{}.so', 'Linux-x86-64', 'crtsim.so'),
+        'windows-x86_64': ('{}.dll', 'Win64', 'crtsim.dll'),
+        # MLT looks for frei0r filters named .so on macOS too.
+        'macos-arm64': ('lib{}.dylib', 'MacOS', 'crtsim.so'),
+    }[system]
+    release = root / 'target' / 'release'
+    metadata = licenses_of.metadata()
+    version = check_version(metadata)
+    contents = stage / 'CRTSim.ofx.bundle' / 'Contents'
+    (contents / bundle_folder).mkdir(parents=True)
+    shutil.copy2(release / library.format('crtsim_ofx'), contents / bundle_folder / 'CRTSim.ofx')
+    (stage / 'frei0r').mkdir()
+    shutil.copy2(release / library.format('crtsim_frei0r'), stage / 'frei0r' / frei0r_name)
+    (stage / 'kdenlive').mkdir()
+    shutil.copy2(root / 'crates/crtsim-frei0r/kdenlive/crtsim.xml', stage / 'kdenlive')
+    if system == 'macos-arm64':
+        import plistlib
+        with (contents / 'Info.plist').open('wb') as output:
+            plistlib.dump({'CFBundleName': 'CRTSim', 'CFBundleIdentifier': 'io.github.aizumanga.CRTSimRenderer',
+                           'CFBundleExecutable': 'CRTSim.ofx', 'CFBundlePackageType': 'BNDL',
+                           'CFBundleVersion': version, 'CFBundleShortVersionString': version}, output)
+        # Ad-hoc signing permits loading on Apple Silicon; it is not Developer ID signing.
+        for path in [stage / 'frei0r' / frei0r_name, contents.parent]:
+            subprocess.run(['codesign', '--force', '--sign', '-', str(path)], check=True)
+    shutil.copy2(root / 'docs' / 'EDITORS.md', stage / 'README.md')
+    for doc in ['LICENSE', 'THIRD_PARTY_NOTICES.md']:
+        shutil.copy2(root / doc, stage)
+    shutil.copy2(ASSETS / 'original-crtsim/SOURCES.md', stage / 'ORIGINAL_ASSETS.md')
+    licenses = stage / 'dependency-licenses'
+    licenses.mkdir()
+    licenses_of.collect(metadata, licenses_of.shipped(metadata, ('crtsim-ofx', 'crtsim-frei0r')), licenses)
+    (stage / 'BUILD.txt').write_text(
+        f"Version: {args.version}\nPlatform: {args.platform}\nCommit: "
+        + subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() + '\n', encoding='utf-8')
+    archive = dist / (name + '.zip')
+    write_zip(archive, stage, dist)
     print(archive)
     raise SystemExit
 web = args.platform == 'web'
@@ -64,72 +147,25 @@ for doc in ['LICENSE', 'THIRD_PARTY_NOTICES.md'] if web else ['README.md', 'LICE
     shutil.copy2(root / doc, stage)
 if not web:
     shutil.copytree(root / 'docs', stage / 'docs')
-shutil.copy2(root / 'assets/original-crtsim/SOURCES.md', stage / 'ORIGINAL_ASSETS.md')
+shutil.copy2(ASSETS / 'original-crtsim/SOURCES.md', stage / 'ORIGINAL_ASSETS.md')
 for source, destination in [
     ('SOURCES.md', 'NES_LUTS_SOURCES.md'),
     ('UPSTREAM_README.md', 'NES_LUTS_UPSTREAM_README.md'),
     ('SHA256SUMS', 'NES_LUTS_SHA256SUMS'),
 ]:
-    shutil.copy2(root / 'assets/nes-luts' / source, stage / destination)
-# Collect license texts from the exact Cargo.lock dependency sources, including build dependencies,
-# of what ships: the app and the CLI. Test-only crates, such as crtsim-ports and the librashader
-# it runs the shader ports with, are never built into a package.
-metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--format-version', '1']))
-nodes = {node['id']: node for node in metadata['resolve']['nodes']}
+    shutil.copy2(ASSETS / 'nes-luts' / source, stage / destination)
+# The license texts of what ships: the app and the CLI (see tools/licenses.py).
+metadata = licenses_of.metadata()
 # The app's own version, as it reports it in its status bar and compares with the latest release
 # when asked to check for updates. A release tag must name that same version.
-app_version = next(p['version'] for p in metadata['packages'] if p['name'] == 'crtsim-app' and p['source'] is None)
-if args.version.startswith('v') and args.version != f'v{app_version}':
-    raise SystemExit(f'Release {args.version} does not match the version in Cargo.toml, {app_version}')
-shipped = set()
-pending = [p['id'] for p in metadata['packages'] if p['name'] in ('crtsim-app', 'crtsim-cli') and p['source'] is None]
-while pending:
-    package_id = pending.pop()
-    if package_id in shipped:
-        continue
-    shipped.add(package_id)
-    pending += [dep['pkg'] for dep in nodes[package_id]['deps']
-                if any(kind['kind'] != 'dev' for kind in dep['dep_kinds'])]
+app_version = check_version(metadata)
 licenses = stage / 'dependency-licenses'
 licenses.mkdir()
-index = []
-for package in metadata['packages']:
-    if package['source'] is None or package['id'] not in shipped:
-        continue
-    package_root = Path(package['manifest_path']).parent
-    destination = licenses / f"{package['name']}-{package['version']}"
-    destination.mkdir()
-    candidates = set()
-    for pattern in ['LICENSE*', 'LICENCE*', 'COPYING*', 'NOTICE*', 'license*', 'licence*', 'copyright*']:
-        candidates.update(package_root.glob(pattern))
-    if package.get('license_file'):
-        candidates.add(package_root / package['license_file'])
-    for source in sorted(candidates):
-        if source.is_file():
-            shutil.copy2(source, destination / source.name)
-        elif source.is_dir():
-            shutil.copytree(source, destination / source.name, dirs_exist_ok=True)
-    index.append({key: package.get(key) for key in ['name', 'version', 'license', 'repository']})
-(licenses / 'index.json').write_text(json.dumps(index, indent=2) + '\n', encoding='utf-8')
+index = licenses_of.collect(metadata, licenses_of.shipped(metadata, ('crtsim-app', 'crtsim-cli')), licenses)
 if web:
     # A website serves every file it holds, so the web package gathers the texts into one file
     # rather than a folder per dependency, with each text written out once.
-    texts = []
-    first = {}
-    for entry in index:
-        package = f"{entry['name']} {entry['version']}"
-        folder = licenses / f"{entry['name']}-{entry['version']}"
-        texts.append(f"{'=' * 78}\n{package} ({entry['license']})\n"
-                     f"{entry['repository'] or ''}\n{'=' * 78}\n")
-        for file in sorted(p for p in folder.rglob('*') if p.is_file()):
-            text = file.read_text(encoding='utf-8', errors='replace').rstrip()
-            license_name = file.relative_to(folder)
-            if text in first:
-                texts.append(f"--- {license_name}: the same text as {first[text]} ---\n\n")
-            else:
-                first[text] = f"{package}'s {license_name}"
-                texts.append(f"--- {license_name} ---\n{text}\n\n")
-    (stage / 'dependency-licenses.txt').write_text(''.join(texts), encoding='utf-8')
+    (stage / 'dependency-licenses.txt').write_text(licenses_of.one_file(index, licenses), encoding='utf-8')
     shutil.rmtree(licenses)
 (stage / 'BUILD.txt').write_text(
     f"Version: {args.version}\nPlatform: {args.platform}\nCommit: "

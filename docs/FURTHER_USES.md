@@ -4,7 +4,7 @@ How the simulation could run outside this app, and what each route needs from th
 
 ## What there is to reuse
 
-- **The effect is a short chain of GPU passes** in `shaders/crtsim.wgsl`, run by `crtsim-core`:
+- **The effect is a short chain of GPU passes** in `crates/crtsim-core/shaders/crtsim.wgsl`, run by `crtsim-core`:
   1. Prepare (`prepare.wgsl`): resize, crop, LUT or palette, grade.
   2. Composite, at signal size. It reads the previous tick's output, which gives persistence.
   3. The curved glass and its bezel, ray-traced together in one full-screen pass at output size.
@@ -22,25 +22,28 @@ What stands in the way today, in `crtsim-core`:
 
 | Obstacle | Where | Why it matters |
 | --- | --- | --- |
-| The input is a CPU `RgbaImage`, uploaded each frame | `Renderer::frame` | A game's frame is already a GPU texture. The round trip costs more than the effect. |
-| The renderer submits and waits. `Renderer::frame` and `read` are `async` and never block a browser, but natively every frame, even one tick long, submits, waits for the GPU and submits again | `lib.rs`, `gpu.rs` | A host records into its own frame and never waits on the GPU. |
+| ~~The input is a CPU `RgbaImage`, uploaded each frame~~ Done: `Renderer::encode` reads the host's texture | `Renderer::frame` | A game's frame is already a GPU texture. The round trip costs more than the effect. |
+| ~~The renderer submits and waits~~ Done: `Renderer::encode` records into the host's encoder and waits for nothing. `frame` and `read` still submit and wait, as the app's own renders need | `lib.rs`, `gpu.rs` | A host records into its own frame and never waits on the GPU. |
 | ~~A new uniform buffer and bind group for every tick and pass~~ Done: one buffer per sequence, bind groups made with it | `Workspace` | This was fine offline, but allocated 60 or more times a second in a game. |
 | ~~wgpu 0.19, pinned by eframe 0.27~~ Done: wgpu 30 and eframe 0.36 | `Cargo.toml` | Current Bevy and wgpu releases were far newer. |
 
 ## The enabling step, for every route
 
-Add one entry point that records into the host's encoder, from the host's texture, into the
-host's target:
+Done: one entry point records a frame into the host's encoder, from the host's texture, into the
+host's target, submitting nothing and waiting for nothing:
 
 ```rust
-renderer.encode(&mut encoder, &source_view, &target_view, &config, &mut sequence)?;
+let mut sequence = Sequence::host();
+// Each frame, then submit the encoder as the host always does:
+let frame = HostFrame { source: &game_texture, target: &surface_texture, seconds: 1. / 60. };
+renderer.encode(&mut encoder, &mut sequence, &frame, &config)?;
 ```
 
-Part of this is done ([web plan](WEB_PLAN.md), step 3). A `Sequence` owns its timing and GPU
-state; `Renderer::frame` renders its next frame and waits for nothing on the web; `read`,
-`show` and `still` cover the app's own needs. What is left for a game or OBS is the host's
-texture as input and the host's view as the target, which `frame` could take once a host
-needs them.
+A host's sequence starts without warm-up, so the glow builds as a set's would, runs one tick a
+frame, and decays each frame's glow by how long the frame before it lasted. A target of another
+size keeps the glow; a new signal size or color mode starts again. Textures of sRGB formats read
+and write as the colors they encode. A test holds it to what `frame` draws, byte for byte.
+`Renderer::with_device` builds the renderer on the host's own device.
 
 ## Route 1: in the browser
 
@@ -104,11 +107,15 @@ handles). Porting the shaders is less work and more robust.
   renderer ([ADR 5](adr/0005-the-ports-share-one-translation-of-the-passes.md)).
 - **Video editors via OpenFX** (DaVinci Resolve, Natron, Nuke). This matches the app's strength:
   deterministic, high-quality offline renders. Editors do not render frames in order, so a
-  plugin must warm up from a few frames earlier each time, as stills already do.
+  plugin must warm up from a few frames earlier each time, as stills already do. Done: an
+  OpenFX effect that renders a frame after the ones its glow needs, and a frei0r filter for
+  Kdenlive, `melt` and FFmpeg (see [the editors](EDITORS.md)).
 - **A headless service**: the CLI with software Vulkan (lavapipe), as CI already runs it, can
-  power a chat bot or batch service. Only resource limits and a queue are missing.
-- **Publishing `crtsim-core` to crates.io**, once `encode` exists, so Rust projects can depend on
-  it directly.
+  power a chat bot or batch service. Done: `crtsim-service`, with a queue and limits, and a
+  container image on lavapipe (see [the service](SERVICE.md)).
+- **Publishing `crtsim-core` to crates.io**, so Rust projects can depend on it directly. Ready:
+  it packages and builds from its package alone, and `publish-core.yml` publishes a version
+  tagged for it (see [releases](RELEASES.md#crtsim-core-on-cratesio)).
 
 ## Suggested order
 
@@ -119,7 +126,7 @@ and every port shares one translation of the passes, OBS's filter included
 
 | Step | Work | Unlocks |
 | --- | --- | --- |
-| 1 | `Renderer::encode`, a persistent uniform buffer, no waits; upgrade wgpu and eframe | Everything below. The app's preview gets faster too. |
+| 1 | ~~`Renderer::encode`, a persistent uniform buffer, no waits; upgrade wgpu and eframe~~ Done | Everything below. The app's preview gets faster too. |
 | 2 | `crtsim-web` with an image and webcam demo page | The widest audience, with WGSL as it is. |
 | 3 | ~~Baked mesh textures and a full-screen-only variant, checked against the goldens~~ Done: the glass is ray-traced and the bezel baked, in one full-screen pass | Every engine without mesh support. |
 | 4 | ~~RetroArch slang preset, then ReShade~~ Done, sharing their passes | Emulators and existing PC games. |

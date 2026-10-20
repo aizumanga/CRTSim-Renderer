@@ -43,7 +43,7 @@ cannot. The renderer is not embedded in OBS.
   over the core's picture.
 - The OBS plugin links OBS's library and is built per platform and OBS version from
   `ports/obs`. Releases build it for Linux; elsewhere it is built from source.
-- A look's parameters are one table for every port (`crtsim_core::ports`), each parameter
+- A look's parameters are one table for every port (`crtsim_shader_ports`), each parameter
   naming the hosts that read it.
 
 ## Rejected: the renderer inside OBS

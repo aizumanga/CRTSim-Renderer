@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 crtsim-core = { path = "../crtsim-core" }
+crtsim-shader-ports = { path = "../crtsim-shader-ports" }
 crtsim-media = { path = "../crtsim-media" }
 image.workspace = true
 serde_json.workspace = true
@@ -30,6 +31,8 @@ flate2 = "1"
 web-time = "1"
 
 [dev-dependencies]
+# Makes ICC profiles for a test of the colour settings; the core reads them with it.
+moxcms = "0.8"
 # Reads which characters the interface's fonts hold, in a test; egui already depends on it.
 skrifa = { version = "0.44", default-features = false, features = ["std"] }
 

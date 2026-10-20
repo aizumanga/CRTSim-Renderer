@@ -439,6 +439,35 @@ pub fn export_animation(
     )
 }
 
+/// An animated GIF, lossless WebP or animated PNG of a video made here (an animation, a
+/// sprite sheet or the video test card), rendered on `renderer` and written without FFmpeg,
+/// as a browser page writes it. A lossy WebP needs FFmpeg's encoder.
+pub fn export_animation_here(
+    video: &Video,
+    output: &Path,
+    config: &Config,
+    options: &AnimationOptions,
+    renderer: &Renderer,
+    cancel: &Arc<AtomicBool>,
+    progress: impl FnMut(Progress),
+) -> Result<()> {
+    check_cancel(cancel)?;
+    let format = AnimationFormat::of(output).context("Choose a GIF, WebP or PNG filename")?;
+    let progress = RefCell::new(progress);
+    let bytes = pollster::block_on(jobs::export_animation(
+        video,
+        format,
+        config,
+        options,
+        async |span| jobs::frames(video, span, cancel),
+        async |sequence, frame, config| render_frame(renderer, sequence, frame, config, cancel),
+        async |_, _| anyhow::bail!("A lossy WebP needs FFmpeg; ask for a lossless one"),
+        cancel,
+        &|step| (progress.borrow_mut())(step),
+    ))?;
+    std::fs::write(output, bytes).with_context(|| format!("Cannot write {}", output.display()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

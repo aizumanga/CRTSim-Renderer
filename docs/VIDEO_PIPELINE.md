@@ -50,7 +50,7 @@ Signal, surface, bloom, depth, readback and temporal targets persist for the dur
 - Exact frame seeking produces a settled still. Continuous playback retains history, has up to 200 ms of preroll on resume, and uses bounded buffering. See [WORKFLOW.md](WORKFLOW.md) for audio-preview and CFR navigation limits.
 - Only local files with a finite probed duration (up to seven days) and a usable 1–240 FPS rate are accepted. Existing core dimension/memory limits apply.
 - Sources are normalized to square pixels before the CRT preset's own pixel-aspect setting. Rotation is limited to multiples of 90 degrees.
-- HDR transfer flags trigger `zscale`/`tonemap`; the installed FFmpeg must provide those filters. ICC management, Dolby Vision reconstruction and HDR output are outside this version.
+- HDR transfer flags trigger `zscale`/`tonemap`; the installed FFmpeg must provide those filters. Dolby Vision reconstruction and HDR output are outside this version. Videos carry no ICC profiles; their colour is what FFmpeg's tags say, written out as BT.709.
 - Preservation is enabled by default, subject to container support. Renderer presets are embedded in PNG and exported video; original comments use `source_comment` where supported.
 - Optional hardware H.264 encoders are probed before rendering. Video export is exposed through the desktop and media library; the image CLI also supports source edits/LUTs via JSON.
 - The original video cannot be its own export destination. Native save dialogs confirm other replacements.

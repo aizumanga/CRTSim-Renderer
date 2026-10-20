@@ -32,18 +32,32 @@ itself. Playback asks it whether an edit can reach the video playing.
 **Warm-up**: the ticks a new sequence runs before the frame it keeps, so a still or a video's
 first frame already has the glow of a picture that has been on screen.
 
-**Host sequence**: a sequence paced by its host's own frames rather than a video's rate. It
-starts without warm-up, so the glow builds as a set's would, and each frame's glow decays by how
-long that frame lasted. A new output size keeps its history; a new signal size or colour mode
-starts it again.
+**Host sequence**: a sequence paced by its host's own frames rather than a video's rate
+(`Sequence::host`). It starts without warm-up, so the glow builds as a set's would, and each
+frame's glow decays by how long that frame lasted. A new output size keeps its history; a new
+signal size or colour mode starts it again.
+
+**Host frame**: one frame of a host's picture, already on the device, drawn into the host's own
+target by commands recorded into the host's own encoder (`HostFrame`, `Renderer::encode`). Nothing
+is submitted or waited for; the host submits it with the rest of its frame.
 _Avoid_: live sequence, since live preview means something else.
 
 **Host**: the program whose picture the CRT is drawn from and into, such as an emulator or a
 game, as opposed to the app, which renders files.
 
+**Clip sequence**: a host sequence whose first frame is warmed up, as a clip in an editor starts
+from a picture that was already on screen (`Sequence::clip`).
+
+**Editor effect**: the renderer itself running inside a video editor or compositor, drawing each
+frame of a clip through the CRT as a filter: the OpenFX effect (`crates/crtsim-ofx`) and the
+frei0r filter (`crates/crtsim-frei0r`), which share `crates/crtsim-plugin`; see
+[the editors](docs/EDITORS.md). A frame that follows the last one rendered goes on with its
+glow; any other is rendered after its **history**, the frames before it that its glow needs,
+back until older glow has faded below half an 8-bit step, where the host can give them.
+
 **Shader port**: the effect rewritten in a host's own shader language, as passes the host runs
 on every frame of its picture, rather than this renderer running inside the host: for
-RetroArch, ReShade and OBS (`ports/`, exported by `crtsim_core::ports`). See
+RetroArch, ReShade and OBS (`ports/`, exported by `crtsim_shader_ports`). See
 [the decision](docs/adr/0003-games-get-shader-ports-not-the-renderer.md).
 
 **Shared passes**: the effect's passes written once for every shader port, in the part of HLSL
@@ -52,8 +66,12 @@ uniforms, textures and entry points, and the **host macros** (`HOST_...`) throug
 reads its host. See [the decision](docs/adr/0005-the-ports-share-one-translation-of-the-passes.md).
 
 **Port parameter**: a setting as a shader port reads it, one number each, named `CRTSIM_...`,
-from one table for every port (`crtsim_core::ports::parameters`). A choice is numbered from 0;
+from one table for every port (`crtsim_shader_ports::parameters`). A choice is numbered from 0;
 some hosts read only some parameters.
+
+**Tube aspect**: the picture tube's width over its height (`Config::tube_aspect`): the original's
+4:3, or a wider or narrower tube made from it, its glass stretched across and its bezel's sides
+moved, so its corners stay the original's.
 
 **Bezel**: the moulded surround of the picture tube, lit and reflecting the glass.
 _Avoid_: frame, which already means a picture in a sequence.
@@ -183,6 +201,17 @@ loops from its worker thread.
 person chooses Help → Check for updates, or at each start once they have turned that on
 (`crates/crtsim-app/src/updates.rs`). It tells; it never downloads a release, which package
 managers and AppImage tools do instead. See [the decision](docs/adr/0004-check-for-updates-never-download-them.md).
+
+**Sprite sheet**: an animation's frames laid out in one picture, with JSON saying where each is
+and how long it shows, as Aseprite and TexturePacker write it (`crates/crtsim-media/src/sheet.rs`).
+It opens as an animation made here, each frame cut from the picture as it is read. The Aseprite
+extension hands a sprite's animation to the command line this way (`extensions/aseprite`, see
+[Aseprite](docs/ASEPRITE.md)).
+
+**Render service**: the renderer behind HTTP, headless (`crates/crtsim-service`, see
+[the service](docs/SERVICE.md)). A request's picture, animation or video becomes a **job**,
+known by 128 random bits, which waits in a queue of bounded length for the one worker that owns
+the GPU, renders within a time limit, and leaves its result for a while.
 
 **Web app**: the whole app, with editing, the galleries, playback and exports, running in a
 browser from the author's Neocities site. It is not a cut-down demo: what the desktop app does

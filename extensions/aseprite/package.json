@@ -1,0 +1,18 @@
+{
+  "name": "crtsim-renderer",
+  "displayName": "CRTSim Renderer",
+  "description": "Draws a sprite's frame or animation through a CRT simulation, with CRTSim Renderer's crtsim command line.",
+  "version": "1.5.0",
+  "author": {
+    "name": "aizumanga",
+    "url": "https://github.com/aizumanga/CRTSim-Renderer"
+  },
+  "publisher": "aizumanga",
+  "license": "CC0-1.0",
+  "categories": ["Scripts"],
+  "contributes": {
+    "scripts": [
+      { "path": "./crtsim.lua" }
+    ]
+  }
+}

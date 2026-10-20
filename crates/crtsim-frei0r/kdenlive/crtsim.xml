@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<!DOCTYPE kpartgui>
+<!-- CRTSim Renderer's frei0r filter, described for Kdenlive. Copy it into Kdenlive's effects
+     folder, and crtsim.so or crtsim.dll where MLT finds frei0r filters: see docs/EDITORS.md. -->
+<effect tag="frei0r.crtsim" id="frei0r.crtsim">
+    <name>CRTSim Renderer</name>
+    <description>A CRT simulation, after J. Kyle Pittman's CRTSim: composite artifacts, glow between frames, the curved glass and its bezel, shadow mask and bloom.</description>
+    <author>aizumanga</author>
+    <parameter type="list" name="Look" default="General image" paramlist="Super Win the Game;Super Win the Game NES palette;General image;Soft television;Clean RGB;Pixel art 240p;NTSC 240p;NTSC 480i;Widescreen television;PAL 288p;PAL 576i;Warm analog;Linear light">
+        <paramlistdisplay>Super Win the Game,Super Win the Game NES palette,General image,Soft television,Clean RGB,Pixel art 240p,NTSC 240p,NTSC 480i,Widescreen television,PAL 288p,PAL 576i,Warm analog,Linear light</paramlistdisplay>
+        <name>Look</name>
+        <comment>An included look: the app's presets.</comment>
+    </parameter>
+    <parameter type="url" name="Look file" filter="*.json">
+        <name>Look file</name>
+        <comment>A look the app or the command line saved as JSON, in place of Look.</comment>
+    </parameter>
+    <parameter type="list" name="Tube" default="look" paramlist="look;4:3;16:10;16:9">
+        <paramlistdisplay>The look's own,4:3,16:10,16:9</paramlistdisplay>
+        <name>Tube</name>
+        <comment>The picture tube's shape.</comment>
+    </parameter>
+    <parameter type="list" name="Timing" default="stable" paramlist="stable;alternating;off">
+        <paramlistdisplay>Glow with still artifacts,Glow with alternating artifacts,Each frame on its own</paramlistdisplay>
+        <name>Timing</name>
+        <comment>Whether each frame keeps the glow of the frames before it, and whether the composite artifacts alternate between frames, as an NTSC set's did.</comment>
+    </parameter>
+</effect>

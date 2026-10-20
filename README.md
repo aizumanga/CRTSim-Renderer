@@ -36,7 +36,7 @@ Right after the welcome, the first time, the app offers three looks to start fro
 Soft television, each as a thumbnail of the picture open; choosing one applies it, and closing the window keeps the
 look in use.
 
-**Preset gallery** includes Super Win the Game, the preset the app starts with, Super Win the Game NES palette, General image, Soft television, Clean RGB, Pixel art 240p, NTSC 240p, NTSC 480i, PAL 288p, PAL 576i, Warm analog and Linear light.
+**Preset gallery** includes Super Win the Game, the preset the app starts with, Super Win the Game NES palette, General image, Soft television, Clean RGB, Pixel art 240p, NTSC 240p, NTSC 480i, Widescreen television, PAL 288p, PAL 576i, Warm analog and Linear light.
 The NTSC and PAL presets set the line count, interlacing and composite phase. The artifact model is the original NTSC-derived one, so the PAL presets approximate PAL's line-alternating color with gentler, stable artifacts rather than simulating it. Video frame rate is chosen separately in Export → Video.
 Each preset shows a thumbnail rendered from your current image. Point at a preset to preview it on the full image without applying it (nothing is changed or added to Undo), and click to apply it.
 Enter a name and choose **Save current** to add your exact settings to **My presets**; they reappear after restarting. Use **Edit description** on any personal preset to add, change or clear its description, and **Delete** to remove it, after confirming.
@@ -90,7 +90,7 @@ nearest in red and green and blended in blue, here and in every shader port; oth
 It is an artistic grade, not the private NES palette LUT or a full NTSC decoder.
 **Linear light (experimental)** decodes the SDR signal for glass sampling, performs lighting and bloom with RGBA16Float intermediates,
 then encodes the final SDR PNG. Composite/persistence remains gamma-space RGBA8. It uses more GPU memory and changes the look;
-it is not a full linear-light pipeline, HDR export, ICC color management or an exact match to the game.
+it is not a full linear-light pipeline, HDR export or an exact match to the game.
 Old presets load with reference processing and neutral grading. Newly saved presets require the updated app/CLI.
 
 With stable Rust installed, run from the repository folder:
@@ -225,6 +225,42 @@ Every port is checked against the renderer: the RetroArch port through librashad
 filter in OBS itself, picture for picture, and the ReShade effect compiled by ReShade's own
 compiler as each shipped look sets it.
 
+## In video editors and Aseprite
+
+The renderer also runs as an effect over a clip, at the clip's own size, with the app's looks or a preset it saved,
+carrying the glow from frame to frame in whatever order the editor renders them:
+
+- **DaVinci Resolve, Natron, Nuke** and other OpenFX hosts, as `CRTSim.ofx.bundle`.
+- **Kdenlive**, MLT's `melt` and FFmpeg, as the `crtsim` frei0r filter, with a description that lists it in Kdenlive.
+
+Each release has an `-editors-<system>.zip` of both. See [the editors' guide](docs/EDITORS.md) for where they go and
+how they handle frames rendered out of order. They are checked in FFmpeg, `melt` and Natron against the command line's
+render of the same clip.
+
+**Aseprite** has an extension, `.aseprite-extension` in each release, that draws a sprite's frame or its animation
+through the CRT with the command line and opens the result as a new sprite. See [the Aseprite guide](docs/ASEPRITE.md).
+
+## As a service
+
+`crtsim-service` renders pictures, animations and videos sent over HTTP, for a chat bot or a batch of renders on a
+server with no screen, one at a time on one GPU, or on software Vulkan in its container, with a queue and limits on
+every request:
+
+```sh
+docker build -f packaging/service/Dockerfile -t crtsim-service .
+docker run --rm -p 127.0.0.1:8080:8080 -e CRTSIM_SERVICE_TOKEN=<a long secret> crtsim-service
+curl -H "Authorization: Bearer <a long secret>" --data-binary @shot.png -o crt.png 'localhost:8080/render?preset=NTSC%20240p'
+```
+
+See [the service's documentation](docs/SERVICE.md) for its options, limits and how to expose it.
+
+## In Rust programs: crtsim-core
+
+The renderer itself is the [`crtsim-core`](crates/crtsim-core) crate, ready for crates.io: stills, video sequences
+that keep the glow from frame to frame, and `Renderer::encode`, which records a game's or an engine's frame into its
+own command encoder, from its texture into its target, on its own device, waiting for nothing. Its settings are the
+same JSON the app saves as a preset. See [publishing it](docs/RELEASES.md#crtsim-core-on-cratesio).
+
 ## Build and try
 
 ### Video
@@ -237,7 +273,7 @@ The app looks for the programs, in order, where `CRTSIM_FFMPEG` and `CRTSIM_FFPR
 `ffmpeg` or `ffmpeg/bin` folder next to it; in Homebrew's and MacPorts' folders on macOS, and winget's, Scoop's and
 Chocolatey's on Windows, which apps started from the desktop may not have on their PATH; and finally on PATH.
 FFmpeg must include `libx264` for MP4/MKV, `libvpx-vp9` for WebM, `libwebp` for animated WebP export, and AAC/Opus encoders when converting audio.
-Animated GIF and WebP open and play without FFmpeg; exporting any video or animation needs it.
+Animated GIF and WebP, and a sprite sheet's JSON as Aseprite writes it, open and play without FFmpeg; exporting any video or animation from the app needs it.
 Nothing is downloaded automatically.
 
 1. Choose **Open File…**, drop a video or an animated GIF/WebP, or pass its path on the command line.
@@ -289,12 +325,19 @@ cargo run --release -p crtsim-cli -- contact-sheet --preset "Clean RGB" --look M
 
 `render` also makes videos and animations, the output's extension choosing which: `.mp4`, `.mkv` or `.webm` a video,
 `.gif` or `.webp` an animation, and `.png` a still, or an animated PNG when the input is a video or animation. Without
-`--input`, a moving output renders the video test card. They need FFmpeg, as the desktop's do.
+`--input`, a moving output renders the video test card. They need FFmpeg, as the desktop's do, except an animation
+(a GIF, a lossless WebP or an animated PNG) of an animated GIF or WebP, a sprite sheet or the video test card, which is
+written without it where FFmpeg is not installed.
+
+A sprite sheet's JSON, as Aseprite's **Export Sprite Sheet** and TexturePacker write it, renders as an animation of its
+frames, each shown as long as the JSON says; see [the Aseprite extension](docs/ASEPRITE.md), which renders a sprite
+this way from inside Aseprite.
 
 ```sh
 cargo run --release -p crtsim-cli -- render -i clip.mp4 -o crt.mp4 --preset "NTSC 240p" --size 1080p
 cargo run --release -p crtsim-cli -- render -i clip.mp4 -o crt.mkv --quality lossless --timing ntsc60
 cargo run --release -p crtsim-cli -- render -i clip.mp4 -o crt.gif --max-side 480 --fps 24 --seconds 5
+cargo run --release -p crtsim-cli -- render -i walk.json -o walk-crt.webp --lossless --fps 12 --seconds 0
 ```
 
 `--quality` (draft, balanced, high, archival or lossless), `--timing` (stable, ntsc60 or off), `--audio` and
@@ -320,8 +363,27 @@ cargo run --release -p crtsim-cli -- render --input "image.png" --config general
 ```
 
 Edit `general.json` to adjust the effect. It is not necessary to rebuild after editing settings.
-Transparency is composited onto black before filtering; output is opaque SDR PNG. ICC/HDR color management is not implemented.
+Transparency is composited onto black before filtering; output is opaque SDR PNG. HDR output is not implemented.
 The default path follows the original gamma-space UNORM behavior, not linear-light rendering.
+
+### Colour profiles
+
+The CRT works in sRGB. A picture whose file carries a colour profile (an ICC profile in a PNG, JPEG or WebP,
+including CMYK JPEGs from print work, or PNG's cICP, gAMA and cHRM chunks) has its colours converted into sRGB as
+it opens, and the status line says from what. A profile that is sRGB in effect, as many programs embed, leaves
+every value as it is, so art in exact NES palette values still matches the palette. **View → Pictures' colour
+profiles → Ignore**, or `--ignore-profile`, reads every picture's numbers as sRGB whatever it carries.
+
+PNG stills and contact sheets are written in sRGB, tagged as such, unless **Export → PNG colour space** or
+`--color-space` chooses Display P3, Adobe RGB, Rec. 2020, ProPhoto RGB or an RGB `.icc` profile from a file;
+then the PNG is converted at 16 bits, with that profile embedded, so colour-managed programs show the same picture.
+Videos and animations stay sRGB and BT.709. Conversions use [moxcms](https://github.com/awxkee/moxcms), checked
+against lcms in [the validation notes](docs/VALIDATION.md#colour-management).
+
+```sh
+cargo run --release -p crtsim-cli -- render -i photo.jpg -o print.png --color-space adobe-rgb
+cargo run --release -p crtsim-cli -- render -i sprite.png -o crt.png --ignore-profile
+```
 
 ### Resolutions
 
@@ -351,9 +413,16 @@ cargo run --release -p crtsim-cli -- render --input image.png --config general.j
 
 `--signal` changes dimensions only: it does not silently change pixel aspect, filtering or fit settings.
 Use `config --general` for normal images: it writes the desktop's General image preset. Plain `config` generates the original-style configuration (8:7 pixel aspect, nearest filtering).
-`fit` controls placement on a fixed 4:3 tube: `reference`, `contain`, `cover`, or `stretch`.
+`fit` controls placement on the tube: `reference`, `contain`, `cover`, or `stretch`.
 Contain mode prevents rectangular aspect cropping, but the rounded glass and barrel distortion can still hide extreme corners.
-A widescreen output canvas does not turn the tube itself into a widescreen tube.
+A widescreen output canvas does not turn the tube itself into a widescreen tube; **Tube** does.
+
+**Tube** (`"tube_aspect"`, the tube's width over its height, under Image & output and Glass) makes the tube the
+original's 4:3, or wider, to the 16:9 of the last sets, or narrower, to a portrait 3:4 such as an arcade cabinet's
+turned monitor; anything from 0.75 to 2. The glass is the original's sphere stretched across, keeping its rounded
+corners, and the bezel keeps its corners and sides, its top and bottom running between them. A tube wider than the
+output is framed as a 4:3 tube is in an output of the tube's shape. **Widescreen television** is a 16:9 tube showing
+480 interlaced rows. The shader ports carry it.
 
 Hard safeguards: maximum 64 megapixels and 16384 pixels per side, additionally limited by the adapter and a conservative 1.5 GB job estimate.
 This is a prototype safety policy, not a universal GPU limit or a promise that allocations cannot fail. Very large inputs are rejected before decoding;
@@ -395,5 +464,5 @@ Only the second command requires a GPU or software Vulkan driver. Normal tests i
 ## Credits
 
 Based on the CC0 CRTSim reference implementation by **J. Kyle Pittman**.
-Original assets and shader source remain unmodified in `assets/original-crtsim/`; provenance is in [SOURCES.md](assets/original-crtsim/SOURCES.md).
+Original assets and shader source remain unmodified in `crates/crtsim-core/assets/original-crtsim/`; provenance is in [SOURCES.md](crates/crtsim-core/assets/original-crtsim/SOURCES.md).
 The WGSL translation and application additions use this repository's CC0 license. Dependencies keep their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

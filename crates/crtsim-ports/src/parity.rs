@@ -166,6 +166,25 @@ pub fn cases() -> Vec<Case> {
                 ..base()
             },
         ),
+        // Tubes of other shapes, as the goldens hold them.
+        still(
+            "widescreen-tube",
+            Config {
+                tube_aspect: 16. / 9.,
+                output: "240x180".into(),
+                fit: config::Fit::Contain,
+                reflection: 2.,
+                ..base()
+            },
+        ),
+        still(
+            "portrait-tube",
+            Config {
+                tube_aspect: 0.75,
+                reflection: 2.,
+                ..base()
+            },
+        ),
         still(
             "linear-light",
             Config {
@@ -277,6 +296,13 @@ pub fn render(renderer: &Renderer, case: &Case) -> RgbaImage {
         renderer.read(&mut sequence).await
     })
     .expect("render")
+}
+
+/// The size a case's picture is drawn at: the goldens', unless its look says another.
+pub fn output(case: &Case) -> (u32, u32) {
+    case.config
+        .output_size(case.source.dimensions())
+        .expect("a case's output size")
 }
 
 /// The picture's shape as a host would report it: its signal widened by its pixel aspect.

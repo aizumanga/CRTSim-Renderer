@@ -12,6 +12,9 @@
 // outline, baked from its mesh across its UVs, the distance positive inside and within
 // ±GLASS_EDGE, texel (i, j) at UV (i, j) / (size - 1); HOST_OUTPUT_SIZE, HOST_PICTURE_ASPECT
 // and HOST_LINEAR.
+//
+// A tube wider or narrower than 4:3 (CRTSIM_TUBE_ASPECT) stretches the glass's sphere across,
+// and moves the bezel's sides as `original_y` says.
 
 #define GLASS_CENTRE float3(4.0, 0.0, 0.0)
 #define GLASS_RADIUS 4.0
@@ -26,10 +29,22 @@
 #define BEZEL_HALVINGS 7
 #define NOTHING 1e9
 
-// How the picture sits on the 4:3 tube: as the original placed it, fitted inside, filling it,
-// or stretched over it.
+// A tube other than the original's 4:3 is as much wider, or narrower, either side: its glass
+// the original's stretched across, its bezel's corners and sides moved out, or in, and its top
+// and bottom running between them, as the original's middle. A look's 4:3, written as a
+// rounded number, is the original's exactly.
+float tube_aspect() {
+    return abs(P(CRTSIM_TUBE_ASPECT) - 4.0 / 3.0) < 0.0005 ? 4.0 / 3.0 : P(CRTSIM_TUBE_ASPECT);
+}
+float widened() { return tube_aspect() - 4.0 / 3.0; }
+float stretched() { return tube_aspect() / (4.0 / 3.0); }
+// Where y across a tube this wide falls across the original's.
+float original_y(float y) { return sign(y) * max(abs(y) - widened(), 0.0); }
+
+// How the picture sits on the tube: as the original placed it, fitted inside, filling it, or
+// stretched over it.
 float2 uv_scale() {
-    float ratio = HOST_PICTURE_ASPECT / (4.0 / 3.0);
+    float ratio = HOST_PICTURE_ASPECT / tube_aspect();
     int fit = int(P(CRTSIM_FIT) + 0.5);
     if (fit == 3) return V2(1.0);
     if (fit == 1) return ratio >= 1.0 ? float2(1.0, ratio) : float2(1.0 / ratio, 1.0);
@@ -129,7 +144,8 @@ float2 blend_pairs(float4 k00, float4 k10, float4 k01, float4 k11, float2 f) {
 
 // Where (y, z) falls on the bezel's grid, in texels.
 float2 bezel_texel(float2 yz) {
-    return (BEZEL_HALF - yz) / (2.0 * BEZEL_HALF) * HOST_BEZEL_SIZE - V2(0.5);
+    return (BEZEL_HALF - float2(original_y(yz.x), yz.y)) / (2.0 * BEZEL_HALF) * HOST_BEZEL_SIZE
+        - V2(0.5);
 }
 
 int2 bezel_clamp(int2 xy) { return clamp(xy, int2(0, 0), int2(HOST_BEZEL_SIZE) - int2(1, 1)); }
@@ -234,28 +250,37 @@ float bezel_hit(float3 camera, float3 ray) {
 // across the bezel's whole depth.
 bool may_meet_bezel(float3 camera, float3 ray) {
     float2 widest = max(abs(along(camera, ray, BEZEL_NEAR).yz), abs(along(camera, ray, BEZEL_FAR).yz));
-    return widest.x >= BEZEL_OPENING_Y || widest.y >= BEZEL_OPENING_Z;
+    return widest.x >= BEZEL_OPENING_Y + widened() || widest.y >= BEZEL_OPENING_Z;
 }
 
 // The surface's pixel at uv, from the screen's top left.
 float4 crtsim_surface(float2 uv) {
     float2 ndc = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
-    // The camera looks along +x from 1/tan(fov/2) in front, with z up and -y to the right.
+    // The camera looks along +x from 1/tan(fov/2) in front, with z up and -y to the right. A
+    // tube wider than the picture is framed as a 4:3 tube is in a picture of the tube's shape.
+    float2 output_size = HOST_OUTPUT_SIZE;
+    float framing = max(1.0, tube_aspect() / max(output_size.x / output_size.y, 4.0 / 3.0));
     float spread = tan(radians(P(CRTSIM_FOV)) * 0.5);
     float3 camera = float3(-1.0 / spread, 0.0, 0.0);
-    float2 output_size = HOST_OUTPUT_SIZE;
-    float3 ray = normalize(float3(1.0, -ndc.x * spread * output_size.x / output_size.y,
+    spread *= framing;
+    // The ray where the glass is the original's sphere, across `stretched` times narrower;
+    // along any ray, the bezel steps by depth alone, so it takes the ray stretched back.
+    float s = stretched();
+    float3 traced = normalize(float3(1.0, -ndc.x * spread * output_size.x / output_size.y / s,
         ndc.y * spread));
+    float3 ray = float3(traced.x, traced.y * s, traced.z);
     float3 light_at = float3(P(CRTSIM_LIGHT_X), P(CRTSIM_LIGHT_Y), P(CRTSIM_LIGHT_Z));
 
     float3 to = camera - GLASS_CENTRE;
-    float b = dot(to, ray);
+    float b = dot(to, traced);
     float reach = b * b - dot(to, to) + GLASS_RADIUS * GLASS_RADIUS;
-    float3 glass_at = camera + ray * (-b - sqrt(max(reach, 0.0)));
+    float3 sphere_at = camera + traced * (-b - sqrt(max(reach, 0.0)));
+    float3 glass_at = float3(sphere_at.x, sphere_at.y * s, sphere_at.z);
     Surface glass;
-    glass.uv = float2((4.0 / 3.0 - glass_at.y) * 0.375, (1.0 - glass_at.z) * 0.5);
-    float2 baked = glass_baked(glass.uv);
-    glass.normal = (glass_at - GLASS_CENTRE) / GLASS_RADIUS;
+    // The picture spans the whole glass; its outline and shading keep the original's corners.
+    glass.uv = float2((4.0 / 3.0 - sphere_at.y) * 0.375, (1.0 - sphere_at.z) * 0.5);
+    float2 baked = glass_baked(float2((4.0 / 3.0 - original_y(glass_at.y)) * 0.375, glass.uv.y));
+    glass.normal = (sphere_at - GLASS_CENTRE) / GLASS_RADIUS * float3(1.0, 1.0 / s, 1.0);
     glass.shade = baked.x;
     glass.reflection = 0.0;
     glass.camera = camera - glass_at;
@@ -272,6 +297,12 @@ float4 crtsim_surface(float2 uv) {
     float3 bezel_at = along(camera, ray, min(bezel_depth_here, BEZEL_FAR));
     Surface bezel;
     bezel.uv = bezel_uv(bezel_at.yz);
+    if (widened() != 0.0) {
+        // The point of the picture the bezel reflects, moved with it: its UV is the screen's
+        // across the original's glass.
+        float screen_y = 4.0 / 3.0 - bezel.uv.x * 8.0 / 3.0 + bezel_at.y - original_y(bezel_at.y);
+        bezel.uv.x = (tube_aspect() - screen_y) / (2.0 * tube_aspect());
+    }
 
     // How each surface's uv changes between pixels, taken here, where every pixel runs, so that
     // each pixel need only shade the surface it shows.

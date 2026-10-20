@@ -1,0 +1,15 @@
+[package]
+name = "crtsim-shader-ports"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Writes looks as the CRT's shader ports: RetroArch presets, a ReShade effect and OBS filter looks."
+# Its shaders live in the repository's ports folder, outside this crate, so it cannot be
+# packaged; the app and the command line carry it.
+publish = false
+
+[dependencies]
+crtsim-core = { path = "../crtsim-core" }
+anyhow.workspace = true
+image.workspace = true
+serde_json.workspace = true
