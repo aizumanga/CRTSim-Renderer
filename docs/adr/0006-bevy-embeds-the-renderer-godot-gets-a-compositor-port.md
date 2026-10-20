@@ -25,8 +25,10 @@ of its own that persist between frames, which is all a shader port needs.
   post-processing. Each camera is a host sequence. It is published to crates.io with each
   release, at the app's version, for the Bevy release whose wgpu the renderer is on.
 - **Godot** gets a shader port: `ports/godot`, an add-on whose `CompositorEffect` runs the
-  shared passes as compute shaders, through the same GLSL dialect header the RetroArch port
-  uses. It is published as a zip with each release, for the Godot Asset Library.
+  shared passes as full-screen draws on Godot's RenderingDevice, through the same GLSL dialect
+  header the RetroArch port uses: draws rather than compute shaders, since the glass's pass
+  takes its surfaces' derivatives between pixels. It is published as a zip with each release,
+  for the Godot Asset Library.
 
 ## Consequences
 
@@ -35,6 +37,8 @@ of its own that persist between frames, which is all a shader port needs.
 - A Bevy game draws exactly the app's picture, every look and setting included, and its
   settings screen can offer `crtsim_core::settings::SETTINGS`.
 - Godot's compositor effects run only with its Forward+ and Mobile renderers, so a game on the
-  Compatibility renderer, which includes Godot's web exports, cannot use the port.
+  Compatibility renderer, which includes Godot's web exports, cannot use the port. They run on
+  a 3D camera's picture before tonemapping, so the effect reads and gives back linear light,
+  and a 2D game reaches it by drawing its canvas as the environment's background.
 - The Godot port is checked against the renderer in CI by running Godot itself on software
   Vulkan, as the OBS port is checked in OBS.

@@ -16,10 +16,7 @@ const SHADERS: &str = "shaders/crtsim-renderer";
 /// The port's own sources, as `ports/retroarch` holds them. The shaders include the passes
 /// every port shares from `passes/`.
 pub(super) const SOURCES: &[(&str, &str)] = &[
-    (
-        "dialect.inc",
-        include_str!("../../../ports/retroarch/dialect.inc"),
-    ),
+    ("dialect.inc", DIALECT),
     (
         "bloom.inc",
         include_str!("../../../ports/retroarch/bloom.inc"),
@@ -49,6 +46,10 @@ pub(super) const SOURCES: &[(&str, &str)] = &[
         include_str!("../../../ports/retroarch/present.slang"),
     ),
 ];
+
+/// HLSL's names for GLSL's, through which a GLSL host reads the passes: RetroArch's, and
+/// Godot's, which defines its own way to read a parameter after it.
+pub(super) const DIALECT: &str = include_str!("../../../ports/retroarch/dialect.inc");
 
 const README: &str = include_str!("../../../ports/retroarch/README.md");
 

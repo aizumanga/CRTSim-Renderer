@@ -199,6 +199,11 @@ impl App {
                             "These settings as a look for the CRTSim Renderer filter in OBS \
                              Studio, drawn over a source as it streams or records.",
                         ),
+                        (
+                            Host::Godot,
+                            "These settings as a CRTSim effect for Godot 4, drawn over a \
+                             camera's picture as the game runs.",
+                        ),
                     ] {
                         let label = format!("{}…", host.port_name());
                         if ui.button(label).on_hover_text(hover).clicked() {

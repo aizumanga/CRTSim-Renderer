@@ -64,7 +64,7 @@ host frame, every camera a host sequence of its own. See
 
 **Shader port**: the effect rewritten in a host's own shader language, as passes the host runs
 on every frame of its picture, rather than this renderer running inside the host: for
-RetroArch, ReShade and OBS (`ports/`, exported by `crtsim_shader_ports`). See
+RetroArch, ReShade, OBS and Godot (`ports/`, exported by `crtsim_shader_ports`). See
 [the decision](docs/adr/0003-games-get-shader-ports-not-the-renderer.md).
 
 **Shared passes**: the effect's passes written once for every shader port, in the part of HLSL

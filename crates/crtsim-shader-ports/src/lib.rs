@@ -7,6 +7,7 @@
 //! parameters a look becomes, the images the passes read, the looks a release ships, and
 //! writing an export's files. Each host's module writes its own files around them.
 
+pub mod godot;
 pub mod obs;
 pub mod reshade;
 pub mod retroarch;
@@ -271,6 +272,7 @@ pub enum Host {
     RetroArch,
     ReShade,
     Obs,
+    Godot,
 }
 
 impl Host {
@@ -280,6 +282,7 @@ impl Host {
             Self::RetroArch => "RetroArch shader",
             Self::ReShade => "ReShade effect",
             Self::Obs => "OBS filter",
+            Self::Godot => "Godot effect",
         }
     }
 
@@ -289,6 +292,7 @@ impl Host {
             Self::RetroArch => "retroarch",
             Self::ReShade => "reshade",
             Self::Obs => "obs",
+            Self::Godot => "godot",
         }
     }
 
@@ -298,6 +302,7 @@ impl Host {
             Self::RetroArch => "slangp",
             Self::ReShade => "ini",
             Self::Obs => "json",
+            Self::Godot => "tres",
         }
     }
 }
@@ -309,13 +314,14 @@ pub fn export(host: Host, looks: &[(&str, &Config)]) -> Result<Vec<File>> {
         Host::RetroArch => retroarch::export(looks),
         Host::ReShade => reshade::export(looks),
         Host::Obs => obs::export(looks),
+        Host::Godot => godot::export(looks),
     }
 }
 
-const ALL: &[Host] = &[Host::RetroArch, Host::ReShade, Host::Obs];
+const ALL: &[Host] = &[Host::RetroArch, Host::ReShade, Host::Obs, Host::Godot];
 /// The hosts that hand the port a picture of any size, which it resizes to the signal itself;
 /// RetroArch hands over the core's own.
-const RESIZING: &[Host] = &[Host::ReShade, Host::Obs];
+const RESIZING: &[Host] = &[Host::ReShade, Host::Obs, Host::Godot];
 
 /// One of a port's parameters: what its host's menu shows, and where its value comes from.
 pub struct Parameter {
@@ -720,6 +726,7 @@ mod tests {
             .chain(
                 retroarch::SOURCES
                     .iter()
+                    .chain(godot::SOURCES)
                     .map(|(name, source)| (name.to_string(), *source)),
             )
             .collect();
@@ -727,6 +734,12 @@ mod tests {
             .iter()
             .filter(|(name, _)| name.ends_with(".slang"))
             .copied()
+            .chain(
+                godot::SOURCES
+                    .iter()
+                    .filter(|(name, _)| name.ends_with(".glsl"))
+                    .copied(),
+            )
             .chain([
                 ("CRTSimRenderer.fx", reshade::SOURCE),
                 ("crtsim.effect", obs::EFFECT),

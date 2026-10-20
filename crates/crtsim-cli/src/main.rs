@@ -107,6 +107,8 @@ enum Command {
     ExportReshade(PortExport),
     /// Write looks for the OBS filter into a NEW directory.
     ExportObs(PortExport),
+    /// Write the Godot add-on, with looks as saved effects, into a NEW directory.
+    ExportGodot(PortExport),
     /// Write the OBS filter's data folder, its effect and images, into a NEW directory.
     ObsPluginData {
         #[arg(short, long)]
@@ -486,6 +488,7 @@ fn main() -> Result<()> {
         Command::ExportRetroarch(export) => export_port(ports::Host::RetroArch, export)?,
         Command::ExportReshade(export) => export_port(ports::Host::ReShade, export)?,
         Command::ExportObs(export) => export_port(ports::Host::Obs, export)?,
+        Command::ExportGodot(export) => export_port(ports::Host::Godot, export)?,
         Command::ObsPluginData { output_dir } => {
             ports::write(&output_dir, &ports::obs::plugin_data()?)?
         }
