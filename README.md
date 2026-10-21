@@ -222,8 +222,8 @@ The glass and its bezel draw as the app draws them, from the same baked bezel.
   [`ports/obs`](ports/obs). **Export → OBS filter…**, or `crtsim export-obs`, writes any look for
   it.
 - **Godot 4**, as a compositor effect over a camera's picture, 2D games included, keeping the
-  glow between frames. Each release has a `-godot.zip` of the add-on with the shipped looks, for
-  the Godot Asset Library; **Export → Godot effect…**, or `crtsim export-godot`, writes the add-on
+  glow between frames. It is in the Godot Asset Library, and each release has a `-godot.zip` of the
+  add-on with the shipped looks; **Export → Godot effect…**, or `crtsim export-godot`, writes the add-on
   with any look. See [`ports/godot`](ports/godot).
 - **Bevy**, as the renderer itself on Bevy's own device: the
   [`crtsim-bevy`](crates/crtsim-bevy) crate, published to crates.io with each release, draws any

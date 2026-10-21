@@ -42,8 +42,15 @@ jobs:
           for crate in crtsim-core crtsim-bevy; do
             version="$(cargo metadata --locked --no-deps --format-version 1 | python3 -c "import json, sys; print(next(p['version'] for p in json.load(sys.stdin)['packages'] if p['name'] == '$crate'))")"
             test "$RELEASE_TAG" = "v$version" || { echo "Tag $RELEASE_TAG does not name $crate $version"; exit 1; }
-            status="$(curl -s -o /dev/null -w '%{http_code}' -A 'crtsim-core publish workflow (github.com/aizumanga/CRTSim-Renderer)' "https://crates.io/api/v1/crates/$crate/$version")"
+            agent='crtsim-core publish workflow (github.com/aizumanga/CRTSim-Renderer)'
             key="${crate#crtsim-}"
+            # Trusted publishing cannot make a crate, so a crate's first version is a person's.
+            if [ "$(curl -s -o /dev/null -w '%{http_code}' -A "$agent" "https://crates.io/api/v1/crates/$crate")" = 404 ]; then
+              echo "::warning::$crate is not on crates.io yet: publish its first version by hand, as docs/RELEASES.md says"
+              echo "$key=false" >> "$GITHUB_OUTPUT"
+              continue
+            fi
+            status="$(curl -s -o /dev/null -w '%{http_code}' -A "$agent" "https://crates.io/api/v1/crates/$crate/$version")"
             case "$status" in
               200) echo "$crate $version is already on crates.io"; echo "$key=false" >> "$GITHUB_OUTPUT" ;;
               404) echo "$key=true" >> "$GITHUB_OUTPUT" ;;

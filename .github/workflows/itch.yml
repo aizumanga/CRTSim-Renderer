@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: The published release to push, such as v1.5.0
+        description: The published release to push, such as v1.6.0
         required: true
 permissions:
   contents: read

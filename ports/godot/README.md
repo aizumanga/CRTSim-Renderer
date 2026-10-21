@@ -11,7 +11,8 @@ renderer, which its web exports use, runs no compositor effects.
 
 ## Using it
 
-1. Copy the `addons` folder into your project.
+1. Install **CRTSim Renderer** from the AssetLib tab in the editor, or copy the `addons` folder
+   into your project.
 2. Give a `WorldEnvironment` (or a `Camera3D`) a **Compositor**, and add a **CRTSimEffect** to
    its effects, or drag in one of the looks from `addons/crtsim_renderer/looks`.
 3. In the environment, set **Tonemap → Mode** to **Linear** and turn **Glow** off. The effect

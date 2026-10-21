@@ -1,0 +1,71 @@
+name: Godot Asset Library branch
+# The Godot Asset Library downloads a commit of a repository, not a release's file, so this
+# commits each published release's Godot add-on to the godot-asset-library branch, which holds
+# the add-on alone: its addons folder, the licence, a README and the library's icon. A person
+# then gives the library the commit this prints. See docs/RELEASES.md.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: The published release whose add-on to commit, such as v1.6.0
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: godot-asset-library
+  cancel-in-progress: false
+jobs:
+  commit:
+    # Pre-releases stay off the branch unless committed by hand.
+    if: github.event_name == 'workflow_dispatch' || !github.event.release.prerelease
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag || github.event.release.tag_name }}
+      BRANCH: godot-asset-library
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - name: Download the release's add-on and check its sum
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir assets \
+            --pattern '*-godot.zip' --pattern 'SHA256SUMS-linux-x86_64.txt'
+          cd assets && sha256sum --check --ignore-missing --strict SHA256SUMS-linux-x86_64.txt
+          unzip -q ./*-godot.zip -d unpacked
+      - name: Commit it to the branch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if git ls-remote --exit-code --heads origin "$BRANCH" > /dev/null; then
+            git fetch --depth 1 origin "$BRANCH"
+            git worktree add -B "$BRANCH" asset FETCH_HEAD
+          else
+            git worktree add --orphan -b "$BRANCH" asset
+          fi
+          cd asset
+          git rm -rq --ignore-unmatch .
+          cp -R ../assets/unpacked/crtsim-renderer/addons addons
+          cp ../LICENSE LICENSE
+          cp ../ports/godot/README.md README.md
+          cp ../ports/godot/icon.png icon.png
+          # The library's download holds the addons folder alone; the editor makes .godot.
+          printf '* text=auto eol=lf\n*.png binary\n/**        export-ignore\n/addons    !export-ignore\n/addons/** !export-ignore\n' > .gitattributes
+          printf '.godot/\n' > .gitignore
+          git add -A
+          if git diff --cached --quiet; then
+            echo "The branch already holds $RELEASE_TAG's add-on"
+          else
+            git commit -q -m "CRTSim Renderer for Godot, $RELEASE_TAG"
+            git push origin "$BRANCH"
+          fi
+          {
+            echo "Give the Godot Asset Library version ${RELEASE_TAG#v} and this download commit:"
+            echo
+            echo "    $(git rev-parse HEAD)"
+          } | tee -a "$GITHUB_STEP_SUMMARY"

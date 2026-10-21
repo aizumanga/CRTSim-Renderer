@@ -1,6 +1,6 @@
 # Portable releases (Phase 4)
 
-## Unreleased
+## v1.6.0
 
 The CRT runs in games made with Bevy, as the renderer itself, and in Godot 4, as a compositor effect; and a video
 playing goes on through a new preview size with its glow.
@@ -363,24 +363,47 @@ is pushed: the `publish-core.yml` workflow runs on the release's publication, ch
 names both crates' version, tests them and publishes the renderer and then the plugin, with a token crates.io issues
 for that run alone. A version already on crates.io is left as it is. To set it up, for each crate:
 
-1. The first version only, from the release's tag: `cargo publish -p crtsim-core`, then `cargo publish -p
-   crtsim-bevy`, with a crates.io token.
+1. The first version only: trusted publishing cannot make a crate, so the workflow leaves a crate crates.io does
+   not have yet with a warning, and a person publishes its first version. Make a crates.io API token (Account
+   Settings → API Tokens) with the `publish-new` scope, limited to that crate and expiring soon; from the release's
+   tag, after the workflow has published the renderer it needs, run `cargo login` with it and `cargo publish -p
+   <crate>`; then delete the token and `cargo logout`.
 2. Add this repository's `publish-core.yml` workflow as the crate's trusted publisher on crates.io (crate settings →
    Trusted Publishing, environment `crates-io`), and make a `crates-io` environment in the repository's settings.
-3. From then on, publishing a release publishes its crates. Running the workflow by hand with a release's tag
-   publishes that one's, where crates.io does not have them already.
+3. From then on, publishing a release publishes its crates with no token. Running the workflow by hand with a
+   release's tag publishes that one's, where crates.io does not have them already.
 
 ## The Godot Asset Library
 
-Each release's `-godot.zip` is the add-on as the [Godot Asset Library](https://godotengine.org/asset-library/)
-installs it: its `addons/crtsim_renderer` folder goes into a project as it is, with its licence. The library takes a
-new version from a person, so after publishing a release:
+The [Godot Asset Library](https://godotengine.org/asset-library/), which Godot's AssetLib tab searches, does not
+host files: it downloads a commit of a repository as GitHub zips it. So publishing a release also runs the
+`godot-asset.yml` workflow, which commits the release's `-godot.zip` to the `godot-asset-library` branch: the
+add-on's `addons/crtsim_renderer` folder, with its licence, a README and the library's icon. Its `.gitattributes`
+leaves everything but `addons` out of the download, so the add-on installs into a project as it is. The run's
+summary names the commit. The library takes a new version from a person, reviewed by its moderators:
 
-1. The first time only: submit the asset (Godot 4.3 or later, category 3D Tools or Shaders, licence CC0), with
-   **Download provider** Custom, the release's `-godot.zip` as the download URL, and `ports/godot/README.md`'s
-   opening as its description.
-2. Each release: edit the asset to the release's version and its `-godot.zip`, which the library's moderators then
-   approve.
+1. The first time only: log in at the Asset Library, choose **Submit Asset**, and fill it in:
+
+   | Field | Value |
+   | --- | --- |
+   | Asset Name | CRTSim Renderer |
+   | Category | 3D Tools (an Addon category; Shaders also fits) |
+   | Godot version | 4.3 |
+   | Version | The release's, without its `v`, such as `1.6.0` |
+   | Repository host | GitHub |
+   | Repository URL | `https://github.com/aizumanga/CRTSim-Renderer` |
+   | Issues URL | Empty: the repository's own |
+   | Download Commit | The commit the workflow's summary names |
+   | Icon URL | `https://raw.githubusercontent.com/aizumanga/CRTSim-Renderer/godot-asset-library/icon.png` |
+   | License | CC0 1.0 Universal |
+   | Description | `ports/godot/README.md`'s opening paragraphs and its **Using it**, as plain text |
+
+   Up to three previews can show the effect, as images by their raw.githubusercontent.com address.
+2. Each release: on the asset's page, **Edit**, and set Version and Download Commit to the new release's. The edit
+   waits for a moderator's approval, as the first submission does.
+
+Running the workflow by hand with a published release's tag commits that release's add-on, if the branch does not
+hold it already.
 
 ## itch.io
 
@@ -398,7 +421,7 @@ downloads, after their SHA256SUMS are checked:
 | `web` | `-web.zip` | The web app, to play in the browser |
 | `editors-windows`, `editors-mac`, `editors-linux` | `-editors-<system>.zip` | The OpenFX effect and the frei0r filter |
 | `aseprite` | `.aseprite-extension` | The Aseprite extension, as the file Aseprite installs |
-| `retroarch`, `reshade`, `obs-linux` | Their ZIPs | The shader presets and the OBS filter |
+| `retroarch`, `reshade`, `obs-linux`, `godot` | Their ZIPs | The shader presets, the OBS filter and the Godot add-on |
 
 To set it up, once:
 
