@@ -1,0 +1,57 @@
+[gd_resource type="CompositorEffect" script_class="CRTSimEffect" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://addons/crtsim_renderer/crtsim_effect.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+signal_width = 256.0
+signal_height = 224.0
+resize = 0
+table = 0
+table_nearest = 0
+linear = 0
+phase = 0
+flip_artifacts = 0
+interlace = 2
+fit = 0
+screen_only = 0
+reflection_as_screen = 0
+mask_antialias = 1
+mask_columns = 0.0
+mask_rows = 0.0
+pixel_aspect = 1.1428572
+lut_strength = 1.0
+hue = 0.0
+chroma = 1.0
+saturation = 1.35
+sharpness = 0.8
+bleed = 0.5
+artifacts = 0.5
+ntsc_blending = 0.0
+barrel = -0.115
+overscan = 1.0
+tube_aspect = 1.3333334
+dimming = 0.5
+fov = 15.0
+mask_opacity = 1.0
+mask_brightness = 0.45
+bloom = 0.25
+bloom_power = 2.0
+bloom_spread = 0.025
+diffuse = 0.5
+specular = 0.35
+specular_power = 50.0
+rim = 1.0
+reflection = 0.3
+bezel_r = 0.06
+bezel_g = 0.06
+bezel_b = 0.06
+backdrop_r = 0.0
+backdrop_g = 0.0
+backdrop_b = 0.0
+light_x = -10.0
+light_y = -5.0
+light_z = 10.0
+persistence_r = 0.7
+persistence_g = 0.525
+persistence_b = 0.42
