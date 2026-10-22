@@ -1,0 +1,47 @@
+[package]
+name = "crtsim-bevy"
+# Published to crates.io with each release, at the app's version, beside crtsim-core: a Bevy
+# release that moves to another wgpu waits for the renderer to move with it.
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version = "1.97.1"
+description = "J. Kyle Pittman's CRTSim in Bevy: each camera's picture drawn through the CRT on Bevy's own device, every look and setting of the app included."
+repository = "https://github.com/aizumanga/CRTSim-Renderer"
+homepage = "https://github.com/aizumanga/CRTSim-Renderer"
+readme = "README.md"
+keywords = ["crt", "bevy", "shader", "retro", "ntsc"]
+categories = ["game-development", "rendering"]
+include = ["/src/**/*.rs", "/examples/*.rs", "/README.md"]
+
+[features]
+default = ["ui"]
+# Draws a camera's interface through the CRT too, as a set shows a game's HUD.
+ui = ["bevy/bevy_ui_render"]
+
+[dependencies]
+crtsim-core = { path = "../crtsim-core", version = "1.6.0" }
+anyhow.workspace = true
+wgpu.workspace = true
+bevy = { version = "0.20", default-features = false, features = [
+  "bevy_render",
+  "bevy_core_pipeline",
+  "bevy_log",
+] }
+futures-lite = "2"
+
+[dev-dependencies]
+bevy = { version = "0.20", default-features = false, features = [
+  "bevy_render",
+  "bevy_core_pipeline",
+  "bevy_sprite_render",
+  "bevy_window",
+  "bevy_winit",
+  "bevy_log",
+  "png",
+  "multi_threaded",
+  "x11",
+] }
+image.workspace = true
+serde_json.workspace = true
+pollster = "0.3"

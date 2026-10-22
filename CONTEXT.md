@@ -20,12 +20,14 @@ preview** renders it exactly, as a still.
 **Sequence**: frames rendered one after another that share the CRT's history, so the glow of
 one frame persists into the next. A video is a sequence with a timing and a frame rate. An
 editing sequence is the one interactive previews run on; it starts again by itself when its
-sizes or colour mode change.
+signal size or colour mode change.
 
 **Sequence shape**: what a sequence is made for: its signal size, output size and colour mode
-(`crtsim_core::Shape`, from `Config::sequence_shape`). Settings of one shape can follow each
-other in one sequence; another shape needs a new one, which an editing sequence starts by
-itself. Playback asks it whether an edit can reach the video playing.
+(`crtsim_core::Shape`, from `Config::sequence_shape`). The CRT's history is the signal's, so a
+sequence goes on into a new output size with its glow (`Shape::keeps_history`), as a set's
+picture would in a resized window; a new signal size or colour mode needs a new sequence,
+which an editing or host sequence starts by itself and a video's refuses
+(`Sequence::follow`). Playback asks it whether an edit can reach the video playing.
 
 **Still**: a sequence of one frame, rendered after warm-up.
 
@@ -55,9 +57,14 @@ frei0r filter (`crates/crtsim-frei0r`), which share `crates/crtsim-plugin`; see
 glow; any other is rendered after its **history**, the frames before it that its glow needs,
 back until older glow has faded below half an 8-bit step, where the host can give them.
 
+**Bevy plugin**: the renderer itself drawing a Bevy game's cameras through the CRT
+(`crates/crtsim-bevy`), on Bevy's own device, recording each camera's frame into Bevy's as a
+host frame, every camera a host sequence of its own. See
+[the decision](docs/adr/0006-bevy-embeds-the-renderer-godot-gets-a-compositor-port.md).
+
 **Shader port**: the effect rewritten in a host's own shader language, as passes the host runs
 on every frame of its picture, rather than this renderer running inside the host: for
-RetroArch, ReShade and OBS (`ports/`, exported by `crtsim_shader_ports`). See
+RetroArch, ReShade, OBS and Godot (`ports/`, exported by `crtsim_shader_ports`). See
 [the decision](docs/adr/0003-games-get-shader-ports-not-the-renderer.md).
 
 **Shared passes**: the effect's passes written once for every shader port, in the part of HLSL
@@ -104,8 +111,10 @@ controls have picked to go to, and the time playing starts from
 **Playback**: playing a video in the preview (`crates/crtsim-app/src/playback.rs`). The
 worker renders frames ahead into a small buffer, and each is shown when its time comes. Frames
 already overdue are skipped rather than shown late. Settings edited while it plays reach the
-frames rendered next, once the few already buffered have played; one that needs a new
-sequence, such as another output size, plays again from the frame on screen.
+frames rendered next, once the few already buffered have played, a new output size included,
+which goes on with the glow. One that needs a new sequence, such as another signal size or
+colour mode, or frames too large for the buffer playback holds, plays again from the frame on
+screen.
 
 **Loop**: playback that goes on from a video's end to its start (`jobs::playback`'s `looping`),
 the CRT keeping its history rather than warming up again, and the time playing has lasted going

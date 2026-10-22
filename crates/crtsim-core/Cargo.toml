@@ -32,5 +32,6 @@ png = "0.17"
 jpeg-decoder = "0.3"
 
 [dev-dependencies]
+half = { version = "2.7", features = ["bytemuck"] }
 naga = { version = "30.0.1", features = ["wgsl-in"] }
 pollster = "0.3"

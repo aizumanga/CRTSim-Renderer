@@ -4,6 +4,7 @@ use crate::{
     config::{ColorMode, Config, Phase},
     Workspace,
 };
+use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 
 /// How a video's frames follow each other in time.
@@ -21,8 +22,9 @@ pub enum Timing {
 }
 
 /// What a sequence is made for: the size of its signal and of its output, and its color mode.
-/// Frames of one shape share a CRT's history; another shape needs a new sequence, which an
-/// editing sequence starts by itself.
+/// The CRT's history is the signal's, so frames of a new output size go on with it; a new
+/// signal size or color mode needs a new sequence, which an editing or host sequence starts by
+/// itself.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Shape {
     pub signal: (u32, u32),
@@ -30,11 +32,31 @@ pub struct Shape {
     pub color_mode: ColorMode,
 }
 
+impl Shape {
+    /// Whether a sequence of this shape goes on into frames of `next` with its history: when
+    /// at most their output sizes differ.
+    pub fn keeps_history(&self, next: &Shape) -> bool {
+        self.signal == next.signal && self.color_mode == next.color_mode
+    }
+}
+
+/// What becomes of a sequence's CRT for its next frame.
+#[derive(Debug, PartialEq)]
+pub(crate) enum Follow {
+    /// It goes on as it is.
+    Same,
+    /// It goes on with its history, drawn at another output size.
+    Reshape,
+    /// It starts again from cleared history.
+    Restart,
+}
+
 /// Frames that share one CRT's history, so the glow of one persists into the next. A new
 /// sequence starts from cleared history and warms up before its first frame.
 ///
-/// A sequence belongs to the renderer that first draws it, and to one `Shape`. Start a new one
-/// after seeking or changing its shape; an editing or host sequence starts again by itself.
+/// A sequence belongs to the renderer that first draws it, and to one signal size and color
+/// mode: a new output size goes on with its history. Start a new one after seeking or changing
+/// its signal size or color mode; an editing or host sequence starts again by itself.
 pub struct Sequence {
     pub(crate) workspace: Option<Workspace>,
     /// Ticks simulated so far.
@@ -70,8 +92,8 @@ impl Sequence {
     /// The preview of settings being edited, as a game's picture follows its options menu: the
     /// first frame is a still, and each later one runs the same CRT on for a couple of ticks
     /// with the settings as they are by then, so an edit shows at once while the glow of the
-    /// settings before it fades. Given a new signal size, output size or color mode, it starts
-    /// again with a still's warm-up rather than failing.
+    /// settings before it fades. A new output size goes on with its glow; given a new signal
+    /// size or color mode, it starts again with a still's warm-up rather than failing.
     pub fn editing() -> Self {
         Self::new(Pace::Editing)
     }
@@ -149,10 +171,26 @@ impl Sequence {
         self.tick = 0;
     }
 
-    /// Whether the sequence starts again, rather than failing, when its sizes or color mode
-    /// change.
-    pub(crate) fn restarts(&self) -> bool {
+    /// Whether the sequence starts again, rather than failing, when its signal size or color
+    /// mode change.
+    fn restarts(&self) -> bool {
         matches!(self.pace, Pace::Editing | Pace::Host { .. })
+    }
+
+    /// How the sequence, drawn so far at shape `from`, follows into a frame of `to`. A new
+    /// output size goes on with the history, as a set's picture would when its window is
+    /// resized; a new signal size or color mode starts an editing or host sequence again, and is
+    /// refused by a video's, whose frames would otherwise lose their glow partway through.
+    pub(crate) fn follow(&self, from: &Shape, to: &Shape) -> Result<Follow> {
+        Ok(if from == to {
+            Follow::Same
+        } else if from.keeps_history(to) {
+            Follow::Reshape
+        } else if self.restarts() {
+            Follow::Restart
+        } else {
+            bail!("Start a new video sequence after changing signal size or color mode")
+        })
     }
 
     /// The settings this sequence renders `config` with: a still's and an editing sequence's
@@ -223,6 +261,43 @@ mod tests {
         video.tick = 17;
         assert_eq!(video.ticks(16), 1);
         assert!(editing.restarts() && !video.restarts() && !Sequence::still().restarts());
+    }
+
+    #[test]
+    fn a_new_output_size_keeps_the_history_and_a_new_signal_restarts_or_is_refused() {
+        let shape = Shape {
+            signal: (256, 224),
+            output: (640, 480),
+            color_mode: ColorMode::Reference,
+        };
+        let resized = Shape {
+            output: (1280, 960),
+            ..shape
+        };
+        let resampled = Shape {
+            signal: (320, 240),
+            ..shape
+        };
+        let linear = Shape {
+            color_mode: ColorMode::LinearLight,
+            ..shape
+        };
+        let sequences = [
+            Sequence::video(Timing::Stable, 30.),
+            Sequence::editing(),
+            Sequence::host(),
+            Sequence::clip(),
+        ];
+        for sequence in &sequences {
+            assert_eq!(sequence.follow(&shape, &shape).unwrap(), Follow::Same);
+            assert_eq!(sequence.follow(&shape, &resized).unwrap(), Follow::Reshape);
+        }
+        for other in [resampled, linear] {
+            assert!(sequences[0].follow(&shape, &other).is_err(), "a video's");
+            for sequence in &sequences[1..] {
+                assert_eq!(sequence.follow(&shape, &other).unwrap(), Follow::Restart);
+            }
+        }
     }
 
     #[test]

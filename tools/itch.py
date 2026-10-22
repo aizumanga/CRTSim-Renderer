@@ -1,6 +1,6 @@
 """Lay a published release's packages out as itch.io channels, one folder each, for butler to push.
 
-    python tools/itch.py --assets DIR --version v1.5.0 --out DIR [--only CHANNEL ...]
+    python tools/itch.py --assets DIR --version v1.6.0 --out DIR [--only CHANNEL ...]
 
 DIR holds the release's downloads, as `gh release download` leaves them. Each channel's folder is
 what an itch.io download of it holds: the desktop app unpacked, with an .itch.toml telling the
@@ -38,6 +38,7 @@ CHANNELS = [
     ('retroarch', f'{name}-retroarch.zip', None),
     ('reshade', f'{name}-reshade.zip', None),
     ('obs-linux', f'{name}-obs-linux-x86_64.zip', None),
+    ('godot', f'{name}-godot.zip', None),
 ]
 
 

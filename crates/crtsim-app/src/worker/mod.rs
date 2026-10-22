@@ -1,4 +1,11 @@
-use crate::{file_name, files, preview::Kind, timeline::Timeline};
+mod export;
+mod lanes;
+
+pub use export::Export;
+use lanes::Inbox;
+pub use lanes::{Jobs, PreviewLane, Runtime, Stopped, WorkLane};
+
+use crate::{file_name, preview::Kind, timeline::Timeline};
 use anyhow::{ensure, Result};
 use crtsim_core::{config::Config, nes_luts, RenderProgress, Renderer, Sequence, Stage};
 use crtsim_media::{Options, Progress, Video};
@@ -9,13 +16,11 @@ use std::{
     future::Future,
     panic::AssertUnwindSafe,
     path::{Path, PathBuf},
-    pin::Pin,
-    rc::Rc,
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc, Arc, Mutex,
     },
-    task::{Poll, Waker},
+    task::Poll,
 };
 use web_time::Instant;
 
@@ -109,178 +114,6 @@ impl Graphics {
 const STILL_FAILED: &str = "Graphics driver failed. Try a smaller resolution or restart with \
                             another --backend. Settings are still available to save.";
 
-/// Where the interface sends work. The worker has two lanes: previews have one of their own,
-/// so they keep coming while an export holds the other for minutes. A preview queued behind an
-/// export used to wait for all of it, and settings edited meanwhile could not be seen until it
-/// finished.
-#[derive(Clone)]
-pub struct Jobs {
-    work: WorkLane,
-    preview: PreviewLane,
-    /// Held only to ring once the senders above are gone, so it comes last.
-    _bells: Bells,
-}
-
-/// The work lane's sending end, which the app's `lane::Lane` holds.
-#[derive(Clone)]
-pub struct WorkLane {
-    jobs: mpsc::Sender<Job>,
-    bell: Arc<Bell>,
-}
-
-impl WorkLane {
-    pub fn send(&self, job: Job) -> Result<(), Stopped> {
-        self.jobs.send(job).map_err(|_| Stopped)?;
-        self.bell.ring();
-        Ok(())
-    }
-}
-
-/// The preview lane's sending end: the Preview holds one, and thumbnails go through `Jobs`.
-#[derive(Clone)]
-pub struct PreviewLane {
-    jobs: mpsc::Sender<PreviewJob>,
-    bell: Arc<Bell>,
-}
-
-impl PreviewLane {
-    pub fn send(&self, job: PreviewJob) -> Result<(), Stopped> {
-        self.jobs.send(job).map_err(|_| Stopped)?;
-        self.bell.ring();
-        Ok(())
-    }
-}
-/// A job could not be sent because its worker has stopped.
-#[derive(Debug, PartialEq, Eq)]
-pub struct Stopped;
-impl Jobs {
-    pub fn send(&self, job: Job) -> Result<(), Stopped> {
-        self.work.send(job)
-    }
-    /// The work lane, for the app's `Lane` to send its jobs on.
-    pub fn work_lane(&self) -> WorkLane {
-        self.work.clone()
-    }
-    pub fn preview(&self, job: PreviewJob) -> Result<(), Stopped> {
-        self.preview.send(job)
-    }
-    /// The preview lane, for the Preview to send its own jobs on.
-    pub fn preview_lane(&self) -> PreviewLane {
-        self.preview.clone()
-    }
-    /// Asks both lanes to stop once their current job is done.
-    pub fn shutdown(&self) {
-        let _ = self.preview(PreviewJob::Shutdown);
-        let _ = self.send(Job::Shutdown);
-    }
-    /// Channels in place of the lanes, for a test to inspect what the interface sends.
-    #[cfg(test)]
-    pub fn capture() -> (Self, mpsc::Receiver<Job>, mpsc::Receiver<PreviewJob>) {
-        let (work, jobs) = mpsc::channel();
-        let (preview, previews) = mpsc::channel();
-        let bells = Bells::default();
-        (
-            Self {
-                work: WorkLane {
-                    jobs: work,
-                    bell: bells.0[0].clone(),
-                },
-                preview: PreviewLane {
-                    jobs: preview,
-                    bell: bells.0[1].clone(),
-                },
-                _bells: bells,
-            },
-            jobs,
-            previews,
-        )
-    }
-}
-
-/// The work lane's bell and the preview lane's. Dropped with the interface's end of the
-/// channels, after them, they wake the lanes to see the channels closed and stop: a lane waiting
-/// for a job would otherwise wait forever.
-#[derive(Clone, Default)]
-struct Bells([Arc<Bell>; 2]);
-
-impl Drop for Bells {
-    fn drop(&mut self) {
-        for bell in &self.0 {
-            bell.ring();
-        }
-    }
-}
-
-/// Wakes a lane waiting for its next job. A lane on a thread of its own sleeps until then; one
-/// sharing the host's thread as a task gives it back.
-#[derive(Default)]
-struct Bell(Mutex<Option<Waker>>);
-
-impl Bell {
-    fn ring(&self) {
-        if let Some(waker) = self.0.lock().unwrap_or_else(|e| e.into_inner()).take() {
-            waker.wake();
-        }
-    }
-}
-
-/// A lane's end of its channel.
-struct Inbox<T> {
-    jobs: mpsc::Receiver<T>,
-    bell: Arc<Bell>,
-}
-
-impl<T> Inbox<T> {
-    /// The next job, or `None` once the interface has gone.
-    async fn next(&self) -> Option<T> {
-        std::future::poll_fn(|cx| {
-            let take = || match self.jobs.try_recv() {
-                Ok(job) => Some(Some(job)),
-                Err(mpsc::TryRecvError::Disconnected) => Some(None),
-                Err(mpsc::TryRecvError::Empty) => None,
-            };
-            if let Some(job) = take() {
-                return Poll::Ready(job);
-            }
-            *self.bell.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(cx.waker().clone());
-            // A job sent between the look and the waker going in has already rung.
-            take().map_or(Poll::Pending, Poll::Ready)
-        })
-        .await
-    }
-
-    /// Every job already waiting.
-    fn waiting(&self) -> impl Iterator<Item = T> + '_ {
-        self.jobs.try_iter()
-    }
-}
-
-/// A lane as a task, which runs on the thread it was made on.
-pub type Task = Pin<Box<dyn Future<Output = ()>>>;
-
-/// How the worker's two lanes run.
-pub enum Runtime {
-    /// Each lane on a thread of its own, sleeping between jobs: the desktop.
-    Threads,
-    /// Each lane a task on the host's own thread, handed to this to run. The browser has no
-    /// threads; the lanes take turns there, at every await.
-    #[cfg_attr(
-        all(not(test), not(target_arch = "wasm32")),
-        expect(dead_code, reason = "the desktop runs its lanes on threads")
-    )]
-    Tasks(Rc<dyn Fn(Task)>),
-}
-
-impl Runtime {
-    /// Threads on the desktop; tasks in the browser, which has only the page's thread.
-    pub fn host() -> Self {
-        #[cfg(not(target_arch = "wasm32"))]
-        return Self::Threads;
-        #[cfg(target_arch = "wasm32")]
-        return Self::Tasks(Rc::new(wasm_bindgen_futures::spawn_local));
-    }
-}
-
 /// The worker a running interface talks to.
 pub struct Worker {
     pub jobs: Jobs,
@@ -371,122 +204,6 @@ impl Job {
             | Self::Export { cancel, .. } => Some(cancel),
             Self::Playback { feed, .. } => Some(&feed.cancel),
             Self::Load(..) | Self::LoadBytes { .. } | Self::Shutdown => None,
-        }
-    }
-}
-
-/// What an export renders, each with the settings captured when it was asked for.
-pub enum Export {
-    /// A still, saved as a PNG that carries its settings.
-    Image {
-        input: Arc<RgbaImage>,
-        config: Config,
-    },
-    /// A whole video, with its audio and other tracks.
-    Video {
-        video: Video,
-        options: Options,
-        config: Config,
-    },
-    /// An animated GIF or WebP, as the path's extension asks.
-    Animation {
-        video: Video,
-        options: crtsim_media::AnimationOptions,
-        config: Config,
-    },
-    /// A contact sheet: the still rendered through each look, laid out in a grid.
-    Sheet {
-        input: Arc<RgbaImage>,
-        looks: Vec<crtsim_core::sheet::Look>,
-        tile: (u32, u32),
-        columns: u32,
-    },
-    /// A batch job, whose source is only read once it runs. The queue chose a video or a PNG
-    /// when it named the output.
-    Batch {
-        source: PathBuf,
-        options: Options,
-        config: Config,
-    },
-}
-
-impl Export {
-    /// Reported when the graphics driver fails under the export.
-    fn driver_failed(&self) -> &'static str {
-        match self {
-            Self::Image { .. } | Self::Sheet { .. } => STILL_FAILED,
-            Self::Video { .. } => "Video graphics driver failed. Try a smaller resolution.",
-            Self::Animation { .. } => "Animation graphics driver failed. Try a smaller size.",
-            Self::Batch { .. } => "Batch graphics driver failed. Try a smaller resolution.",
-        }
-    }
-
-    async fn run(
-        &self,
-        graphics: &mut Graphics,
-        path: &Path,
-        cancel: &Arc<AtomicBool>,
-        progress: &dyn Fn(Progress),
-        colors: &Colors,
-    ) -> Result<()> {
-        let space = &colors.space;
-        match self {
-            Self::Image { input, config } => {
-                export_image(graphics, input, config, path, cancel, progress, space).await
-            }
-            Self::Sheet {
-                input,
-                looks,
-                tile,
-                columns,
-            } => {
-                let renderer = graphics.renderer(|| {}).await?;
-                let count = looks.len();
-                let sheet = crtsim_core::sheet::render(
-                    renderer,
-                    input,
-                    looks,
-                    *tile,
-                    *columns,
-                    Some(cancel),
-                    |done| {
-                        progress(Progress {
-                            fraction: done as f32 / count as f32 * 0.95,
-                            stage: format!("Rendered {done} of {count} looks"),
-                        })
-                    },
-                )
-                .await?;
-                ensure!(!cancel.load(Ordering::Relaxed), "Render cancelled");
-                progress(Progress {
-                    fraction: 0.97,
-                    stage: "Encoding and saving PNG".into(),
-                });
-                files::save_png(path, sheet, None, space)
-            }
-            Self::Video {
-                video,
-                options,
-                config,
-            } => export_video(graphics, video, config, options, path, cancel, progress).await,
-            Self::Animation {
-                video,
-                options,
-                config,
-            } => export_animation(graphics, video, config, options, path, cancel, progress).await,
-            Self::Batch {
-                source,
-                options,
-                config,
-            } => {
-                if crtsim_media::Container::of(path).is_some() {
-                    let video = crtsim_media::probe(source, cancel)?;
-                    export_video(graphics, &video, config, options, path, cancel, progress).await
-                } else {
-                    let input = crtsim_core::input::read(source, colors.profiles)?.image;
-                    export_image(graphics, &input, config, path, cancel, progress, space).await
-                }
-            }
         }
     }
 }
@@ -626,18 +343,8 @@ pub enum Event {
 }
 /// Starts the worker's two lanes on `runtime`.
 pub fn start(ctx: egui::Context, gpu: Gpu, runtime: Runtime) -> Worker {
-    let (work, jobs) = mpsc::channel();
-    let (preview, previews) = mpsc::channel();
+    let (jobs, work, previews) = Jobs::open();
     let (events, receive) = mpsc::channel();
-    let bells = Bells::default();
-    let jobs = Inbox {
-        jobs,
-        bell: bells.0[0].clone(),
-    };
-    let previews = Inbox {
-        jobs: previews,
-        bell: bells.0[1].clone(),
-    };
     let (preview_ctx, preview_gpu, preview_events) = (ctx.clone(), gpu.clone(), events.clone());
     let threads = match runtime {
         // Each lane is made on its own thread: a lane holds what only one thread may use.
@@ -651,12 +358,12 @@ pub fn start(ctx: egui::Context, gpu: Gpu, runtime: Runtime) -> Worker {
                 ))
             });
             Some(std::thread::spawn(move || {
-                pollster::block_on(work_lane(ctx, gpu, jobs, events));
+                pollster::block_on(work_lane(ctx, gpu, work, events));
                 let _ = previews.join();
             }))
         }
         Runtime::Tasks(spawn) => {
-            spawn(Box::pin(work_lane(ctx, gpu, jobs, events)));
+            spawn(Box::pin(work_lane(ctx, gpu, work, events)));
             spawn(Box::pin(preview_lane(
                 preview_ctx,
                 preview_gpu,
@@ -667,17 +374,7 @@ pub fn start(ctx: egui::Context, gpu: Gpu, runtime: Runtime) -> Worker {
         }
     };
     Worker {
-        jobs: Jobs {
-            work: WorkLane {
-                jobs: work,
-                bell: bells.0[0].clone(),
-            },
-            preview: PreviewLane {
-                jobs: preview,
-                bell: bells.0[1].clone(),
-            },
-            _bells: bells,
-        },
+        jobs,
         events: receive,
         threads,
     }
@@ -886,20 +583,24 @@ fn load_image(path: PathBuf, profiles: crtsim_core::input::Profiles) -> Result<L
 /// An image opened for editing, with the thumbnail that shows the original and what became of
 /// its colour profile.
 fn loaded(path: PathBuf, name: String, image: RgbaImage, note: Option<String>) -> Loaded {
-    // Keep thumbnail processing off the interface's turn, including alpha before resizing.
-    let mut opaque = image.clone();
-    crtsim_core::config::flatten_alpha(&mut opaque, [0; 3]);
-    let thumbnail = image::DynamicImage::ImageRgba8(opaque)
-        .thumbnail(2048, 2048)
-        .to_rgba8();
     Loaded {
         name,
         path,
+        thumbnail: original(&image),
         image,
-        thumbnail,
         timeline: None,
         note,
     }
+}
+
+/// `image` made opaque and at most 2048 pixels on a side, for showing the original. It is made
+/// here to keep it off the interface's turn.
+fn original(image: &RgbaImage) -> RgbaImage {
+    let mut opaque = image.clone();
+    crtsim_core::config::flatten_alpha(&mut opaque, [0; 3]);
+    image::DynamicImage::ImageRgba8(opaque)
+        .thumbnail(2048, 2048)
+        .to_rgba8()
 }
 
 /// A file a browser handed over: a video or animation opens with its frames, anything else
@@ -955,14 +656,11 @@ async fn load_video(
 
 /// Frame `frame` of `video`, of `frames`, opened for editing with its timeline.
 fn opened(video: Video, frame: u64, frames: u64, image: RgbaImage) -> Loaded {
-    let thumbnail = image::DynamicImage::ImageRgba8(image.clone())
-        .thumbnail(2048, 2048)
-        .to_rgba8();
     Loaded {
         path: video.path.clone(),
         name: file_name(&video.path),
+        thumbnail: original(&image),
         image,
-        thumbnail,
         timeline: Some(Timeline::new(video, frame, frames)),
         note: None,
     }
@@ -1040,150 +738,6 @@ async fn preview(
             },
         )
         .await
-}
-
-/// A still at full resolution, saved as a PNG that carries its settings.
-async fn export_image(
-    graphics: &mut Graphics,
-    input: &RgbaImage,
-    config: &Config,
-    path: &Path,
-    cancel: &AtomicBool,
-    progress: &dyn Fn(Progress),
-    space: &crtsim_core::color::Space,
-) -> Result<()> {
-    let image = still(graphics, input, config, Some(cancel), |mut stage| {
-        stage.fraction *= 0.9;
-        progress(stage);
-    })
-    .await?;
-    ensure!(!cancel.load(Ordering::Relaxed), "Render cancelled");
-    progress(Progress {
-        fraction: 0.95,
-        stage: "Encoding and saving PNG".into(),
-    });
-    files::save_png(path, image, Some(config), space)
-}
-
-/// An animated GIF or WebP of `video`: encoded by FFmpeg on the desktop, and in a browser
-/// written here.
-async fn export_animation(
-    graphics: &mut Graphics,
-    video: &Video,
-    config: &Config,
-    options: &crtsim_media::AnimationOptions,
-    path: &Path,
-    cancel: &Arc<AtomicBool>,
-    progress: &dyn Fn(Progress),
-) -> Result<()> {
-    if cfg!(target_arch = "wasm32") {
-        return export_animation_here(graphics, video, config, options, path, cancel, progress)
-            .await;
-    }
-    let renderer = graphics.renderer(|| {}).await?;
-    crtsim_media::export_animation(video, path, config, options, renderer, cancel, progress)
-}
-
-/// An animation made here without FFmpeg, as a browser makes it, and saved, which in a
-/// browser is a download.
-async fn export_animation_here(
-    graphics: &mut Graphics,
-    video: &Video,
-    config: &Config,
-    options: &crtsim_media::AnimationOptions,
-    path: &Path,
-    cancel: &Arc<AtomicBool>,
-    progress: &dyn Fn(Progress),
-) -> Result<()> {
-    use crtsim_media::jobs;
-    let format = crtsim_media::AnimationFormat::of(path)
-        .ok_or_else(|| anyhow::anyhow!("Choose a GIF, WebP or PNG filename"))?;
-    let renderer = graphics.renderer(|| {}).await?;
-    let bytes = jobs::export_animation(
-        video,
-        format,
-        config,
-        options,
-        async |span| crate::frames::open(video, span, cancel).await,
-        async |sequence, frame, config| {
-            jobs::render(renderer, sequence, frame, config, cancel).await
-        },
-        async |frame, quality| lossy_webp(frame, quality).await,
-        cancel,
-        progress,
-    )
-    .await?;
-    ensure!(!cancel.load(Ordering::Relaxed), "Render cancelled");
-    let mime = match format {
-        crtsim_media::AnimationFormat::Gif => "image/gif",
-        crtsim_media::AnimationFormat::Webp => "image/webp",
-        crtsim_media::AnimationFormat::Apng => "image/png",
-    };
-    files::deliver(path, &bytes, mime)
-}
-
-/// A whole video exported in a browser without FFmpeg, and downloaded. Its frames and sound
-/// are encoded by the browser.
-#[cfg(target_arch = "wasm32")]
-async fn export_video(
-    graphics: &mut Graphics,
-    video: &Video,
-    config: &Config,
-    options: &Options,
-    path: &Path,
-    cancel: &Arc<AtomicBool>,
-    progress: &dyn Fn(Progress),
-) -> Result<()> {
-    let container = crtsim_media::Container::of(path)
-        .ok_or_else(|| anyhow::anyhow!("Choose an MP4 or WebM filename"))?;
-    let renderer = graphics.renderer(|| {}).await?;
-    let bytes = crtsim_media::jobs::export_video(
-        video,
-        container,
-        config,
-        options,
-        async |span| crate::frames::open(video, span, cancel).await,
-        async |sequence, frame, config| {
-            crtsim_media::jobs::render(renderer, sequence, frame, config, cancel).await
-        },
-        async |settings| crate::web_encode::Encoder::open(settings).await,
-        async |audio| crate::web_encode::opus(audio).await,
-        cancel,
-        progress,
-    )
-    .await?;
-    ensure!(!cancel.load(Ordering::Relaxed), "Render cancelled");
-    let mime = match container {
-        crtsim_media::Container::Webm => "video/webm",
-        _ => "video/mp4",
-    };
-    files::deliver(path, &bytes, mime)
-}
-
-/// A frame as a lossy still WebP, which only a browser's own encoder writes here.
-async fn lossy_webp(frame: &RgbaImage, quality: u8) -> Result<Vec<u8>> {
-    #[cfg(target_arch = "wasm32")]
-    return crate::web::lossy_webp(frame, quality).await;
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let _ = (frame, quality);
-        anyhow::bail!("Lossy WebP is written by FFmpeg on the desktop")
-    }
-}
-
-/// A whole video rendered and encoded by FFmpeg, with its audio and other tracks.
-#[cfg(not(target_arch = "wasm32"))]
-async fn export_video(
-    graphics: &mut Graphics,
-    video: &Video,
-    config: &Config,
-    options: &Options,
-    path: &Path,
-    cancel: &Arc<AtomicBool>,
-    progress: &dyn Fn(Progress),
-) -> Result<()> {
-    let renderer = graphics.renderer(|| {}).await?;
-    crtsim_media::export(video, path, config, options, renderer, cancel, progress)
 }
 
 /// Streams rendered frames of `video` into the feed, which the interface plays from. An error
@@ -1282,7 +836,8 @@ async fn pause() {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{export::export_animation_here, lanes::Task, *};
+    use std::{rc::Rc, task::Waker};
 
     fn thumbnail(generation: u64, index: usize) -> PreviewJob {
         PreviewJob::Thumbnail {

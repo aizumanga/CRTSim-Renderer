@@ -14,12 +14,37 @@ use crtsim_core::{presets, Renderer, Sequence};
 use image::RgbaImage;
 use std::sync::Mutex;
 
+/// One value of a choice an effect offers: the word a frei0r host is given it by, the label
+/// an OpenFX host shows for it, and what it chooses.
+#[derive(Clone, Copy, Debug)]
+pub struct Choice<T> {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub value: T,
+}
+
 /// The tube shapes an effect offers: the look's own, or one of these.
-pub const TUBES: [(&str, Option<f32>); 4] = [
-    ("The look's own", None),
-    ("4:3", Some(4. / 3.)),
-    ("16:10", Some(16. / 10.)),
-    ("16:9", Some(16. / 9.)),
+pub const TUBES: [Choice<Option<f32>>; 4] = [
+    Choice {
+        key: "look",
+        label: "The look's own",
+        value: None,
+    },
+    Choice {
+        key: "4:3",
+        label: "4:3",
+        value: Some(4. / 3.),
+    },
+    Choice {
+        key: "16:10",
+        label: "16:10",
+        value: Some(16. / 10.),
+    },
+    Choice {
+        key: "16:9",
+        label: "16:9",
+        value: Some(16. / 9.),
+    },
 ];
 
 /// How a clip's frames follow each other.
@@ -36,13 +61,22 @@ pub enum Timing {
 }
 
 impl Timing {
-    pub const ALL: [(Timing, &'static str); 3] = [
-        (Timing::Stable, "Glow between frames, artifacts still"),
-        (
-            Timing::Alternating,
-            "Glow between frames, artifacts alternating",
-        ),
-        (Timing::Off, "Each frame on its own"),
+    pub const ALL: [Choice<Timing>; 3] = [
+        Choice {
+            key: "stable",
+            label: "Glow between frames, artifacts still",
+            value: Timing::Stable,
+        },
+        Choice {
+            key: "alternating",
+            label: "Glow between frames, artifacts alternating",
+            value: Timing::Alternating,
+        },
+        Choice {
+            key: "off",
+            label: "Each frame on its own",
+            value: Timing::Off,
+        },
     ];
 }
 

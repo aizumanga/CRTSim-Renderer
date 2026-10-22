@@ -1,7 +1,8 @@
 //! Playing a video in the preview. The worker renders frames ahead into a small buffer and each
 //! is shown when its time comes. Playback waits for a few frames before its clock starts, and
 //! waits again whenever the renderer falls behind. Settings edited while it plays reach the
-//! frames rendered next, as a game's picture follows its options menu.
+//! frames rendered next, as a game's picture follows its options menu, a new output size
+//! included.
 use crate::*;
 use crtsim_core::Shape;
 use std::collections::VecDeque;
@@ -33,8 +34,8 @@ pub struct Playback {
     shown: f64,
     /// What the worker renders with, which edits replace.
     settings: PlayingSettings,
-    /// The shape of the sequence the worker plays, for the video's frames; none for settings
-    /// that cannot be played.
+    /// The shape of the sequence the worker started playing, for the video's frames; none for
+    /// settings that cannot be played. Its output size may since have been edited.
     shape: Option<Shape>,
     /// The size of the video's frames.
     source: (u32, u32),
@@ -79,11 +80,7 @@ impl Playback {
         } else {
             position
         };
-        // About 128 MB across the channel and the buffer, and at least one source and rendered
-        // frame in each.
-        let pixels = |(width, height): (u32, u32)| u64::from(width) * u64::from(height);
-        let pair_bytes = 4 * (pixels(video.size) + pixels(output));
-        let capacity = ((64 * 1024 * 1024) / pair_bytes.max(1)).clamp(1, 4) as usize;
+        let capacity = capacity(video.size, output);
         let (frames, receive) = mpsc::sync_channel(capacity);
         let cancel = Arc::new(AtomicBool::new(false));
         let shape = config.sequence_shape(video.size).ok();
@@ -127,13 +124,18 @@ impl Playback {
         self.failed
     }
 
-    /// Renders the frames from the next one on with `config`, unless it needs a CRT of another
-    /// signal size, output size or colour mode than the one playing, which only a new playback
-    /// can start. Whether it was taken. The frames already buffered play as they are, so the
-    /// edit shows within a few frames without the playback stopping to wait for it.
+    /// Renders the frames from the next one on with `config`, a new output size included, which
+    /// goes on with the CRT's glow. Whether it was taken: a new signal size or colour mode needs
+    /// a new CRT, and frames too large for the buffer this playback holds need a smaller one,
+    /// and only a new playback can start either. The frames already buffered play as they are,
+    /// so the edit shows within a few frames without the playback stopping to wait for it.
     pub fn retune(&self, config: Config) -> bool {
-        let next = config.sequence_shape(self.source).ok();
-        let taken = next.is_some() && next == self.shape;
+        let taken = match (&self.shape, config.sequence_shape(self.source)) {
+            (Some(shape), Ok(next)) => {
+                shape.keeps_history(&next) && capacity(self.source, next.output) >= self.capacity
+            }
+            _ => false,
+        };
         if taken {
             self.settings.set(config);
         }
@@ -185,6 +187,15 @@ impl Playback {
         }
         tick
     }
+}
+
+/// How many frames a playback holds ahead, in its channel and again in its buffer, for frames of
+/// `source` rendered at `output`: about 128 MB across both, and at least one source and rendered
+/// frame in each.
+fn capacity(source: (u32, u32), output: (u32, u32)) -> usize {
+    let pixels = |(width, height): (u32, u32)| u64::from(width) * u64::from(height);
+    let pair_bytes = 4 * (pixels(source) + pixels(output));
+    ((64 * 1024 * 1024) / pair_bytes.max(1)).clamp(1, 4) as usize
 }
 
 impl Drop for Playback {
@@ -634,7 +645,7 @@ mod tests {
     }
 
     #[test]
-    fn it_takes_a_new_look_but_not_a_new_size_or_colour_mode() {
+    fn it_takes_a_new_look_and_output_size_but_not_a_new_signal_or_colour_mode() {
         let config = Config {
             output: "320x240".into(),
             ..Config::default()
@@ -651,31 +662,38 @@ mod tests {
             brighter,
             "the worker's next frame takes it"
         );
+        let larger = Config {
+            output: "640x480".into(),
+            ..brighter.clone()
+        };
+        assert!(playback.retune(larger.clone()), "it goes on at a new size");
+        assert_eq!(*feed.settings.get(), larger);
         for refused in [
             Config {
-                output: "640x480".into(),
-                ..brighter.clone()
+                // Valid, but too large for the buffer this playback holds.
+                output: "4k".into(),
+                ..larger.clone()
             },
             Config {
                 signal: "128x112".into(),
-                ..brighter.clone()
+                ..larger.clone()
             },
             Config {
                 color_mode: ColorMode::LinearLight,
-                ..brighter.clone()
+                ..larger.clone()
             },
             Config {
                 output: "nonsense".into(),
-                ..brighter.clone()
+                ..larger.clone()
             },
         ] {
             assert!(!playback.retune(refused));
-            assert_eq!(*feed.settings.get(), brighter);
+            assert_eq!(*feed.settings.get(), larger);
         }
     }
 
     #[test]
-    fn an_edit_while_playing_keeps_it_playing_and_a_new_size_stops_it_to_start_again() {
+    fn an_edit_or_a_new_size_keeps_it_playing_and_a_new_colour_mode_stops_it_to_start_again() {
         let ctx = egui::Context::default();
         let mut app = App::new(
             &ctx,
@@ -696,9 +714,15 @@ mod tests {
         app.changed();
         assert!(app.playback.is_some() && !feed.cancel.load(Ordering::Relaxed));
         assert_eq!(feed.settings.get().bloom, 0.);
-        // A smaller preview needs a new sequence. Without a video open there is nothing to
-        // start again, which leaves it stopped.
+        // A smaller preview goes on with the CRT playing.
         app.preview.quality = preview::Quality::new(preview::Choice::Fixed(Some(800)));
+        app.changed();
+        assert!(app.playback.is_some() && !feed.cancel.load(Ordering::Relaxed));
+        let (width, height) = feed.settings.get().output_size(input).unwrap();
+        assert!(width.max(height) <= 800, "{width}x{height}");
+        // Another colour mode needs a new sequence. Without a video open there is nothing to
+        // start again, which leaves it stopped.
+        app.config.color_mode = ColorMode::LinearLight;
         app.changed();
         assert!(app.playback.is_none() && feed.cancel.load(Ordering::Relaxed));
     }
@@ -833,8 +857,8 @@ mod tests {
         assert!(last >= 0.4, "the lap was played out, to {last}");
     }
 
-    /// Edited while playing, a real video plays on with the new look, and starts again from
-    /// the frame on screen for a new preview size, to play to its end.
+    /// Edited while playing, a real video plays on with the new look and at a new preview size,
+    /// and starts again from the frame on screen for a new colour mode, to play to its end.
     #[test]
     #[ignore = "requires a Vulkan adapter and FFmpeg"]
     fn edits_while_playing_reach_the_next_frames_without_stopping() {
@@ -880,14 +904,20 @@ mod tests {
         }
         app.preview.quality = preview::Quality::new(preview::Choice::Fixed(Some(320)));
         app.changed();
+        assert_eq!(app.status, "Playing", "a new size plays on with the glow");
+        while time(&app) < 0.9 {
+            waited(&mut app);
+        }
+        app.config.color_mode = ColorMode::LinearLight;
+        app.changed();
         let restarted_at = time(&app);
-        assert!(app.playback.is_some(), "a new size starts it again");
+        assert!(app.playback.is_some(), "a new colour mode starts it again");
         while app.playback.is_some() {
             waited(&mut app);
         }
         assert_eq!(app.status, "Playback finished");
         assert!(
-            time(&app) >= 1.9 && restarted_at >= 0.6,
+            time(&app) >= 1.9 && restarted_at >= 0.9,
             "from the frame on screen to the end"
         );
     }

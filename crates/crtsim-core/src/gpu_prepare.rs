@@ -465,7 +465,7 @@ impl Pipelines {
             Picture::Texture(texture) => gpu::fullscreen(
                 encoder,
                 &source,
-                &self.copy_in[usize::from(texture.format().is_srgb())],
+                &self.copy_in[usize::from(gpu::holds_linear_light(texture.format()))],
                 &bind(&texture.create_view(&Default::default()), &self.no_kernel),
                 &[],
             ),

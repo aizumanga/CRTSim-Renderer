@@ -14,10 +14,13 @@ use crate::{
     made_here, mux, AnimationFormat, AnimationOptions, Container, Options, Progress, Rate, Source,
     Video,
 };
-use anyhow::{bail, ensure, Result};
+use anyhow::{bail, ensure, Context, Result};
 use crtsim_core::{config::Config, Renderer, Sequence};
 use image::RgbaImage;
-use std::sync::{atomic::AtomicBool, Arc};
+use std::{
+    path::Path,
+    sync::{atomic::AtomicBool, Arc},
+};
 use web_time::Instant;
 
 /// A video's frames in order, as a `Span` asks for them.
@@ -463,6 +466,45 @@ pub async fn export_animation<S: FrameSource>(
     let frames = plan.frames();
     let output = made_here::Animation::new(format, frames.size, options, lossy)?;
     export(&frames, open, render, output, cancel, progress).await
+}
+
+/// An animated GIF, WebP or PNG of `video`, as `output`'s extension asks, rendered on
+/// `renderer` and made here without FFmpeg: the file's bytes, and its format. The desktop
+/// writes it; a browser page downloads it.
+///
+/// `open` reads the frames a span asks for, from wherever the host decodes them; `lossy`
+/// encodes a lossy WebP's frames, which only a host with an encoder for them does.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each is one part the host supplies"
+)]
+pub async fn animation_here<S: FrameSource>(
+    video: &Video,
+    output: &Path,
+    config: &Config,
+    options: &AnimationOptions,
+    renderer: &Renderer,
+    open: impl AsyncFnMut(&Span) -> Result<S>,
+    lossy: impl AsyncFnMut(&RgbaImage, u8) -> Result<Vec<u8>>,
+    cancel: &AtomicBool,
+    progress: &dyn Fn(Progress),
+) -> Result<(Vec<u8>, AnimationFormat)> {
+    check_cancel(cancel)?;
+    let format = AnimationFormat::of(output).context("Choose a GIF, WebP or PNG filename")?;
+    let bytes = export_animation(
+        video,
+        format,
+        config,
+        options,
+        open,
+        async |sequence, frame, config| render(renderer, sequence, frame, config, cancel).await,
+        lossy,
+        cancel,
+        progress,
+    )
+    .await?;
+    check_cancel(cancel)?;
+    Ok((bytes, format))
 }
 
 #[cfg(test)]

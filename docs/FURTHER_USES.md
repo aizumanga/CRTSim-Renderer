@@ -71,9 +71,9 @@ promising anything.
 
 Three depths, from least to most work per engine:
 
-**a. Rust engines that use wgpu (Bevy, custom renderers).** These are the most direct. A Bevy
-plugin adds a post-processing node that calls `encode` with the camera's output. Each camera has
-its own `Sequence`, which must be reset on resize. Players then get the same presets JSON as the
+**a. Rust engines that use wgpu (Bevy, custom renderers).** These are the most direct. Done for
+Bevy: `crtsim-bevy` calls `encode` with each camera's picture after Bevy's post-processing. Each
+camera has its own host `Sequence`, which goes on with its glow through a resize. Players then get the same presets JSON as the
 app, and a settings screen can reuse `crtsim_core::settings::SETTINGS`: names, ranges and
 defaults, already described once.
 
@@ -92,7 +92,7 @@ slang's `PassFeedback` and a persistent texture in ReShade.
 **c. Other engines (Godot, Unity, Unreal, GameMaker).** Port the baked full-screen passes to
 the engine's shader language:
 
-- Godot 4: `CompositorEffect`.
+- Godot 4: `CompositorEffect`. Done: `ports/godot`, sharing the passes, checked in Godot itself.
 - Unity: a URP `ScriptableRendererFeature`.
 - Unreal: a post-process material, with a render target for history.
 
@@ -130,7 +130,8 @@ and every port shares one translation of the passes, OBS's filter included
 | 2 | `crtsim-web` with an image and webcam demo page | The widest audience, with WGSL as it is. |
 | 3 | ~~Baked mesh textures and a full-screen-only variant, checked against the goldens~~ Done: the glass is ray-traced and the bezel baked, in one full-screen pass | Every engine without mesh support. |
 | 4 | ~~RetroArch slang preset, then ReShade~~ Done, sharing their passes | Emulators and existing PC games. |
-| 5 | Bevy plugin; ~~OBS filter~~ Done, as a shader port | Rust games; live streams. |
+| 5 | ~~Bevy plugin~~ Done, embedding the renderer; ~~OBS filter~~ Done, as a shader port | Rust games; live streams. |
+| 6 | ~~Godot 4 compositor effect~~ Done, as a shader port | Godot games, 2D and 3D. |
 
 Visual parity with the mesh renderer has to be checked for step 3. The golden-image tests
 already compare renders pixel by pixel, so the baked variant can be held to the same fixtures

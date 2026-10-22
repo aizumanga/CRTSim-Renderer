@@ -451,16 +451,14 @@ pub fn export_animation_here(
     cancel: &Arc<AtomicBool>,
     progress: impl FnMut(Progress),
 ) -> Result<()> {
-    check_cancel(cancel)?;
-    let format = AnimationFormat::of(output).context("Choose a GIF, WebP or PNG filename")?;
     let progress = RefCell::new(progress);
-    let bytes = pollster::block_on(jobs::export_animation(
+    let (bytes, _) = pollster::block_on(jobs::animation_here(
         video,
-        format,
+        output,
         config,
         options,
+        renderer,
         async |span| jobs::frames(video, span, cancel),
-        async |sequence, frame, config| render_frame(renderer, sequence, frame, config, cancel),
         async |_, _| anyhow::bail!("A lossy WebP needs FFmpeg; ask for a lossless one"),
         cancel,
         &|step| (progress.borrow_mut())(step),

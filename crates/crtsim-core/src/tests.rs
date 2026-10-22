@@ -1,4 +1,5 @@
 use super::*;
+use config::Phase;
 
 /// A still with the signals it was made from.
 struct Rendered {
@@ -58,7 +59,7 @@ fn video_history_survives_between_frames_and_resets_for_new_sequence() {
 }
 #[test]
 #[ignore = "requires a Vulkan adapter"]
-fn an_editing_sequence_follows_edits_on_its_history_and_restarts_for_new_sizes() {
+fn an_editing_sequence_follows_edits_on_its_history_and_restarts_for_a_new_signal() {
     let r = pollster::block_on(Renderer::new(wgpu::Backends::VULKAN)).unwrap();
     let c = Config {
         output: "160x120".into(),
@@ -85,17 +86,59 @@ fn an_editing_sequence_follows_edits_on_its_history_and_restarts_for_new_sizes()
     );
     let resized = Config {
         output: "200x150".into(),
-        ..edited
+        ..edited.clone()
+    };
+    let at_new_size = next(&r, &mut editing, &card, &resized);
+    assert_eq!(at_new_size.dimensions(), (200, 150));
+    assert_ne!(
+        at_new_size,
+        render(&r, &card, &resized).unwrap().crt,
+        "a new output size runs on from the glow before it"
+    );
+    let resampled = Config {
+        signal: "64x64".into(),
+        ..resized.clone()
     };
     assert_eq!(
-        next(&r, &mut editing, &card, &resized),
-        render(&r, &card, &resized).unwrap().crt,
-        "a new output size starts again from a still"
+        next(&r, &mut editing, &card, &resampled),
+        render(&r, &card, &resampled).unwrap().crt,
+        "a new signal size starts again from a still"
     );
-    let mut video = Sequence::video(crate::Timing::Stable, 60.);
-    next(&r, &mut video, &card, &c);
+}
+
+#[test]
+#[ignore = "requires a Vulkan adapter"]
+fn a_video_keeps_its_glow_at_a_new_output_size_and_refuses_a_new_signal() {
+    let r = pollster::block_on(Renderer::new(wgpu::Backends::VULKAN)).unwrap();
+    let c = Config {
+        output: "160x120".into(),
+        signal: "32x32".into(),
+        warmup: 0,
+        persistence: [0.9; 3],
+        ..Config::default()
+    };
+    let white = RgbaImage::from_pixel(32, 32, image::Rgba([255; 4]));
+    let black = RgbaImage::from_pixel(32, 32, image::Rgba([0, 0, 0, 255]));
+    let resized = Config {
+        output: "320x240".into(),
+        ..c.clone()
+    };
+    let mut video = Sequence::video(Timing::Stable, 60.);
+    next(&r, &mut video, &white, &c);
+    let trailing = next(&r, &mut video, &black, &resized);
+    assert_eq!(trailing.dimensions(), (320, 240));
+    let mut fresh = Sequence::video(Timing::Stable, 60.);
+    assert_ne!(
+        trailing,
+        next(&r, &mut fresh, &black, &resized),
+        "the white still glows behind the black at the new size"
+    );
+    let resampled = Config {
+        signal: "64x64".into(),
+        ..resized
+    };
     assert!(
-        pollster::block_on(r.frame(&mut video, &card, &resized, None, |_| {})).is_err(),
+        pollster::block_on(r.frame(&mut video, &black, &resampled, None, |_| {})).is_err(),
         "a video's sequence never restarts by itself"
     );
 }
@@ -144,6 +187,55 @@ fn host_bytes(r: &Renderer, texture: &wgpu::Texture) -> RgbaImage {
 }
 
 /// `sequence`'s next frame recorded for a host, from `source` into `target`, and submitted.
+/// The colours a float texture of linear light holds, encoded as sRGB bytes.
+fn float_bytes(r: &Renderer, texture: &wgpu::Texture) -> RgbaImage {
+    let (width, height) = (texture.width(), texture.height());
+    let pitch = (width * 8).div_ceil(256) * 256;
+    let buffer = r.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("float readback"),
+        size: u64::from(pitch * height),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = r.device.create_command_encoder(&Default::default());
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(pitch),
+                rows_per_image: None,
+            },
+        },
+        gpu::extent(width, height),
+    );
+    r.queue.submit(Some(encoder.finish()));
+    buffer
+        .slice(..)
+        .map_async(wgpu::MapMode::Read, |result| result.unwrap());
+    r.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    let bytes = buffer.slice(..).get_mapped_range().unwrap();
+    let encode = |v: f32| {
+        let v = v.clamp(0., 1.);
+        let v = if v <= 0.0031308 {
+            v * 12.92
+        } else {
+            1.055 * v.powf(1. / 2.4) - 0.055
+        };
+        (v * 255.).round() as u8
+    };
+    RgbaImage::from_fn(width, height, |x, y| {
+        let at = (y * pitch + x * 8) as usize;
+        let texel: &[half::f16] = bytemuck::cast_slice(&bytes[at..at + 8]);
+        image::Rgba([
+            encode(texel[0].to_f32()),
+            encode(texel[1].to_f32()),
+            encode(texel[2].to_f32()),
+            255,
+        ])
+    })
+}
 fn hosted(
     r: &Renderer,
     sequence: &mut Sequence,
@@ -178,7 +270,7 @@ fn a_host_frame_draws_what_a_video_frame_draws_and_keeps_its_glow_at_a_new_size(
     next(&r, &mut video, &card, &c);
     let expected = next(&r, &mut video, &black, &c);
 
-    use wgpu::TextureFormat::{Bgra8UnormSrgb, Rgba8Unorm, Rgba8UnormSrgb};
+    use wgpu::TextureFormat::{Bgra8UnormSrgb, Rgba16Float, Rgba8Unorm, Rgba8UnormSrgb};
     let first = host_texture(&r, Rgba8Unorm, (256, 224), Some(&card));
     let second = host_texture(&r, Rgba8Unorm, (256, 224), Some(&black));
     let target = host_texture(&r, Rgba8Unorm, (320, 240), None);
@@ -204,6 +296,50 @@ fn a_host_frame_draws_what_a_video_frame_draws_and_keeps_its_glow_at_a_new_size(
         .flat_map(|(a, b)| (0..3).map(move |i| a[i].abs_diff(b[i])))
         .max();
     assert!(most <= Some(1), "sRGB textures differ by {most:?} steps");
+
+    // Float textures hold linear light, as an engine's HDR target does: read and drawn as the
+    // colours they encode, they give what sRGB textures give.
+    let linear = |image: &RgbaImage| {
+        let texture = host_texture(&r, Rgba16Float, image.dimensions(), None);
+        let texels: Vec<half::f16> = image
+            .pixels()
+            .flat_map(|pixel| {
+                let decode = |v: u8| {
+                    let v = f32::from(v) / 255.;
+                    if v <= 0.04045 {
+                        v / 12.92
+                    } else {
+                        ((v + 0.055) / 1.055).powf(2.4)
+                    }
+                };
+                [decode(pixel[0]), decode(pixel[1]), decode(pixel[2]), 1.]
+            })
+            .map(half::f16::from_f32)
+            .collect();
+        r.queue.write_texture(
+            texture.as_image_copy(),
+            bytemuck::cast_slice(&texels),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(8 * image.width()),
+                rows_per_image: None,
+            },
+            gpu::extent(image.width(), image.height()),
+        );
+        texture
+    };
+    let first = linear(&card);
+    let second = linear(&black);
+    let target = host_texture(&r, Rgba16Float, (320, 240), None);
+    let mut host = Sequence::host();
+    hosted(&r, &mut host, &first, &target, &c);
+    hosted(&r, &mut host, &second, &target, &c);
+    let most = float_bytes(&r, &target)
+        .pixels()
+        .zip(expected.pixels())
+        .flat_map(|(a, b)| (0..3).map(move |i| a[i].abs_diff(b[i])))
+        .max();
+    assert!(most <= Some(1), "float textures differ by {most:?} steps");
 
     // A new output size keeps the glow: the card still shows behind black at twice the size.
     let card = host_texture(&r, Rgba8Unorm, (256, 224), Some(&card));
@@ -255,6 +391,15 @@ fn a_host_frame_needs_a_host_sequence_and_usable_textures() {
             .encode(&mut encoder, &mut Sequence::host(), &frame, &c)
             .is_err());
     }
+    // A frame of no time, as an engine's first can be, holds the glow as it is.
+    let source = host_texture(&r, wgpu::TextureFormat::Rgba8Unorm, (16, 16), None);
+    let frame = HostFrame {
+        source: &source,
+        target: &texture,
+        seconds: 0.,
+    };
+    r.encode(&mut encoder, &mut Sequence::host(), &frame, &c)
+        .unwrap();
 }
 
 #[test]
@@ -283,33 +428,6 @@ fn preview_frame_matches_the_pixels_a_read_back_render_produces() {
         pollster::block_on(r.read_target(&target)).unwrap(),
         render(&r, &source, &c).unwrap().crt
     );
-}
-
-#[test]
-fn ntsc_blending_moves_the_two_phases_towards_each_other() {
-    let artifact_mix = |phase, ntsc_blending, tick| {
-        let c = Config {
-            phase,
-            ntsc_blending,
-            ..Config::default()
-        };
-        let mut params = Params::new(&c, (256, 224), (320, 240));
-        params.tick(c.phase, c.ntsc_blending, tick);
-        params.signal[3]
-    };
-    // Unblended, the public source's switch between the two patterns.
-    assert_eq!(artifact_mix(Phase::A, 0., 0), 0.);
-    assert_eq!(artifact_mix(Phase::B, 0., 0), 1.);
-    assert_eq!(artifact_mix(Phase::Alternating, 0., 7), 1.);
-    // Super Win the Game's 0.35: each tick mixes in half that of the other pattern, as the
-    // game's NTSCLerp = p + (0.5 - p) * 0.35 does.
-    assert_eq!(artifact_mix(Phase::A, 0.35, 0), 0.175);
-    assert_eq!(artifact_mix(Phase::B, 0.35, 0), 0.825);
-    assert_eq!(artifact_mix(Phase::Alternating, 0.35, 4), 0.175);
-    assert_eq!(artifact_mix(Phase::Alternating, 0.35, 5), 0.825);
-    // Fully blended, every tick shows the average, as stable phase always does.
-    assert_eq!(artifact_mix(Phase::Alternating, 1., 1), 0.5);
-    assert_eq!(artifact_mix(Phase::Stable, 0.35, 0), 0.5);
 }
 
 /// The GPU prepare step against the CPU one it replaced, across a spread of routes and

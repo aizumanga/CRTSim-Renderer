@@ -75,6 +75,14 @@ impl Target {
     }
 }
 
+/// Whether a host's texture of `format` holds linear light, which the CRT reads and draws as
+/// the colors it encodes: an sRGB format, which the hardware encodes and decodes, or a float
+/// one, as an engine's HDR target is.
+pub(crate) fn holds_linear_light(format: wgpu::TextureFormat) -> bool {
+    use wgpu::TextureFormat::{Rg11b10Ufloat, Rgba16Float, Rgba32Float};
+    format.is_srgb() || matches!(format, Rgba16Float | Rgba32Float | Rg11b10Ufloat)
+}
+
 pub(crate) fn extent(width: u32, height: u32) -> wgpu::Extent3d {
     wgpu::Extent3d {
         width,

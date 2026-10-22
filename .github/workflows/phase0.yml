@@ -39,11 +39,16 @@ jobs:
       - name: Web app compiles for the browser
         if: runner.os == 'Linux'
         run: cargo clippy --locked --target wasm32-unknown-unknown -p crtsim-core -p crtsim-shader-ports -p crtsim-app --no-deps -- -D warnings
-      # crtsim-core is published on crates.io: it must package, and build from its package
-      # alone, with nothing from outside its folder.
-      - name: crtsim-core packages for crates.io
+      # A Bevy game in a browser draws with the plugin too.
+      - name: The Bevy plugin compiles for the browser
         if: runner.os == 'Linux'
-        run: cargo package --locked -p crtsim-core
+        run: cargo clippy --locked --target wasm32-unknown-unknown -p crtsim-bevy --no-deps -- -D warnings
+      # crtsim-core and crtsim-bevy are published on crates.io: each must package, and build
+      # from its package alone, with nothing from outside its folder; the plugin builds on the
+      # renderer's package.
+      - name: crtsim-core and crtsim-bevy package for crates.io
+        if: runner.os == 'Linux'
+        run: cargo package --locked -p crtsim-core -p crtsim-bevy
       - run: cargo run --locked -p crtsim-cli -- inspect-meshes
       - run: python tools/verify_assets.py
       - name: Check formatting
@@ -85,6 +90,8 @@ jobs:
         run: cargo test --locked -p crtsim-core gpu_prepare_matches_cpu_prepare -- --ignored --nocapture
       - name: A host's frames, recorded into its own encoder
         run: cargo test --locked -p crtsim-core a_host_frame -- --ignored --nocapture
+      - name: Bevy cameras drawn through the CRT, in a Bevy app with no window
+        run: cargo test --locked -p crtsim-bevy --test headless -- --ignored --nocapture
       - name: The render service, spoken to over HTTP
         run: cargo test --locked -p crtsim-service --test service -- --ignored --nocapture
       - name: Golden-image rendering regression
@@ -115,9 +122,23 @@ jobs:
           cmake -S ports/obs -B build/obs -DCRTSIM_OBS_TEST=ON -DCMAKE_COMPILE_WARNING_AS_ERROR=ON
           cmake --build build/obs
           xvfb-run -a cargo test --locked -p crtsim-ports --test obs_parity -- --ignored --nocapture
+      # Godot's own build, checked against the checksums its release publishes.
+      - name: Godot effect against the renderer, in Godot itself
+        env:
+          GODOT_VERSION: 4.7.2-stable
+        run: |
+          base="https://github.com/godotengine/godot/releases/download/$GODOT_VERSION"
+          mkdir -p build/godot && cd build/godot
+          curl --fail --location --retry 3 -o godot.zip "$base/Godot_v${GODOT_VERSION}_linux.x86_64.zip"
+          curl --fail --location --retry 3 -o SHA512-SUMS.txt "$base/SHA512-SUMS.txt"
+          grep " Godot_v${GODOT_VERSION}_linux.x86_64.zip$" SHA512-SUMS.txt | sed 's/  .*/  godot.zip/' | sha512sum -c
+          unzip -q godot.zip
+          cd ../..
+          CRTSIM_GODOT="$PWD/build/godot/Godot_v${GODOT_VERSION}_linux.x86_64" xvfb-run -a cargo test --locked -p crtsim-ports --test godot_parity -- --ignored --nocapture
       - name: Video history, FFmpeg and audio integration
         run: |
           cargo test --locked -p crtsim-core video_history -- --ignored --nocapture
+          cargo test --locked -p crtsim-core a_video_keeps_its_glow_at_a_new_output_size -- --ignored --nocapture
           cargo test --locked -p crtsim-core interlaced_ticks_scan_alternate_fields -- --ignored --nocapture
           cargo test --locked -p crtsim-core an_editing_sequence_follows_edits -- --ignored --nocapture
           cargo test --locked -p crtsim-media --test video -- --ignored --nocapture --test-threads=1

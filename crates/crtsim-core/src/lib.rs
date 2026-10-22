@@ -11,6 +11,7 @@ pub mod input;
 pub mod mesh;
 pub mod nes_luts;
 pub mod palette;
+mod params;
 pub mod presets;
 mod sequence;
 pub mod settings;
@@ -27,10 +28,10 @@ pub mod textures {
 }
 
 use anyhow::{ensure, Context, Result};
-use bytemuck::{Pod, Zeroable};
-use config::{ColorMode, Config, Phase};
+use config::{ColorMode, Config};
 use gpu::{Readback, Target, FORMAT};
 use image::RgbaImage;
+use params::{Params, Uniforms, BATCH, PARAMS_SIZE, SURFACE_SLOT};
 use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -38,139 +39,10 @@ use std::sync::{
 };
 
 pub use gpu_prepare::PrepareOn;
+use sequence::Follow;
 pub use sequence::{Sequence, Shape, Timing};
 
 pub const SHADER: &str = include_str!("../shaders/crtsim.wgsl");
-
-/// The shader's settings, laid out as `Params` in `crtsim.wgsl`.
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct Params {
-    mvp: [[f32; 4]; 4],
-    size: [f32; 4],
-    signal: [f32; 4],
-    persistence: [f32; 4],
-    geometry: [f32; 4],
-    mask: [f32; 4],
-    lighting: [f32; 4],
-    surface: [f32; 4],
-    bezel: [f32; 4],
-    light: [f32; 4],
-    camera: [f32; 4],
-    bloom: [f32; 4],
-    processing: [f32; 4],
-    backdrop: [f32; 4],
-}
-
-/// What a tube's aspect makes of the original's 4:3 one, worked out here so that for 4:3 they
-/// are exactly the original's, whatever a GPU's division rounds to.
-struct Tube {
-    /// The glass across, over the original's.
-    stretch: f32,
-    /// How much wider each side is than the original's, or narrower where it is negative.
-    widening: f32,
-    /// How much more the view takes in, so a tube wider than an output of `output`'s shape is
-    /// framed as a 4:3 one is in an output of the tube's shape; 1 for any other.
-    framing: f32,
-}
-
-impl Tube {
-    fn new(aspect: f32, output: (u32, u32)) -> Self {
-        const ORIGINAL: f32 = 4. / 3.;
-        let output = output.0 as f32 / output.1 as f32;
-        Self {
-            stretch: aspect / ORIGINAL,
-            widening: aspect - ORIGINAL,
-            framing: (aspect / output.max(ORIGINAL)).max(1.),
-        }
-    }
-}
-
-/// The size of `Params`, which each settings slot holds.
-const PARAMS_SIZE: Option<std::num::NonZeroU64> =
-    std::num::NonZeroU64::new(std::mem::size_of::<Params>() as u64);
-
-impl Params {
-    /// Everything but the composite phase and the interlaced field, which `tick` sets.
-    fn new(c: &Config, signal: (u32, u32), output: (u32, u32)) -> Self {
-        let fov = c.fov.to_radians();
-        let distance = 1. / (fov * 0.5).tan();
-        let camera = glam::Vec3::new(-distance, 0., 0.);
-        let view = glam::Mat4::look_at_rh(camera, glam::Vec3::ZERO, glam::Vec3::Z);
-        let projection =
-            glam::Mat4::perspective_rh(fov, output.0 as f32 / output.1 as f32, 0.1, 100.);
-        let uv = c.uv_scale(signal);
-        let mask = c.mask_repeats.resolve(signal);
-        let tube = Tube::new(c.tube_aspect, output);
-        let flag = |on: bool| if on { 1. } else { 0. };
-        Self {
-            mvp: (projection * view).to_cols_array_2d(),
-            size: [
-                signal.0 as f32,
-                signal.1 as f32,
-                output.0 as f32,
-                output.1 as f32,
-            ],
-            signal: [c.sharpness, c.bleed, c.artifacts, 0.5],
-            persistence: [
-                c.persistence[0],
-                c.persistence[1],
-                c.persistence[2],
-                flag(c.flip_artifacts),
-            ],
-            geometry: [uv[0], uv[1], c.overscan, c.barrel],
-            mask: [mask[0], mask[1], c.mask_brightness, c.mask_opacity],
-            lighting: [c.diffuse, c.specular, c.specular_power, c.rim],
-            surface: [
-                c.dimming,
-                c.reflection,
-                c.saturation,
-                flag(c.mask_antialias),
-            ],
-            bezel: [
-                c.frame_color[0],
-                c.frame_color[1],
-                c.frame_color[2],
-                flag(c.reflection_as_screen),
-            ],
-            light: [
-                c.light_position[0],
-                c.light_position[1],
-                c.light_position[2],
-                tube.stretch,
-            ],
-            camera: [camera.x, camera.y, camera.z, c.tube_aspect],
-            bloom: [c.bloom, c.bloom_power, c.bloom_spread, tube.widening],
-            processing: [
-                flag(c.color_mode == ColorMode::LinearLight),
-                flag(c.interlace),
-                0.,
-                flag(c.screen_only),
-            ],
-            backdrop: [
-                c.backdrop_color[0],
-                c.backdrop_color[1],
-                c.backdrop_color[2],
-                tube.framing,
-            ],
-        }
-    }
-
-    /// The composite phase for `tick`, and the field it scans when interlaced. `blending` moves
-    /// the two phases towards their average as the game's NTSC Blending does: its `NTSCLerp` is
-    /// `p + (0.5 - p) * blending` for the tick's phase `p` of 0 or 1.
-    fn tick(&mut self, phase: Phase, blending: f32, tick: u64) {
-        let (a, b) = (0.5 * blending, 1. - 0.5 * blending);
-        self.signal[3] = match phase {
-            Phase::Stable => 0.5,
-            Phase::A => a,
-            Phase::B => b,
-            Phase::Alternating if tick.is_multiple_of(2) => a,
-            Phase::Alternating => b,
-        };
-        self.processing[2] = (tick % 2) as f32;
-    }
-}
 
 /// The format a color mode draws the glass, lighting and bloom in.
 fn surface_format(mode: ColorMode) -> wgpu::TextureFormat {
@@ -228,46 +100,8 @@ pub(crate) struct Workspace {
     shape: Shape,
 }
 
-/// Ticks encoded before each submission, which is also where a frame reports progress and
-/// notices a cancel.
-const BATCH: u32 = 8;
-
 /// The most memory a render's targets may take, as `Renderer::fits` estimates them.
 const BUDGET: u64 = 1_500_000_000;
-
-/// A workspace's settings, one slot per tick of a batch and one for the surface passes, each
-/// reached by dynamic offset. `write_buffer` takes effect when the batch is submitted, so every
-/// tick needs a slot of its own: sharing one would give them all the last tick's settings.
-struct Uniforms {
-    buffer: wgpu::Buffer,
-    stride: u32,
-}
-
-/// The surface passes' slot, after the ticks'.
-const SURFACE_SLOT: u32 = BATCH;
-
-impl Uniforms {
-    fn new(device: &wgpu::Device) -> Self {
-        let alignment = device.limits().min_uniform_buffer_offset_alignment;
-        let stride = (std::mem::size_of::<Params>() as u32).div_ceil(alignment) * alignment;
-        Self {
-            buffer: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("settings"),
-                size: u64::from(stride * (SURFACE_SLOT + 1)),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }),
-            stride,
-        }
-    }
-
-    /// Puts `params` in `slot` for the next submission, and returns the slot's offset.
-    fn write(&self, queue: &wgpu::Queue, slot: u32, params: &Params) -> u32 {
-        let offset = slot * self.stride;
-        queue.write_buffer(&self.buffer, offset.into(), bytemuck::bytes_of(params));
-        offset
-    }
-}
 
 /// The bind groups of a workspace's passes, made once with it.
 struct Bindings {
@@ -315,12 +149,13 @@ pub struct Renderer {
 pub struct HostFrame<'a> {
     /// The host's picture: a 2D texture on the renderer's device, bound for sampling, of a
     /// color format with float samples, such as `Rgba8Unorm`, `Bgra8UnormSrgb` or
-    /// `Rgba16Float`. An sRGB format reads as the colors it encodes, so it is read as such.
+    /// `Rgba16Float`. An sRGB or float format holds linear light, as an engine's HDR target
+    /// does, so it is read as the colors it encodes; any other holds them encoded.
     pub source: &'a wgpu::Texture,
     /// Where the CRT is drawn, filling it: a 2D texture of a color format with float samples,
     /// bound as a render attachment, such as a window's surface texture. Its size is the
-    /// output's, whatever the settings' export size says. An sRGB format is given the colors
-    /// it is to encode.
+    /// output's, whatever the settings' export size says. An sRGB or float format is given
+    /// linear light, the colors it is to encode.
     pub target: &'a wgpu::Texture,
     /// How long the frame before this one was on screen, in seconds, which this one's glow
     /// decays by: a sixtieth for a host running at 60 frames a second.
@@ -599,6 +434,7 @@ impl Renderer {
         ensure!(!cancelled(), "Render cancelled");
         let mut report = |fraction, stage| progress(RenderProgress { fraction, stage });
         report(0., Stage::Preparing);
+        config.validate()?;
         let c = &sequence.timed(config);
         let plan = self.plan(input, c)?;
         let clean = if plan.prepare_on_gpu {
@@ -606,21 +442,9 @@ impl Renderer {
         } else {
             Some(config::prepare(input, c)?)
         };
-        if sequence
-            .workspace
-            .as_ref()
-            .is_some_and(|workspace| workspace.shape != plan.shape)
-        {
-            ensure!(
-                sequence.restarts(),
-                "Start a new video sequence after changing signal size, output size or color mode"
-            );
-            sequence.restart();
-        }
+        self.follow(sequence, plan.shape)?;
         let ticks = sequence.ticks(c.warmup);
-        let workspace = sequence
-            .workspace
-            .get_or_insert_with(|| self.workspace(plan.shape));
+        let workspace = sequence.workspace.as_mut().expect("made by follow");
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -639,25 +463,16 @@ impl Renderer {
             ),
         }
         let mut params = Params::new(c, plan.shape.signal, plan.shape.output);
-        // A sequence starts from cleared history, then warms up.
-        let first = sequence.tick == 0;
-        if first {
-            for target in &workspace.history {
-                gpu::clear(&mut encoder, target);
-            }
-        }
         report(0.05, Stage::Simulating { done: 0, of: ticks });
         for step in 0..ticks {
             ensure!(!cancelled(), "Render cancelled");
-            let tick = sequence.tick;
-            params.tick(c.phase, c.ntsc_blending, tick);
-            let offset = workspace.uniforms.write(&self.queue, step % BATCH, &params);
-            gpu::fullscreen(
+            self.composite(
                 &mut encoder,
-                &workspace.history[written(tick)],
-                &self.pipelines.composite,
-                &workspace.bindings.composite[written(tick)],
-                &[offset],
+                workspace,
+                &mut params,
+                c,
+                sequence.tick,
+                step % BATCH,
             );
             sequence.tick += 1;
             // Report completed GPU work, not just command encoding. Small batches keep overhead bounded.
@@ -804,8 +619,10 @@ impl Renderer {
              attachment"
         );
         sequence.lasted(frame.seconds);
+        // The settings as given, since a frame of no time holds the glow as it is, which
+        // settings could not ask for.
+        config.validate()?;
         let c = &sequence.timed(config);
-        c.validate()?;
         let input = (source.width(), source.height());
         let limit = self.device.limits().max_texture_dimension_2d;
         ensure!(
@@ -818,23 +635,8 @@ impl Renderer {
             color_mode: c.color_mode,
         };
         self.fits(shape)?;
-        sequence.workspace = match sequence.workspace.take() {
-            Some(workspace) if workspace.shape == shape => Some(workspace),
-            Some(workspace)
-                if workspace.shape.signal == shape.signal
-                    && workspace.shape.color_mode == shape.color_mode =>
-            {
-                Some(self.reshaped(workspace, shape.output))
-            }
-            Some(_) => {
-                sequence.restart();
-                None
-            }
-            None => None,
-        };
-        let workspace = sequence
-            .workspace
-            .get_or_insert_with(|| self.workspace(shape));
+        self.follow(sequence, shape)?;
+        let workspace = sequence.workspace.as_mut().expect("made by follow");
         self.prepare_pipelines.encode(
             &self.device,
             &self.queue,
@@ -844,22 +646,9 @@ impl Renderer {
             c,
             &workspace.source,
         );
-        if sequence.tick == 0 {
-            for target in &workspace.history {
-                gpu::clear(encoder, target);
-            }
-        }
         let tick = sequence.tick;
         let mut params = Params::new(c, shape.signal, shape.output);
-        params.tick(c.phase, c.ntsc_blending, tick);
-        let offset = workspace.uniforms.write(&self.queue, 0, &params);
-        gpu::fullscreen(
-            encoder,
-            &workspace.history[written(tick)],
-            &self.pipelines.composite,
-            &workspace.bindings.composite[written(tick)],
-            &[offset],
-        );
+        let offset = self.composite(encoder, workspace, &mut params, c, tick, 0);
         sequence.tick += 1;
         self.surface(encoder, workspace, written(tick), &params, c);
         let format = target.format();
@@ -868,7 +657,7 @@ impl Renderer {
             .lock()
             .map_err(|_| anyhow::anyhow!("a frame for a host failed while making its pass"))?;
         let deliver = pipelines.entry(format).or_insert_with(|| {
-            let entry = if format.is_srgb() {
+            let entry = if gpu::holds_linear_light(format) {
                 "deliver_srgb"
             } else {
                 "deliver"
@@ -893,6 +682,56 @@ impl Renderer {
             &bindings,
             &[offset],
         );
+        Ok(())
+    }
+
+    /// Records tick `tick` of a sequence: the clean signal composited onto the history the tick
+    /// before wrote, with the tick's settings in uniform slot `slot`, whose offset it returns. A
+    /// sequence's first tick clears its history first, so it starts from a dark tube.
+    fn composite(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        workspace: &Workspace,
+        params: &mut Params,
+        c: &Config,
+        tick: u64,
+        slot: u32,
+    ) -> u32 {
+        if tick == 0 {
+            for target in &workspace.history {
+                gpu::clear(encoder, target);
+            }
+        }
+        params.tick(c.phase, c.ntsc_blending, tick);
+        let offset = workspace.uniforms.write(&self.queue, slot, params);
+        gpu::fullscreen(
+            encoder,
+            &workspace.history[written(tick)],
+            &self.pipelines.composite,
+            &workspace.bindings.composite[written(tick)],
+            &[offset],
+        );
+        offset
+    }
+
+    /// Makes `sequence` ready for a frame of `shape`, as the sequence says it follows into
+    /// one: its workspace kept, drawn at the new output size with its history, or made afresh.
+    fn follow(&self, sequence: &mut Sequence, shape: Shape) -> Result<()> {
+        let from = sequence.workspace.as_ref().map(|workspace| workspace.shape);
+        match from.map_or(Ok(Follow::Same), |from| sequence.follow(&from, &shape))? {
+            Follow::Same => {}
+            Follow::Reshape => {
+                let workspace = sequence
+                    .workspace
+                    .take()
+                    .expect("a sequence that reshapes has one");
+                sequence.workspace = Some(self.reshaped(workspace, shape.output));
+            }
+            Follow::Restart => sequence.restart(),
+        }
+        sequence
+            .workspace
+            .get_or_insert_with(|| self.workspace(shape));
         Ok(())
     }
 
@@ -972,8 +811,8 @@ impl Renderer {
         }
     }
 
+    /// How to render `input` with `c`, settings already checked before being timed.
     fn plan(&self, input: &RgbaImage, c: &Config) -> Result<Plan> {
-        c.validate()?;
         let shape = c.sequence_shape(input.dimensions())?;
         let estimated = self.fits(shape)?;
         // Preparing on the device puts the input there as it is, plus the resize's intermediate.

@@ -18,7 +18,7 @@ It is not an official product or an exact reconstruction of a commercial game's 
 - Logical signal and output resolution presets; custom dimensions; JSON settings.
 - Clean/signal/full-CRT debugging and mesh validation/export without a GPU.
 - Native wgpu backends: Vulkan on Linux, DX12 on Windows and Metal on macOS.
-- A web app on WebGPU that lays itself out for phones, and the CRT in RetroArch, ReShade and OBS Studio, each look exported for them.
+- A web app on WebGPU that lays itself out for phones, and the CRT in RetroArch, ReShade, OBS Studio, Godot and Bevy, each look exported for them.
 
 Installers and files from Super Win the Game are not included; its NTSC palette is made by the app, as the game makes it. A separate CC0 collection of 38 NES LUTs from MAME Goodies is included under **Color & LUT → LUT gallery…**. Platform compilation does not prove visual parity between drivers.
 See [the implementation plan](docs/PLAN.md) and [validation notes](docs/VALIDATION.md).
@@ -203,12 +203,13 @@ python3 -m http.server --directory web/dist 8000            # then open http://l
 Browsers without WebGPU get a page that says how to turn it on. Firefox and LibreWolf on Linux
 need `dom.webgpu.enabled` set to `true` in `about:config`.
 
-## In games and streams: RetroArch, ReShade and OBS
+## In games and streams: RetroArch, ReShade, OBS, Godot and Bevy
 
 The CRT also runs in other programs, as shader ports of the same passes (see
 [the decision](docs/adr/0003-games-get-shader-ports-not-the-renderer.md)), which every port shares
-([ADR 5](docs/adr/0005-the-ports-share-one-translation-of-the-passes.md)). The glass and its bezel
-draw as the app draws them, from the same baked bezel.
+([ADR 5](docs/adr/0005-the-ports-share-one-translation-of-the-passes.md)), and in Bevy as the
+renderer itself ([ADR 6](docs/adr/0006-bevy-embeds-the-renderer-godot-gets-a-compositor-port.md)).
+The glass and its bezel draw as the app draws them, from the same baked bezel.
 
 - **RetroArch**, over any core as it plays. Each release has a `-retroarch.zip` of presets for the
   shipped looks; **Export → RetroArch shader…**, or `crtsim export-retroarch`, writes any look as
@@ -220,10 +221,18 @@ draw as the app draws them, from the same baked bezel.
   an `-obs-linux-x86_64.zip` of the plugin built for Linux; elsewhere it builds from
   [`ports/obs`](ports/obs). **Export → OBS filter…**, or `crtsim export-obs`, writes any look for
   it.
+- **Godot 4**, as a compositor effect over a camera's picture, 2D games included, keeping the
+  glow between frames. It is in the Godot Asset Library, and each release has a `-godot.zip` of the
+  add-on with the shipped looks; **Export → Godot effect…**, or `crtsim export-godot`, writes the add-on
+  with any look. See [`ports/godot`](ports/godot).
+- **Bevy**, as the renderer itself on Bevy's own device: the
+  [`crtsim-bevy`](crates/crtsim-bevy) crate, published to crates.io with each release, draws any
+  camera holding a `Crt` with any look.
 
-Every port is checked against the renderer: the RetroArch port through librashader and the OBS
-filter in OBS itself, picture for picture, and the ReShade effect compiled by ReShade's own
-compiler as each shipped look sets it.
+Every port is checked against the renderer: the RetroArch port through librashader, the OBS
+filter in OBS itself and the Godot effect in Godot itself, picture for picture, and the ReShade
+effect compiled by ReShade's own compiler as each shipped look sets it. Bevy draws the
+renderer's own picture, which a headless Bevy app checks.
 
 ## In video editors and Aseprite
 

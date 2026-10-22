@@ -351,6 +351,10 @@ mod tests {
         for (host, preset) in [
             (Host::ReShade, "Warm_Tube-reshade/Warm_Tube.ini"),
             (Host::Obs, "Warm_Tube-obs/Warm_Tube.json"),
+            (
+                Host::Godot,
+                "Warm_Tube-godot/addons/crtsim_renderer/looks/Warm_Tube.tres",
+            ),
         ] {
             let path = dir.path().join(format!("Warm Tube-{}.zip", host.slug()));
             save_port(&path, host, &c).unwrap();
