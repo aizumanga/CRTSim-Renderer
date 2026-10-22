@@ -2,9 +2,10 @@ name: Publish crtsim-core and crtsim-bevy
 # crtsim-core and crtsim-bevy are versioned with the app, so each release publishes its crates:
 # the renderer first, then the Bevy plugin, which draws with that release's renderer. A crate
 # version cannot be taken back, so this runs when a person publishes the release, not when its
-# tag is pushed, and leaves a version crates.io already has as it is. Each crate's first version
-# is published by hand; later ones here, through crates.io's trusted publishing, which needs no
-# stored token. The file keeps its name, which each crate's trusted publisher names. See
+# tag is pushed, and leaves a version crates.io already has as it is. Trusted publishing cannot
+# make a crate, so a crate's first version needs a token of a person's: run by hand, with a
+# CRATES_IO_FIRST_PUBLISH_TOKEN secret, this publishes it with that; deleted afterwards, later
+# versions publish through trusted publishing, which needs no stored token. The file keeps its name, which each crate's trusted publisher names. See
 # docs/RELEASES.md.
 on:
   release:
@@ -38,16 +39,23 @@ jobs:
       - name: The tag names the crates' version, which crates.io does not have yet
         id: version
         shell: bash
+        env:
+          FIRST_PUBLISH_TOKEN: ${{ secrets.CRATES_IO_FIRST_PUBLISH_TOKEN }}
         run: |
           for crate in crtsim-core crtsim-bevy; do
             version="$(cargo metadata --locked --no-deps --format-version 1 | python3 -c "import json, sys; print(next(p['version'] for p in json.load(sys.stdin)['packages'] if p['name'] == '$crate'))")"
             test "$RELEASE_TAG" = "v$version" || { echo "Tag $RELEASE_TAG does not name $crate $version"; exit 1; }
             agent='crtsim-core publish workflow (github.com/aizumanga/CRTSim-Renderer)'
             key="${crate#crtsim-}"
-            # Trusted publishing cannot make a crate, so a crate's first version is a person's.
+            # Trusted publishing cannot make a crate: its first version takes a person's token.
             if [ "$(curl -s -o /dev/null -w '%{http_code}' -A "$agent" "https://crates.io/api/v1/crates/$crate")" = 404 ]; then
-              echo "::warning::$crate is not on crates.io yet: publish its first version by hand, as docs/RELEASES.md says"
-              echo "$key=false" >> "$GITHUB_OUTPUT"
+              if [ -n "$FIRST_PUBLISH_TOKEN" ]; then
+                echo "$crate is not on crates.io yet: publishing its first version with CRATES_IO_FIRST_PUBLISH_TOKEN"
+                echo "$key=first" >> "$GITHUB_OUTPUT"
+              else
+                echo "::warning::$crate is not on crates.io yet: publish its first version as docs/RELEASES.md says"
+                echo "$key=false" >> "$GITHUB_OUTPUT"
+              fi
               continue
             fi
             status="$(curl -s -o /dev/null -w '%{http_code}' -A "$agent" "https://crates.io/api/v1/crates/$crate/$version")"
@@ -57,17 +65,17 @@ jobs:
               *) echo "crates.io answered $status for $crate"; exit 1 ;;
             esac
           done
-      - if: steps.version.outputs.core == 'true' || steps.version.outputs.bevy == 'true'
+      - if: steps.version.outputs.core != 'false' || steps.version.outputs.bevy != 'false'
         run: cargo test --locked -p crtsim-core -p crtsim-bevy
       - if: steps.version.outputs.core == 'true' || steps.version.outputs.bevy == 'true'
         uses: rust-lang/crates-io-auth-action@v1
         id: auth
-      - if: steps.version.outputs.core == 'true'
+      - if: steps.version.outputs.core != 'false'
         run: cargo publish --locked -p crtsim-core
         env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.version.outputs.core == 'first' && secrets.CRATES_IO_FIRST_PUBLISH_TOKEN || steps.auth.outputs.token }}
       # Cargo waits for the renderer to be in the index before it publishes the plugin on it.
-      - if: steps.version.outputs.bevy == 'true'
+      - if: steps.version.outputs.bevy != 'false'
         run: cargo publish --locked -p crtsim-bevy
         env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.version.outputs.bevy == 'first' && secrets.CRATES_IO_FIRST_PUBLISH_TOKEN || steps.auth.outputs.token }}
