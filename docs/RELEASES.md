@@ -364,10 +364,11 @@ names both crates' version, tests them and publishes the renderer and then the p
 for that run alone. A version already on crates.io is left as it is. To set it up, for each crate:
 
 1. The first version only: trusted publishing cannot make a crate, so the workflow leaves a crate crates.io does
-   not have yet with a warning, and a person publishes its first version. Make a crates.io API token (Account
-   Settings → API Tokens) with the `publish-new` scope, limited to that crate and expiring soon; from the release's
-   tag, after the workflow has published the renderer it needs, run `cargo login` with it and `cargo publish -p
-   <crate>`; then delete the token and `cargo logout`.
+   not have yet with a warning. Make a crates.io API token (Account Settings → API Tokens) with the `publish-new`
+   scope, limited to that crate and expiring soon. Either put it in the `crates-io` environment's secrets as
+   `CRATES_IO_FIRST_PUBLISH_TOKEN` and run the workflow by hand with the release's tag, or, from the release's tag,
+   run `cargo login` with it and `cargo publish -p <crate>` (`--no-verify` skips the build CI has already checked).
+   Then delete the token, and the secret.
 2. Add this repository's `publish-core.yml` workflow as the crate's trusted publisher on crates.io (crate settings →
    Trusted Publishing, environment `crates-io`), and make a `crates-io` environment in the repository's settings.
 3. From then on, publishing a release publishes its crates with no token. Running the workflow by hand with a
