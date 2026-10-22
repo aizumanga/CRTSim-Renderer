@@ -11,12 +11,18 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// The project's settings: Forward+ on Vulkan, nothing between the camera's picture and the
-/// window but the effect, and a window of the picture's size.
+/// window but the effect, and a window of the picture's size. The editor imports the add-on
+/// one file at a time: importing on worker threads, it can touch the scene tree from one and
+/// crash, as Godot 4.7.2 did now and then on CI's runners.
 const PROJECT: &str = r#"config_version=5
 
 [application]
 config/name="CRTSim Renderer parity"
 run/main_scene="res://main.tscn"
+
+[editor]
+
+import/use_multiple_threads=false
 
 [display]
 window/size/viewport_width={width}
