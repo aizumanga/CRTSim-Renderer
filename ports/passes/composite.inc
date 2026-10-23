@@ -18,11 +18,11 @@ float static_clock() { return float(HOST_FRAME_COUNT % 16777216); }
 // change's course: static, fading to the picture, the picture, fading back.
 float static_strength() {
     float cycle = P(CRTSIM_STATIC_CYCLE);
-    if (cycle <= 0.0) return P(CRTSIM_STATIC);
-    float u = frac(static_clock() / 60.0 / cycle);
-    float fade = clamp((0.5 - u) / 0.1333333, 0.0, 1.0) + clamp((u - 0.8666667) / 0.1333333, 0.0,
-        1.0);
-    return P(CRTSIM_STATIC) * clamp(u < 0.3666667 ? 1.0 : fade, 0.0, 1.0);
+    if (cycle <= 0.0) return P(CRTSIM_STATIC_AMOUNT);
+    float course = frac(static_clock() / 60.0 / cycle);
+    float fade = clamp((0.5 - course) / 0.1333333, 0.0, 1.0)
+        + clamp((course - 0.8666667) / 0.1333333, 0.0, 1.0);
+    return P(CRTSIM_STATIC_AMOUNT) * clamp(course < 0.3666667 ? 1.0 : fade, 0.0, 1.0);
 }
 
 // TV static, the renderer's own: white noise drawn anew each sixtieth of a second, squared,

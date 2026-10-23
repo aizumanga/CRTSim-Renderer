@@ -23,10 +23,12 @@ pub const OUTPUT: (u32, u32) = (320, 180);
 pub const UNFILTERED: Limits = Limits {
     worst: 2,
     mean: 0.01,
+    past: SEAM_PIXELS,
 };
 pub const MIPMAPPED: Limits = Limits {
     worst: 4,
     mean: 0.3,
+    past: SEAM_PIXELS,
 };
 /// The bloom from the surface's halved levels: each level a filtered read of the one above,
 /// which a driver rounds half up in two steps or to the nearest in one, as it filters, so a
@@ -35,22 +37,37 @@ pub const MIPMAPPED: Limits = Limits {
 pub const HALVED: Limits = Limits {
     worst: 2,
     mean: 0.08,
+    past: SEAM_PIXELS,
 };
 /// A colour table computed in floats, as the NES palette is, which the ports read as an 8-bit
 /// strip.
 pub const FLOAT_TABLE: Limits = Limits {
     worst: 3,
     mean: 0.08,
+    past: SEAM_PIXELS,
+};
+
+/// FXAA reads the surface filtered at fractions of a texel and turns those reads into choices:
+/// which way an edge runs, where it ends. Where a host filters a last bit apart from Vulkan, as
+/// OBS's OpenGL does, or rounds the surface through half floats, as Godot does, a pixel at a tie
+/// goes the other way: measured at 21 pixels of 57,344 past 2 steps in OBS and 19 of 57,600 in
+/// Godot, by up to 25 steps; none in RetroArch.
+pub const FXAA: Limits = Limits {
+    worst: 2,
+    mean: 0.01,
+    past: 32,
 };
 
 /// Pixels allowed past a case's worst: where the bezel meets the glass, both lie at nearly the
 /// same depth, and the last digit GLSL and WGSL round differently can pick either.
-const SEAM_PIXELS: usize = 4;
+pub const SEAM_PIXELS: usize = 4;
 
 #[derive(Clone, Copy)]
 pub struct Limits {
     pub worst: u8,
     pub mean: f64,
+    /// Pixels allowed past the worst.
+    pub past: usize,
 }
 
 /// The reference look at the goldens' size, its mask unfiltered.
@@ -202,13 +219,16 @@ pub fn cases() -> Vec<Case> {
         ),
         // The finish of the game's options screen: its finest FXAA, a brighter picture, and the
         // two blurs of the bloom spread apart.
-        still(
-            "fxaa-ultra",
-            Config {
-                fxaa: config::Fxaa::Ultra,
-                ..base()
-            },
-        ),
+        Case {
+            limits: FXAA,
+            ..still(
+                "fxaa-ultra",
+                Config {
+                    fxaa: config::Fxaa::Ultra,
+                    ..base()
+                },
+            )
+        },
         still(
             "brightness",
             Config {
@@ -390,9 +410,10 @@ pub fn aspect(case: &Case) -> f32 {
     width as f32 / height as f32 * case.config.pixel_aspect
 }
 
-/// The worst channel difference once the `SEAM_PIXELS` worst pixels are set aside, the mean
-/// over every pixel, and how many pixels differ by more than `worst`, all in 8-bit steps.
-pub fn compare(a: &RgbaImage, b: &RgbaImage, worst: u8) -> (u8, f64, usize) {
+/// The worst channel difference once the `limits.past` worst pixels are set aside, the mean
+/// over every pixel, and how many pixels differ by more than the limits' worst, all in 8-bit
+/// steps.
+pub fn compare(a: &RgbaImage, b: &RgbaImage, limits: Limits) -> (u8, f64, usize) {
     assert_eq!(a.dimensions(), b.dimensions());
     let mut differences: Vec<u8> = a
         .pixels()
@@ -404,9 +425,9 @@ pub fn compare(a: &RgbaImage, b: &RgbaImage, worst: u8) -> (u8, f64, usize) {
         .zip(b.pixels())
         .flat_map(|(p, q)| (0..3).map(move |c| u64::from(p[c].abs_diff(q[c]))))
         .sum();
-    let past = differences.iter().filter(|&&d| d > worst).count();
+    let past = differences.iter().filter(|&&d| d > limits.worst).count();
     differences.sort_unstable();
-    let kept = differences.len().saturating_sub(SEAM_PIXELS + 1);
+    let kept = differences.len().saturating_sub(limits.past + 1);
     (
         differences[kept],
         total as f64 / (a.pixels().len() * 3) as f64,
@@ -435,7 +456,7 @@ pub fn check(cases: Vec<Case>, dir: &Path, mut port: impl FnMut(&Case, &Path) ->
         let expected = render(&renderer, &case);
         let got = port(&case, &dir.join(case.name));
         let limits = case.limits;
-        let (worst, mean, past) = compare(&expected, &got, limits.worst);
+        let (worst, mean, past) = compare(&expected, &got, limits);
         eprintln!(
             "{}: worst channel {worst}/{}, mean {mean:.4}/{} steps, {past} pixels past the worst",
             case.name, limits.worst, limits.mean

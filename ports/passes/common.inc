@@ -8,7 +8,8 @@
 // So no vector is made from one number (V2 and V3 spell it out), no comparison is made of whole
 // vectors, no array is written, no texture is a function's argument, and no global constant is
 // declared: constants are macros. And no macro without parameters is defined as something in
-// parentheses, which OBS's preprocessor would read as its parameters.
+// parentheses, which OBS's preprocessor would read as its parameters; and nothing is named u,
+// the block Godot's port reads its parameters from.
 //
 // Each host defines what the passes read of it before including them, as HOST_ macros:
 //

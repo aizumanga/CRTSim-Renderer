@@ -26,6 +26,29 @@ reads it, and its black holds where the game's 8-bit glow holds it.
   shader and render state, the rest of the engine around the CRT, and the two changes above
   checked against the running game.
 
+The rest of the game's options screen, TV static, and the game's glow and screenshots:
+
+- **Picture finish.** Brightness, which raises or lowers the picture's luma keeping its hue, as
+  the game's slider does; FXAA at the game's four levels, its FXAA 3 quality smoothing the glass
+  and bezel before the bloom is added; tate, turning the finished picture a quarter, a half or
+  three quarters for a screen on its side; and the CRT off, the picture drawn flat in its pixel
+  aspect inside the frame, as the game draws it without its CRT simulation.
+- **Two bloom spreads.** The bloom's two blurs each have their spread, as the game's do. Saved
+  settings keep one spread for both.
+- **TV static.** Snow, a rolling band and a wavering, slipping picture, from a touch to all
+  static, written for this renderer. A channel cycle brings it and takes it away over that many
+  seconds of video, for a channel change.
+- **Glow fades per frame.** The glow fades by persistence once each frame drawn, as the game's
+  does, so above 60 Hz it fades faster. On in the Super Win the Game looks; off, the glow fades
+  by the time that passes, the same at any rate.
+- **Stills as screenshots.** With alternating phase, a still's last tick draws both artifact
+  patterns averaged, as the game's screenshots do. On in the Super Win the Game looks; video
+  keeps alternating.
+- The shader ports gain brightness, FXAA, the two spreads, TV static and the glow fading per
+  frame, each checked against the renderer in RetroArch, OBS and Godot. Tate and the CRT off are
+  left to the host, which turns its screen and its effects itself; exporting a look with either
+  says so.
+
 ## v1.6.0
 
 The CRT runs in games made with Bevy, as the renderer itself, and in Godot 4, as a compositor effect; and a video

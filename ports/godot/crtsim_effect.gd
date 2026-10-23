@@ -129,7 +129,7 @@ extends CompositorEffect
 ## Brightness
 @export_range(-1.0, 1.0, 0.02) var brightness: float = 0.0
 ## TV static
-@export_range(0.0, 1.0, 0.01) var static: float = 0.0
+@export_range(0.0, 1.0, 0.01) var static_amount: float = 0.0
 ## Channel cycle, seconds (0 holds the static)
 @export_range(0.0, 60.0, 0.6) var static_cycle: float = 0.0
 
@@ -192,7 +192,7 @@ const _PARAMETERS: Array[StringName] = [
 	&"persistence_g",
 	&"persistence_b",
 	&"brightness",
-	&"static",
+	&"static_amount",
 	&"static_cycle",
 ]
 # END PARAMETERS

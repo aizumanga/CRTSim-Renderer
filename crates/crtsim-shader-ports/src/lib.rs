@@ -423,7 +423,7 @@ const NUMBERS: &[(&str, &[&str], &[Host])] = &[
         ALL,
     ),
     ("brightness", &["CRTSIM_BRIGHTNESS"], ALL),
-    ("static_amount", &["CRTSIM_STATIC"], ALL),
+    ("static_amount", &["CRTSIM_STATIC_AMOUNT"], ALL),
     ("static_cycle", &["CRTSIM_STATIC_CYCLE"], ALL),
 ];
 

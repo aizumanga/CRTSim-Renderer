@@ -90,7 +90,7 @@ enum crtsim_parameter_index {
 	CRTSIM_PERSISTENCE_G_INDEX,
 	CRTSIM_PERSISTENCE_B_INDEX,
 	CRTSIM_BRIGHTNESS_INDEX,
-	CRTSIM_STATIC_INDEX,
+	CRTSIM_STATIC_AMOUNT_INDEX,
 	CRTSIM_STATIC_CYCLE_INDEX,
 	CRTSIM_PARAMETER_COUNT,
 };
@@ -153,7 +153,7 @@ static const struct crtsim_parameter crtsim_parameters[CRTSIM_PARAMETER_COUNT] =
 	{"CRTSIM_PERSISTENCE_G", "Green persistence", 0.0f, 0.999f, 0.01f, 0.525f, NULL},
 	{"CRTSIM_PERSISTENCE_B", "Blue persistence", 0.0f, 0.999f, 0.01f, 0.42f, NULL},
 	{"CRTSIM_BRIGHTNESS", "Brightness", -1.0f, 1.0f, 0.02f, 0.0f, NULL},
-	{"CRTSIM_STATIC", "TV static", 0.0f, 1.0f, 0.01f, 0.0f, NULL},
+	{"CRTSIM_STATIC_AMOUNT", "TV static", 0.0f, 1.0f, 0.01f, 0.0f, NULL},
 	{"CRTSIM_STATIC_CYCLE", "Channel cycle, seconds (0 holds the static)", 0.0f, 60.0f, 0.6f, 0.0f, NULL},
 };
 

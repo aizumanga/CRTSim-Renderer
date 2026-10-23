@@ -264,16 +264,18 @@ palette**, the palette rows' preset) unless a row says otherwise.
 | Lighting, light position | CRTSim's, (−10, −5, 10); the rim term squared by multiplying | same | same, squared alike since session 11 | match |
 | Bloom target | `trunc(W/16) × trunc(H/16)` (session 11) | `W/16 × H/16` | the same; the RetroArch port's, as RetroArch sizes a pass, rounded | match (RetroArch at most a texel larger) |
 | Bloom source | the glass and bezel through their mipmaps, level 4 (static and runtime, session 11) | the picture itself | either, **Bloom from mipmaps** (`bloom_from_mipmaps`, session 11), on in the presets | **matches with the setting on** (presets) |
-| Bloom blurs | 7 taps, `ColorPow`; BloomDown and BloomUp, 0.025 each | 7 taps, one spread | 7 taps, one spread, 0.025 | match at the game's defaults |
+| Bloom blurs | 7 taps, `ColorPow`; BloomDown and BloomUp, 0.025 each | 7 taps, one spread | 7 taps, a spread each since session 12, 0.025 | match |
 | NTSC phase blend | lerp alternates `p + (0.5 − p)·0.35` = 0.175 / 0.825 | 0 / 1 | the game's formula since session 2 (was `blending` / `1 − blending` = 0.35 / 0.65 at `d833e36`) | **fixed**: was the same setting at twice the strength |
-| Phase blend without VSync, and screenshots | constant 0.5 (session 10) | — | `Stable` phase = 0.5; a still of `Alternating` shows its last tick, 0.175 | match with `Stable` phase |
-| Glow timing | once per drawn frame | once per frame | stills and videos once per 60 Hz tick; a host's frames by how long each lasts | match at 60 Hz |
+| Phase blend without VSync, and screenshots | constant 0.5 (session 10) | — | `Stable` phase = 0.5; a still of `Alternating` ends on a tick of 0.5 with **Stills as screenshots** (`screenshot_stills`, session 12), on in the presets | match (presets) |
+| Glow timing | once per drawn frame | once per frame | stills and videos once per 60 Hz tick; a host's frames by how long each lasts, or once a frame with **Glow fades per frame** (`glow_per_frame`, session 12), on in the presets | match (presets) |
 | Backdrop past the bezel | 1/16 grey (session 10) | — | **Backdrop color**, 1/16 in the presets | match (presets) |
 | NTSC palette: source side | `nes_palette_w_trans.pal` (`7C7C7C 0000FC …`) | — | the game's, in the **game** model since session 2 (MAME's in the signal model) | **fixed** |
 | NTSC palette: generator | `MakePalette` (YIQ, Tint/I/Q) | — | the game's, ported, in the **game** model (the signal decoder, mean 18.8 steps off at the defaults, remains as its own model) | **fixed**: bit-exact on 60 settings |
 | NTSC palette: table | 32³ nearest source colour | — | the same, in the game model | **fixed**: bit-exact at the defaults |
 | NTSC palette: sampling | point in R and G, blue interpolated | — | the same for the game's table (`Sampling::NearestRedGreen`) in the renderer and every port since session 3; trilinear for other tables | **fixed**: matches a transcription of the game's shader at every 8-bit level |
-| Final pass | `ColorPow(c, 2^−Brightness)`, Brightness 0 by default (session 11) | — | — | match |
+| Final pass | `ColorPow(c, 2^−Brightness)`, Brightness 0 by default (session 11); tate | — | **Brightness** and **Tate** (session 12) | match |
+| FXAA | off by default; FXAA 3 quality at four levels on the glass and bezel, before the bloom | — | **FXAA**, the same at the same levels (session 12) | match |
+| CRT off | the Clean Frame point-sampled at 8:7, over black, no bloom (session 11) | — | **CRT off** (session 12) | match |
 
 A side-by-side image of the three palettes (game source, game generated, this renderer's
 decoder) is left out of the repository because it is game-derived data;
@@ -674,10 +676,10 @@ equal to the game's to the bit on llvmpipe (`scripts/halve_levels`).
 
 ### What remains different
 
-- Stills of an alternating look show their last tick, where the game's screenshots average the
-  two patterns: **Stable** phase draws the game's screenshot.
-- The game's glow decays once per drawn frame; hosts above 60 Hz decay theirs by time, as the
-  renderer's host sequences and every shader port do, so they agree at 60 Hz.
+- ~~Stills of an alternating look show their last tick, where the game's screenshots average the
+  two patterns~~: **Stills as screenshots** (session 12).
+- ~~The game's glow decays once per drawn frame; hosts above 60 Hz decay theirs by time~~:
+  **Glow fades per frame** (session 12).
 - Mesa's mipmaps round half up in two steps, a quarter of a step brighter a level than a box
   rounding to nearest. The renderer's levels are its GPU's own filtering, so on llvmpipe they
   are the game's to the bit, and on another driver they round as its filter does, as the game's
@@ -685,6 +687,39 @@ equal to the game's to the bit on llvmpipe (`scripts/halve_levels`).
 - RetroArch sizes the bloom's first target by rounding, not truncating, so at sizes that do not
   divide by 16 it can be a texel larger than the game's; the bloom reads the level the game's
   size gives either way.
+
+## The options screen, screenshots and the glow's frame rate (session 12)
+
+The rest of the game's video options, each in the renderer and, where a shader port can carry
+it, every port; and the two differences session 11 left, each as a setting on in the presets.
+
+- **Brightness**: the final pass's `ColorPow(c, 2^−Brightness)`, luma raised to the power with
+  hue kept; black stays black. Exactly the picture at 0.
+- **FXAA**: the game's four `Valkyrie_FXAA_*` effects are FXAA 3 quality, which this renderer
+  writes again in WGSL and the ports' passes: edge threshold 1/4, 1/6, 1/8 and 1/16, with
+  minimums 1/12, 1/14, 1/16 and 1/32, 4, 8, 16 and 32 search steps, a search threshold of 1/4,
+  sub-pixel trim 1/4 and cap 3/4, and FXAA's red-and-green luma (`g·0.587/0.299 + r`), on the
+  glass and bezel before the bloom is added, as `DoPost` takes its `PostFXAA`.
+- **Tate**: the final pass turns the picture about its middle in quarter turns, the output at
+  the turned size. *Hypothesis until runtime-checked:* a quarter is clockwise on screen.
+- **CRT off**: the Clean Frame point-sampled in its pixel aspect, fitted to the output and
+  zoomed by the overscan, over black, with no colour table or bloom. Brightness, FXAA and tate
+  still apply, as the game's final pass still runs.
+- **Bloom spreads**: BloomDown and BloomUp each with its own, 0.025 at the game's defaults.
+  Looks saved before keep one spread for both.
+- **Screenshots**: a still of an alternating look ends on a tick of both patterns averaged, as
+  `NBaseGame+0x50` makes the game's (session 10), after warm-up ticks that alternate.
+- **Glow per frame**: persistence applied once a drawn frame, whatever its length, as the game
+  does, for a host's frames and a video's; off, by the time that passes.
+
+The shader ports carry all but tate and the CRT off, which their hosts do themselves; an export
+of a look with either refuses it. In OBS and Godot the FXAA case differs on about 20 pixels of
+57,000: FXAA turns filtered reads into choices, and where OpenGL's filter or Godot's half-float
+round trip moves a read by its last bit, a pixel at a tie goes the other way.
+
+TV static, also new, is this renderer's own, not the game's title-screen static (`StaticMaterial`,
+the game's content): white noise anew each sixtieth of a second, squared, under a rolling dark
+band, over the picture wavering and slipping, with a channel cycle for video.
 
 ## Unresolved
 
@@ -757,6 +792,12 @@ change the RetroArch port did.
 
 9. **Glow floor.** *Done in session 11:* `glow_floor`, on in the presets, in the renderer and
    every shader port; see *The glow's floor*.
+
+10. **The rest of the options screen.** *Done in session 12:* `brightness`, `fxaa`, `tate`,
+    `crt_off` and the second blur's own spread, `bloom_spread_up`; see *The options screen*.
+
+11. **Screenshots and the glow's frame rate.** *Done in session 12:* `screenshot_stills` and
+    `glow_per_frame`, on in the presets.
 
 Frame-by-frame comparison is set up (session 4); more probes, motion and other settings can go
 through it.

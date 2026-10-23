@@ -27,7 +27,8 @@ glass rather than behind it.
 Every setting is a property of the effect in the inspector, with the names and ranges the app
 gives them, and a script can change any of them while the game runs. **Signal rows** sets the
 resolution the CRT simulates, which the camera's picture is resized to; 0 keeps its own. The
-glow fades by each frame's real length, so it looks the same at any frame rate.
+glow fades by each frame's real length, so it looks the same at any frame rate; **Glow fades**
+once a frame fades it as Super Win the Game does, faster above 60 frames a second.
 
 ## Making your own
 

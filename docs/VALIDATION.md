@@ -4,15 +4,16 @@ This is a runnable prototype, not a claim of completed cross-platform visual par
 
 ## Golden-image rendering regression
 
-`cargo test -p crtsim-core --test golden -- --ignored --nocapture` compares thirty-one rendered
+`cargo test -p crtsim-core --test golden -- --ignored --nocapture` compares thirty-six rendered
 images against images committed in `crates/crtsim-core/tests/golden/`. The CI fixtures show
-that a render finished; these show that it still produces the same picture. Nineteen take one
+that a render finished; these show that it still produces the same picture. Twenty-four take one
 route each through the renderer: the reference frame and its signal, both composite phases,
 NTSC blending and the flipped artifact pattern in the signal, linear-light, the unfiltered mask,
 screen-only, the bezel's reflection as on the screen, a backdrop, a widescreen and a portrait
-tube, interlaced scanning, a bundled NES LUT, the bloom from mipmaps, the glow floor, Super Win
-the Game's look as a whole, and the second frame of a sequence, which is the only case that sees
-frame-to-frame persistence.
+tube, interlaced scanning, a bundled NES LUT, the bloom from mipmaps, the glow floor, FXAA at
+its finest, a brighter picture, the picture turned for tate, the CRT off, TV static in the
+signal, Super Win the Game's look as a whole, drawn as the game's screenshots, and the second
+frame of a sequence, which is the only case that sees frame-to-frame persistence.
 
 The other twelve capture the prepare step's output -- the clean signal, before the simulation --
 since the test card reaches it only as an identity: Lanczos down, up and along one axis, Nearest

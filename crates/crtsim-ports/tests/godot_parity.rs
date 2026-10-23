@@ -8,7 +8,7 @@
 
 use crtsim_core::config::{Config, Filter as Resize};
 use crtsim_ports::godot::Engine;
-use crtsim_ports::parity::{self, Case, Limits, UNFILTERED};
+use crtsim_ports::parity::{self, Case, Limits, SEAM_PIXELS, UNFILTERED};
 use std::path::PathBuf;
 
 /// The resize computes its Lanczos weights in the shader, where the renderer takes the image
@@ -16,6 +16,7 @@ use std::path::PathBuf;
 const RESIZED: Limits = Limits {
     worst: 2,
     mean: 0.02,
+    past: SEAM_PIXELS,
 };
 
 /// Godot hands the effect its picture, and takes it back, in linear light in half floats, and

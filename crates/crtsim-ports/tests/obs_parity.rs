@@ -9,7 +9,7 @@
 
 use crtsim_core::config::{Config, Filter as Resize, Phase};
 use crtsim_ports::obs::Filter;
-use crtsim_ports::parity::{self, Case, Limits, UNFILTERED};
+use crtsim_ports::parity::{self, Case, Limits, SEAM_PIXELS, UNFILTERED};
 use std::path::PathBuf;
 
 /// OBS draws with OpenGL here, whose arithmetic differs from Vulkan's in its last bits. Where
@@ -20,12 +20,14 @@ use std::path::PathBuf;
 const ALTERNATING: Limits = Limits {
     worst: 2,
     mean: 0.05,
+    past: SEAM_PIXELS,
 };
 /// The resize computes its Lanczos weights in the shader, where the renderer takes the image
 /// crate's: measured at 0.0103 of a step on average.
 const RESIZED: Limits = Limits {
     worst: 2,
     mean: 0.02,
+    past: SEAM_PIXELS,
 };
 
 /// The filter draws at its source's size, so the renderer is asked for that size too.

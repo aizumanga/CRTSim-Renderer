@@ -33,7 +33,8 @@ Every setting is in the filter's properties, with the names and ranges the app g
 filter draws at the source's own size, and resizes its picture to the signal first: **Signal
 rows** 0 keeps the picture's own, and **Signal columns** 0 keeps its shape. The glow fades by
 how long each frame lasts, so it looks the same at any frame rate, and moves on once a frame
-however many scenes show the source.
+however many scenes show the source. **Glow fades** once a frame fades it as Super Win the Game
+does, faster above 60 frames a second.
 
 ## Making your own
 

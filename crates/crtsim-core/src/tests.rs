@@ -832,9 +832,14 @@ fn tate_turns_the_finished_picture_and_the_crt_off_draws_it_flat() {
     for (tate, expected) in [
         (config::Tate::Quarter, image::imageops::rotate90(&upright)),
         (config::Tate::Half, image::imageops::rotate180(&upright)),
-        (config::Tate::ThreeQuarters, image::imageops::rotate270(&upright)),
+        (
+            config::Tate::ThreeQuarters,
+            image::imageops::rotate270(&upright),
+        ),
     ] {
-        let turned = render(&r, &card, &Config { tate, ..c.clone() }).unwrap().crt;
+        let turned = render(&r, &card, &Config { tate, ..c.clone() })
+            .unwrap()
+            .crt;
         assert_eq!(turned, expected, "{tate:?}");
     }
     // The CRT off: the clean signal, each pixel twice as wide and tall at twice its size,
@@ -862,7 +867,16 @@ fn brightness_raises_the_finished_pictures_luma_keeping_its_hue() {
         ..Config::default()
     };
     let plain = render(&r, &card, &c).unwrap().crt;
-    let bright = render(&r, &card, &Config { brightness: 1., ..c }).unwrap().crt;
+    let bright = render(
+        &r,
+        &card,
+        &Config {
+            brightness: 1.,
+            ..c
+        },
+    )
+    .unwrap()
+    .crt;
     // Brightness 1 takes luma to its square root: c / l * l^0.5.
     let luma = |p: &image::Rgba<u8>| {
         (0.299 * f32::from(p[0]) + 0.587 * f32::from(p[1]) + 0.114 * f32::from(p[2])) / 255.
