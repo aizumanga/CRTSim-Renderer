@@ -32,6 +32,8 @@ extends CompositorEffect
 @export_enum("as the public source", "flipped") var flip_artifacts: int = 0
 ## Glow floor, as 8-bit history holds it
 @export_enum("off", "on") var glow_floor: int = 0
+## Glow fades
+@export_enum("by the time a frame lasts", "once a frame") var glow_per_frame: int = 0
 ## Interlaced fields
 @export_enum("off", "on", "auto") var interlace: int = 2
 ## Fit on the tube
@@ -42,6 +44,8 @@ extends CompositorEffect
 @export_enum("as the public source", "as the screen") var reflection_as_screen: int = 0
 ## Bloom reads
 @export_enum("the picture itself", "its mipmaps") var bloom_mipmaps: int = 0
+## FXAA
+@export_enum("off", "low", "medium", "high", "ultra") var fxaa: int = 0
 ## Filter mask when shrinking
 @export_enum("off", "on") var mask_antialias: int = 1
 ## Mask columns (0 follows the signal)
@@ -84,8 +88,10 @@ extends CompositorEffect
 @export_range(0.0, 2.0, 0.02) var bloom: float = 0.25
 ## Bloom power
 @export_range(0.1, 8.0, 0.08) var bloom_power: float = 2.0
-## Bloom spread
+## Bloom spread, first blur
 @export_range(0.0, 0.2, 0.002) var bloom_spread: float = 0.025
+## Bloom spread, second blur
+@export_range(0.0, 0.2, 0.002) var bloom_spread_up: float = 0.025
 ## Diffuse light
 @export_range(0.0, 2.0, 0.02) var diffuse: float = 0.5
 ## Specular light
@@ -120,6 +126,12 @@ extends CompositorEffect
 @export_range(0.0, 0.999, 0.01) var persistence_g: float = 0.525
 ## Blue persistence
 @export_range(0.0, 0.999, 0.01) var persistence_b: float = 0.42
+## Brightness
+@export_range(-1.0, 1.0, 0.02) var brightness: float = 0.0
+## TV static
+@export_range(0.0, 1.0, 0.01) var static: float = 0.0
+## Channel cycle, seconds (0 holds the static)
+@export_range(0.0, 60.0, 0.6) var static_cycle: float = 0.0
 
 ## The parameters in the order parameters.inc declares them.
 const _PARAMETERS: Array[StringName] = [
@@ -132,11 +144,13 @@ const _PARAMETERS: Array[StringName] = [
 	&"phase",
 	&"flip_artifacts",
 	&"glow_floor",
+	&"glow_per_frame",
 	&"interlace",
 	&"fit",
 	&"screen_only",
 	&"reflection_as_screen",
 	&"bloom_mipmaps",
+	&"fxaa",
 	&"mask_antialias",
 	&"mask_columns",
 	&"mask_rows",
@@ -159,6 +173,7 @@ const _PARAMETERS: Array[StringName] = [
 	&"bloom",
 	&"bloom_power",
 	&"bloom_spread",
+	&"bloom_spread_up",
 	&"diffuse",
 	&"specular",
 	&"specular_power",
@@ -176,6 +191,9 @@ const _PARAMETERS: Array[StringName] = [
 	&"persistence_r",
 	&"persistence_g",
 	&"persistence_b",
+	&"brightness",
+	&"static",
+	&"static_cycle",
 ]
 # END PARAMETERS
 

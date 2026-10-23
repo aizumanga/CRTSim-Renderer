@@ -189,13 +189,48 @@ pub fn cases() -> Vec<Case> {
                 ..base()
             },
         ),
-        // Super Win the Game's look as a whole, its mask unfiltered.
+        // Super Win the Game's look as a whole, its mask unfiltered; a port's picture is a
+        // game's frame, not a screenshot.
         still(
             "super-win-the-game",
             Config {
                 output: base().output,
                 mask_antialias: false,
+                screenshot_stills: false,
                 ..Config::super_win_the_game()
+            },
+        ),
+        // The finish of the game's options screen: its finest FXAA, a brighter picture, and the
+        // two blurs of the bloom spread apart.
+        still(
+            "fxaa-ultra",
+            Config {
+                fxaa: config::Fxaa::Ultra,
+                ..base()
+            },
+        ),
+        still(
+            "brightness",
+            Config {
+                brightness: 0.5,
+                ..base()
+            },
+        ),
+        still(
+            "bloom-spreads",
+            Config {
+                bloom: 1.,
+                bloom_spread: 0.01,
+                bloom_spread_up: 0.06,
+                ..base()
+            },
+        ),
+        // TV static, half over the picture.
+        still(
+            "tv-static",
+            Config {
+                static_amount: 0.5,
+                ..base()
             },
         ),
         // A backdrop past the bezel's edges, at the sides of the 16:9 frame.
@@ -315,6 +350,10 @@ pub fn cases() -> Vec<Case> {
     // Not 0.9 here: 0.9 of white is 229.5 steps, where a frame of 33,333 microseconds, a
     // hair short of a thirtieth of a second, rounds the other way.
     cases.push(trail("persistence-trail-30fps", 0.8, Timing::Video(30.)));
+    // At 30 frames a second still fading as at 60, as Super Win the Game's glow fades a frame.
+    let mut per_frame = trail("glow-per-frame-30fps", 0.8, Timing::Video(30.));
+    per_frame.config.glow_per_frame = true;
+    cases.push(per_frame);
     cases
 }
 

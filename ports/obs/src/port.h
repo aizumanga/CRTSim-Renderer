@@ -23,11 +23,13 @@ static const char *const CRTSIM_LINEAR_ITEMS[] = {"off", "on", NULL};
 static const char *const CRTSIM_PHASE_ITEMS[] = {"stable", "A", "B", "alternating", NULL};
 static const char *const CRTSIM_FLIP_ARTIFACTS_ITEMS[] = {"as the public source", "flipped", NULL};
 static const char *const CRTSIM_GLOW_FLOOR_ITEMS[] = {"off", "on", NULL};
+static const char *const CRTSIM_GLOW_PER_FRAME_ITEMS[] = {"by the time a frame lasts", "once a frame", NULL};
 static const char *const CRTSIM_INTERLACE_ITEMS[] = {"off", "on", "auto", NULL};
 static const char *const CRTSIM_FIT_ITEMS[] = {"original", "contain", "cover", "stretch", NULL};
 static const char *const CRTSIM_SCREEN_ONLY_ITEMS[] = {"off", "on", NULL};
 static const char *const CRTSIM_REFLECTION_AS_SCREEN_ITEMS[] = {"as the public source", "as the screen", NULL};
 static const char *const CRTSIM_BLOOM_MIPMAPS_ITEMS[] = {"the picture itself", "its mipmaps", NULL};
+static const char *const CRTSIM_FXAA_ITEMS[] = {"off", "low", "medium", "high", "ultra", NULL};
 static const char *const CRTSIM_MASK_ANTIALIAS_ITEMS[] = {"off", "on", NULL};
 
 enum crtsim_parameter_index {
@@ -40,11 +42,13 @@ enum crtsim_parameter_index {
 	CRTSIM_PHASE_INDEX,
 	CRTSIM_FLIP_ARTIFACTS_INDEX,
 	CRTSIM_GLOW_FLOOR_INDEX,
+	CRTSIM_GLOW_PER_FRAME_INDEX,
 	CRTSIM_INTERLACE_INDEX,
 	CRTSIM_FIT_INDEX,
 	CRTSIM_SCREEN_ONLY_INDEX,
 	CRTSIM_REFLECTION_AS_SCREEN_INDEX,
 	CRTSIM_BLOOM_MIPMAPS_INDEX,
+	CRTSIM_FXAA_INDEX,
 	CRTSIM_MASK_ANTIALIAS_INDEX,
 	CRTSIM_MASK_COLUMNS_INDEX,
 	CRTSIM_MASK_ROWS_INDEX,
@@ -67,6 +71,7 @@ enum crtsim_parameter_index {
 	CRTSIM_BLOOM_INDEX,
 	CRTSIM_BLOOM_POWER_INDEX,
 	CRTSIM_BLOOM_SPREAD_INDEX,
+	CRTSIM_BLOOM_SPREAD_UP_INDEX,
 	CRTSIM_DIFFUSE_INDEX,
 	CRTSIM_SPECULAR_INDEX,
 	CRTSIM_SPECULAR_POWER_INDEX,
@@ -84,6 +89,9 @@ enum crtsim_parameter_index {
 	CRTSIM_PERSISTENCE_R_INDEX,
 	CRTSIM_PERSISTENCE_G_INDEX,
 	CRTSIM_PERSISTENCE_B_INDEX,
+	CRTSIM_BRIGHTNESS_INDEX,
+	CRTSIM_STATIC_INDEX,
+	CRTSIM_STATIC_CYCLE_INDEX,
 	CRTSIM_PARAMETER_COUNT,
 };
 
@@ -97,11 +105,13 @@ static const struct crtsim_parameter crtsim_parameters[CRTSIM_PARAMETER_COUNT] =
 	{"CRTSIM_PHASE", "Phase", 0.0f, 3.0f, 1.0f, 0.0f, CRTSIM_PHASE_ITEMS},
 	{"CRTSIM_FLIP_ARTIFACTS", "Artifact pattern", 0.0f, 1.0f, 1.0f, 0.0f, CRTSIM_FLIP_ARTIFACTS_ITEMS},
 	{"CRTSIM_GLOW_FLOOR", "Glow floor, as 8-bit history holds it", 0.0f, 1.0f, 1.0f, 0.0f, CRTSIM_GLOW_FLOOR_ITEMS},
+	{"CRTSIM_GLOW_PER_FRAME", "Glow fades", 0.0f, 1.0f, 1.0f, 0.0f, CRTSIM_GLOW_PER_FRAME_ITEMS},
 	{"CRTSIM_INTERLACE", "Interlaced fields", 0.0f, 2.0f, 1.0f, 2.0f, CRTSIM_INTERLACE_ITEMS},
 	{"CRTSIM_FIT", "Fit on the tube", 0.0f, 3.0f, 1.0f, 1.0f, CRTSIM_FIT_ITEMS},
 	{"CRTSIM_SCREEN_ONLY", "Screen only, without the bezel", 0.0f, 1.0f, 1.0f, 0.0f, CRTSIM_SCREEN_ONLY_ITEMS},
 	{"CRTSIM_REFLECTION_AS_SCREEN", "Bezel reflection", 0.0f, 1.0f, 1.0f, 0.0f, CRTSIM_REFLECTION_AS_SCREEN_ITEMS},
 	{"CRTSIM_BLOOM_MIPMAPS", "Bloom reads", 0.0f, 1.0f, 1.0f, 0.0f, CRTSIM_BLOOM_MIPMAPS_ITEMS},
+	{"CRTSIM_FXAA", "FXAA", 0.0f, 4.0f, 1.0f, 0.0f, CRTSIM_FXAA_ITEMS},
 	{"CRTSIM_MASK_ANTIALIAS", "Filter mask when shrinking", 0.0f, 1.0f, 1.0f, 1.0f, CRTSIM_MASK_ANTIALIAS_ITEMS},
 	{"CRTSIM_MASK_COLUMNS", "Mask columns (0 follows the signal)", 0.0f, 4096.0f, 1.0f, 128.0f, NULL},
 	{"CRTSIM_MASK_ROWS", "Mask rows (0 follows the signal)", 0.0f, 4096.0f, 1.0f, 224.0f, NULL},
@@ -123,7 +133,8 @@ static const struct crtsim_parameter crtsim_parameters[CRTSIM_PARAMETER_COUNT] =
 	{"CRTSIM_MASK_BRIGHTNESS", "Mask brightness", 0.0f, 2.0f, 0.02f, 0.45f, NULL},
 	{"CRTSIM_BLOOM", "Bloom amount", 0.0f, 2.0f, 0.02f, 0.25f, NULL},
 	{"CRTSIM_BLOOM_POWER", "Bloom power", 0.1f, 8.0f, 0.08f, 2.0f, NULL},
-	{"CRTSIM_BLOOM_SPREAD", "Bloom spread", 0.0f, 0.2f, 0.002f, 0.025f, NULL},
+	{"CRTSIM_BLOOM_SPREAD", "Bloom spread, first blur", 0.0f, 0.2f, 0.002f, 0.025f, NULL},
+	{"CRTSIM_BLOOM_SPREAD_UP", "Bloom spread, second blur", 0.0f, 0.2f, 0.002f, 0.025f, NULL},
 	{"CRTSIM_DIFFUSE", "Diffuse light", 0.0f, 2.0f, 0.02f, 0.5f, NULL},
 	{"CRTSIM_SPECULAR", "Specular light", 0.0f, 5.0f, 0.05f, 0.35f, NULL},
 	{"CRTSIM_SPECULAR_POWER", "Specular power", 1.0f, 200.0f, 2.0f, 50.0f, NULL},
@@ -141,6 +152,9 @@ static const struct crtsim_parameter crtsim_parameters[CRTSIM_PARAMETER_COUNT] =
 	{"CRTSIM_PERSISTENCE_R", "Red persistence", 0.0f, 0.999f, 0.01f, 0.7f, NULL},
 	{"CRTSIM_PERSISTENCE_G", "Green persistence", 0.0f, 0.999f, 0.01f, 0.525f, NULL},
 	{"CRTSIM_PERSISTENCE_B", "Blue persistence", 0.0f, 0.999f, 0.01f, 0.42f, NULL},
+	{"CRTSIM_BRIGHTNESS", "Brightness", -1.0f, 1.0f, 0.02f, 0.0f, NULL},
+	{"CRTSIM_STATIC", "TV static", 0.0f, 1.0f, 0.01f, 0.0f, NULL},
+	{"CRTSIM_STATIC_CYCLE", "Channel cycle, seconds (0 holds the static)", 0.0f, 60.0f, 0.6f, 0.0f, NULL},
 };
 
 /* An image the passes read, from the data folder, and the effect's texture for it. */

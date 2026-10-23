@@ -312,6 +312,7 @@ impl App {
             "flip_artifacts",
             "interlace",
             "glow_floor",
+            "glow_per_frame",
         ];
         let title = "Persistence & artifact phase";
         section(ui, &shown, title, &persistence, &[Persistence], |ui| {
@@ -373,10 +374,78 @@ impl App {
                          to black.",
                     );
             }
+            if shown.key("glow_per_frame") {
+                ui.checkbox(&mut self.config.glow_per_frame, "Glow fades per frame")
+                    .on_hover_text(
+                        "The glow fades by persistence once each frame drawn, as Super Win the \
+                         Game does, so on a display faster than 60 Hz it fades faster. Off \
+                         fades it by the time that passes, the same at any rate.",
+                    );
+            }
             notes(
                 ui,
                 "Each still starts from a dark tube. Higher persistence may require more \
                  warm-up ticks. Alternating phase depends on tick count.",
+            );
+        });
+        let finish = ["fxaa", "tate", "crt_off", "screenshot_stills"];
+        section(ui, &shown, "Picture finish", &finish, &[Finish], |ui| {
+            numbers(ui, &mut self.config, defaults, Finish, &shown);
+            if shown.key("fxaa") {
+                choice(
+                    ui,
+                    "FXAA",
+                    &mut self.config.fxaa,
+                    &[
+                        (Fxaa::Off, "Off"),
+                        (Fxaa::Low, "Low"),
+                        (Fxaa::Medium, "Medium"),
+                        (Fxaa::High, "High"),
+                        (Fxaa::Ultra, "Ultra"),
+                    ],
+                );
+            }
+            if shown.key("tate") {
+                choice(
+                    ui,
+                    "Tate",
+                    &mut self.config.tate,
+                    &[
+                        (Tate::Off, "Off"),
+                        (Tate::Quarter, "A quarter turn"),
+                        (Tate::Half, "Upside down"),
+                        (Tate::ThreeQuarters, "Three quarters"),
+                    ],
+                );
+            }
+            if shown.key("crt_off") {
+                ui.checkbox(&mut self.config.crt_off, "CRT off")
+                    .on_hover_text(
+                        "The clean picture without the CRT: square-cut pixels at the signal's \
+                         aspect, fitted inside the frame, as Super Win the Game draws it with \
+                         its CRT simulation off.",
+                    );
+            }
+            if shown.key("screenshot_stills") {
+                ui.checkbox(&mut self.config.screenshot_stills, "Stills as screenshots")
+                    .on_hover_text(
+                        "With alternating phase, a still's last tick draws both artifact \
+                         patterns at once, as Super Win the Game's screenshots do. Video \
+                         keeps alternating.",
+                    );
+            }
+            notes(
+                ui,
+                "Super Win the Game's options screen: brightness, FXAA and tate act on the \
+                 finished picture.",
+            );
+        });
+        section(ui, &shown, "TV static", &[], &[Static], |ui| {
+            numbers(ui, &mut self.config, defaults, Static, &shown);
+            notes(
+                ui,
+                "Snow, a rolling band and a wavering picture, for switching channels. With a \
+                 cycle, the static comes and goes over that many seconds of video.",
             );
         });
         if self.config != before {

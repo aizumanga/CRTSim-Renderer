@@ -817,3 +817,123 @@ fn the_glow_floor_holds_black_where_8_bit_history_rounds_it_back() {
         [0, 0, 0]
     );
 }
+
+#[test]
+#[ignore = "requires a Vulkan adapter"]
+fn tate_turns_the_finished_picture_and_the_crt_off_draws_it_flat() {
+    let r = pollster::block_on(Renderer::new(wgpu::Backends::VULKAN)).unwrap();
+    let card = config::test_card();
+    let c = Config {
+        output: "320x180".into(),
+        ..Config::default()
+    };
+    let upright = render(&r, &card, &c).unwrap().crt;
+    // A quarter turn clockwise, a half, and three quarters, texel for texel.
+    for (tate, expected) in [
+        (config::Tate::Quarter, image::imageops::rotate90(&upright)),
+        (config::Tate::Half, image::imageops::rotate180(&upright)),
+        (config::Tate::ThreeQuarters, image::imageops::rotate270(&upright)),
+    ] {
+        let turned = render(&r, &card, &Config { tate, ..c.clone() }).unwrap().crt;
+        assert_eq!(turned, expected, "{tate:?}");
+    }
+    // The CRT off: the clean signal, each pixel twice as wide and tall at twice its size,
+    // without the colour table, which belongs to the CRT's signal.
+    let flat = Config {
+        output: "512x448".into(),
+        pixel_aspect: 1.,
+        crt_off: true,
+        lut: Some(std::sync::Arc::new(crate::nes_luts::load(0).unwrap())),
+        ..Config::default()
+    };
+    let shown = render(&r, &card, &flat).unwrap();
+    let clean = config::prepare(&card, &Config { lut: None, ..flat }).unwrap();
+    let doubled = image::imageops::resize(&clean, 512, 448, image::imageops::FilterType::Nearest);
+    assert_eq!(shown.crt, doubled);
+}
+
+#[test]
+#[ignore = "requires a Vulkan adapter"]
+fn brightness_raises_the_finished_pictures_luma_keeping_its_hue() {
+    let r = pollster::block_on(Renderer::new(wgpu::Backends::VULKAN)).unwrap();
+    let card = config::test_card();
+    let c = Config {
+        output: "320x180".into(),
+        ..Config::default()
+    };
+    let plain = render(&r, &card, &c).unwrap().crt;
+    let bright = render(&r, &card, &Config { brightness: 1., ..c }).unwrap().crt;
+    // Brightness 1 takes luma to its square root: c / l * l^0.5.
+    let luma = |p: &image::Rgba<u8>| {
+        (0.299 * f32::from(p[0]) + 0.587 * f32::from(p[1]) + 0.114 * f32::from(p[2])) / 255.
+    };
+    // Near black the square root's slope magnifies the 8-bit rounding of the plain picture, so
+    // only pixels lit enough for that rounding to stay within a few steps are compared.
+    let mut compared = 0;
+    for (before, after) in plain.pixels().zip(bright.pixels()) {
+        let l = luma(before);
+        if l < 0.1 || before.0[..3].contains(&255) {
+            continue;
+        }
+        compared += 1;
+        // The plain picture's rounding, half a step, comes out scaled by l^-0.5.
+        let gain = l.sqrt().recip();
+        for channel in 0..3 {
+            let expected = (f32::from(before[channel]) * gain).clamp(0., 255.);
+            assert!(
+                (f32::from(after[channel]) - expected).abs() <= 1. + gain,
+                "{before:?} {after:?}"
+            );
+        }
+    }
+    assert!(compared > 10_000, "{compared}");
+}
+
+#[test]
+#[ignore = "requires a Vulkan adapter"]
+fn a_screenshot_still_averages_the_two_artifact_patterns() {
+    let r = pollster::block_on(Renderer::new(wgpu::Backends::VULKAN)).unwrap();
+    let card = config::test_card();
+    let alternating = Config {
+        output: "320x180".into(),
+        phase: Phase::Alternating,
+        ..Config::default()
+    };
+    let screenshot = Config {
+        screenshot_stills: true,
+        ..alternating.clone()
+    };
+    let one_tick = render(&r, &card, &alternating).unwrap().signal;
+    let averaged = render(&r, &card, &screenshot).unwrap().signal;
+    let stable = render(
+        &r,
+        &card,
+        &Config {
+            phase: Phase::Stable,
+            ..alternating
+        },
+    )
+    .unwrap()
+    .signal;
+    assert_ne!(one_tick, averaged);
+    // Its last tick's composite is stable phase's, over a glow the alternating ticks left; with
+    // no persistence the two are the same picture.
+    let no_glow = |c: &Config| Config {
+        persistence: [0.; 3],
+        ..c.clone()
+    };
+    assert_eq!(
+        render(&r, &card, &no_glow(&screenshot)).unwrap().signal,
+        render(
+            &r,
+            &card,
+            &Config {
+                phase: Phase::Stable,
+                ..no_glow(&screenshot)
+            }
+        )
+        .unwrap()
+        .signal
+    );
+    assert_ne!(averaged, stable, "the glow before it alternated");
+}

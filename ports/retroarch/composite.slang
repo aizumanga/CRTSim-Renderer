@@ -23,6 +23,9 @@ layout(std140, set = 0, binding = 0) uniform UBO {
     float CRTSIM_PERSISTENCE_B;
     float CRTSIM_INTERLACE;
     float CRTSIM_GLOW_FLOOR;
+    float CRTSIM_GLOW_PER_FRAME;
+    float CRTSIM_STATIC;
+    float CRTSIM_STATIC_CYCLE;
 } global;
 
 #pragma stage vertex

@@ -281,6 +281,51 @@ fn cases(renderer: &Renderer) -> Vec<(&'static str, RgbaImage)> {
         .crt,
     ));
 
+    // The game's finishing options: its FXAA at its finest, a brighter picture, the picture
+    // turned a quarter for a screen on its side, and the CRT off.
+    cases.push((
+        "fxaa-ultra",
+        render(&Config {
+            fxaa: config::Fxaa::Ultra,
+            ..base()
+        })
+        .crt,
+    ));
+    cases.push((
+        "brightness",
+        render(&Config {
+            brightness: 0.5,
+            ..base()
+        })
+        .crt,
+    ));
+    cases.push((
+        "tate",
+        render(&Config {
+            tate: config::Tate::Quarter,
+            ..base()
+        })
+        .crt,
+    ));
+    cases.push((
+        "crt-off",
+        render(&Config {
+            crt_off: true,
+            ..base()
+        })
+        .crt,
+    ));
+
+    // TV static, half over the picture, seen in the signal where the composite pass draws it.
+    cases.push((
+        "tv-static",
+        render(&Config {
+            static_amount: 0.5,
+            ..base()
+        })
+        .signal,
+    ));
+
     // A backdrop past the bezel's edges, which the goldens' 16:9 frame shows at its sides.
     cases.push((
         "backdrop",

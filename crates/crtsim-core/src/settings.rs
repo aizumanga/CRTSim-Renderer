@@ -23,6 +23,10 @@ pub enum Section {
     Bloom,
     Lighting,
     Persistence,
+    /// What is done to the finished picture: brightness, FXAA and turning it.
+    Finish,
+    /// TV static over the signal.
+    Static,
 }
 
 pub struct Setting {
@@ -329,8 +333,13 @@ pub static SETTINGS: &[Setting] = &[
     ),
     Setting::numbers(
         "bloom_spread",
-        "Bloom spread",
+        "Bloom spread, first blur",
         Numbers::slider(Bloom, access!(bloom_spread), 0.0..=0.2),
+    ),
+    Setting::numbers(
+        "bloom_spread_up",
+        "Bloom spread, second blur",
+        Numbers::slider(Bloom, access!(bloom_spread_up), 0.0..=0.2),
     ),
     Setting::numbers(
         "reflection",
@@ -396,6 +405,26 @@ pub static SETTINGS: &[Setting] = &[
     Setting::other("interlace", "Interlaced fields"),
     Setting::other("flip_artifacts", "Flip artifact pattern"),
     Setting::other("glow_floor", "Glow floor"),
+    Setting::other("glow_per_frame", "Glow decays per frame"),
+    Setting::numbers(
+        "brightness",
+        "Brightness",
+        Numbers::slider(Finish, access!(brightness), -1.0..=1.),
+    ),
+    Setting::other("fxaa", "FXAA"),
+    Setting::other("tate", "Tate"),
+    Setting::other("crt_off", "CRT off"),
+    Setting::other("screenshot_stills", "Stills as the game's screenshots"),
+    Setting::numbers(
+        "static_amount",
+        "TV static",
+        Numbers::slider(Static, access!(static_amount), 0.0..=1.),
+    ),
+    Setting::numbers(
+        "static_cycle",
+        "Channel cycle, seconds (0 holds the static)",
+        Numbers::slider(Static, access!(static_cycle), 0.0..=60.),
+    ),
 ];
 
 /// Checks every numeric setting against what a preset may hold, naming the first that is not.

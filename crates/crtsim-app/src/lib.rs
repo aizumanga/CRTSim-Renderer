@@ -48,7 +48,7 @@ mod web_video;
 mod widgets;
 mod worker;
 
-use crtsim_core::config::{ColorMode, Config, Filter, Fit, MaskRepeats, Phase};
+use crtsim_core::config::{ColorMode, Config, Filter, Fit, Fxaa, MaskRepeats, Phase, Tate};
 use crtsim_core::settings;
 use dialogs::Dialog;
 use eframe::egui::{self, TextureHandle};

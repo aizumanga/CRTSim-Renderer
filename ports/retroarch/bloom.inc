@@ -4,6 +4,7 @@ layout(std140, set = 0, binding = 0) uniform UBO {
     mat4 MVP;
     vec4 FinalViewportSize;
     float CRTSIM_BLOOM_SPREAD;
+    float CRTSIM_BLOOM_SPREAD_UP;
     float CRTSIM_BLOOM_MIPMAPS;
 } global;
 

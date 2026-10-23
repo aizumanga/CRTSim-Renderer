@@ -18,10 +18,12 @@ float3 bloom_tap(float2 uv, float2 offset, bool swap, float2 scale, float lod) {
     return HOST_SAMPLE_BLOOM_INPUT(uv + turned * scale, swap, lod).rgb;
 }
 
-// The blur's pixel at uv; the second pass swaps the hexagon's axes.
+// The blur's pixel at uv; the second pass swaps the hexagon's axes, and spreads by its own
+// amount, as Super Win the Game's two blurs each have theirs.
 float4 crtsim_bloom(float2 uv, bool swap) {
     float2 output_size = HOST_OUTPUT_SIZE;
-    float2 scale = float2(output_size.y / output_size.x, 1.0) * P(CRTSIM_BLOOM_SPREAD);
+    float spread = swap ? P(CRTSIM_BLOOM_SPREAD_UP) : P(CRTSIM_BLOOM_SPREAD);
+    float2 scale = float2(output_size.y / output_size.x, 1.0) * spread;
     float lod = swap ? 0.0 : bloom_lod();
     float3 total = V3(0.0);
     total += bloom_tap(uv, float2(0.0, 0.0), swap, scale, lod);

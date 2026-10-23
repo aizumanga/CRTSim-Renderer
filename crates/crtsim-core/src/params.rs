@@ -21,6 +21,8 @@ pub(crate) struct Params {
     processing: [f32; 4],
     backdrop: [f32; 4],
     post: [f32; 4],
+    finish: [f32; 4],
+    picture: [f32; 4],
 }
 
 /// What a tube's aspect makes of the original's 4:3 one, worked out here so that for 4:3 they
@@ -96,7 +98,13 @@ impl Params {
                 tube.stretch,
             ],
             camera: [camera.x, camera.y, camera.z, c.tube_aspect],
-            bloom: [c.bloom, c.bloom_power, c.bloom_spread, tube.widening],
+            // With the CRT off there is no bloom, as in the game.
+            bloom: [
+                if c.crt_off { 0. } else { c.bloom },
+                c.bloom_power,
+                c.bloom_spread,
+                tube.widening,
+            ],
             processing: [
                 flag(c.color_mode == ColorMode::LinearLight),
                 flag(c.interlace),
@@ -110,13 +118,21 @@ impl Params {
                 tube.framing,
             ],
             post: [flag(c.bloom_from_mipmaps), flag(c.glow_floor), 0., 0.],
+            finish: [
+                2_f32.powf(-c.brightness),
+                c.fxaa as u32 as f32,
+                c.tate.quarters() as f32,
+                c.bloom_spread_up,
+            ],
+            picture: [c.pixel_aspect, c.static_amount, c.static_cycle, 0.],
         }
     }
 
-    /// The composite phase for `tick`, and the field it scans when interlaced. `blending` moves
-    /// the two phases towards their average as the game's NTSC Blending does: its `NTSCLerp` is
-    /// `p + (0.5 - p) * blending` for the tick's phase `p` of 0 or 1.
-    pub(crate) fn tick(&mut self, phase: Phase, blending: f32, tick: u64) {
+    /// The composite phase for `tick`, the field it scans when interlaced, and where TV static's
+    /// clock stands, in sixtieths of a second, which also draws its noise anew each whole one.
+    /// `blending` moves the two phases towards their average as the game's NTSC Blending does:
+    /// its `NTSCLerp` is `p + (0.5 - p) * blending` for the tick's phase `p` of 0 or 1.
+    pub(crate) fn tick(&mut self, phase: Phase, blending: f32, tick: u64, clock: f64) {
         let (a, b) = (0.5 * blending, 1. - 0.5 * blending);
         self.signal[3] = match phase {
             Phase::Stable => 0.5,
@@ -126,6 +142,8 @@ impl Params {
             Phase::Alternating => b,
         };
         self.processing[2] = (tick % 2) as f32;
+        // Whole sixtieths are exact up to 2^24, over 77 hours.
+        self.picture[3] = (clock % f64::from(1 << 24)) as f32;
     }
 }
 
@@ -180,7 +198,7 @@ mod tests {
                 ..Config::default()
             };
             let mut params = Params::new(&c, (256, 224), (320, 240));
-            params.tick(c.phase, c.ntsc_blending, tick);
+            params.tick(c.phase, c.ntsc_blending, tick, 0.);
             params.signal[3]
         };
         // Unblended, the public source's switch between the two patterns.
