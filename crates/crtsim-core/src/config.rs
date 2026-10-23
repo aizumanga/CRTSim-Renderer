@@ -148,6 +148,11 @@ pub struct Config {
     /// is the public source's (Direct3D) orientation, which the game's Windows build draws.
     pub flip_artifacts: bool,
     pub persistence: [f32; 3],
+    /// The glow never fades below the level 8-bit history holds it at once a pixel has been lit:
+    /// each channel at the brightest level its persistence rounds back to itself, 1 of 255 in
+    /// red and green at the defaults. Super Win the Game's title screen lights every pixel with
+    /// static, so its blacks sit there from then on. Off fades to black, as a tube never lit.
+    pub glow_floor: bool,
     pub overscan: f32,
     pub barrel: f32,
     /// The picture tube's width over its height: the original's 4:3, or wider, as later sets
@@ -177,6 +182,12 @@ pub struct Config {
     pub bloom: f32,
     pub bloom_power: f32,
     pub bloom_spread: f32,
+    /// The bloom's first blur reads the picture through its mipmaps, each level the average of
+    /// 2×2 texels of the one above, at the level GL picks for a target a sixteenth its size, as
+    /// Super Win the Game draws it: each tap averages 16×16 of the picture's pixels. Off, as
+    /// the public source draws it, each tap reads the picture itself, where the mask can alias
+    /// into the glow.
+    pub bloom_from_mipmaps: bool,
     pub color_mode: ColorMode,
     /// Samples the mask from mipmaps, each the average of the level above, and between them,
     /// as the original did: the mask stays smooth where it is drawn smaller than it is. Off
@@ -214,6 +225,7 @@ impl Default for Config {
             flip_artifacts: false,
             reflection_as_screen: false,
             persistence: [0.7, 0.525, 0.42],
+            glow_floor: false,
             overscan: 1.,
             barrel: -0.115,
             tube_aspect: 4. / 3.,
@@ -234,6 +246,7 @@ impl Default for Config {
             bloom: 0.25,
             bloom_power: 2.,
             bloom_spread: 0.025,
+            bloom_from_mipmaps: false,
             color_mode: ColorMode::Reference,
             mask_antialias: true,
             interlace: false,
@@ -302,9 +315,10 @@ impl Config {
     }
 
     /// Super Win the Game's own CRT options: the public reference with a 30° field of view,
-    /// NTSC blending at 0.35 and its NTSC palette made as the game makes it, with the artifact
-    /// pattern as its Windows build draws it and the bezel reflecting the picture as the screen
-    /// shows it.
+    /// alternating phase with NTSC blending at 0.35 and its NTSC palette made as the game makes
+    /// it, with the artifact pattern as its Windows build draws it, the bezel reflecting the
+    /// picture as the screen shows it, a grey backdrop past the bezel, the bloom read through
+    /// the picture's mipmaps, and the glow held at its 8-bit floor, as after the title screen.
     pub fn super_win_the_game() -> Self {
         Self {
             fov: 30.,
@@ -313,6 +327,8 @@ impl Config {
             reflection_as_screen: true,
             // The game's engine draws a backdrop at 1/16 grey, seen past the bezel.
             backdrop_color: [0.0625; 3],
+            bloom_from_mipmaps: true,
+            glow_floor: true,
             palette: Some(Default::default()),
             ..Self::default()
         }

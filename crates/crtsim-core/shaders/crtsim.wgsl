@@ -1,20 +1,20 @@
 // CC0. Port of J. Kyle Pittman's CRTSim (upstream dbbe9d1).
 // Gamma-space UNORM reference pipeline. No NES palette LUT is invented here.
 struct Params {
-    mvp: mat4x4<f32>,
     size: vec4<f32>,
     signal: vec4<f32>, // sharpness, bleed, artifacts, phase
     persistence: vec4<f32>, // rgb, artifact pattern flipped
     geometry: vec4<f32>, // UV scale xy, overscan, barrel
     mask: vec4<f32>, // repeats xy, brightness, opacity
     lighting: vec4<f32>, // diffuse, specular, power, rim
-    surface: vec4<f32>, // dimming, reflection, saturation, unused
+    surface: vec4<f32>, // dimming, reflection, saturation, mask filtered when drawn smaller
     bezel: vec4<f32>, // colour, reflection as on the screen
     light: vec4<f32>, // position, the glass's stretch across from the original's
     camera: vec4<f32>, // position, the tube's width over its height
     bloom: vec4<f32>, // amount, power, spread, the tube's widening either side
     processing: vec4<f32>, // linear-light surface/bloom path, interlaced, field scanned this tick, screen only
     backdrop: vec4<f32>, // colour where neither the glass nor the bezel is, the view's widening
+    post: vec4<f32>, // bloom read through the picture's mipmaps, glow floor, unused
 };
 @group(0) @binding(0) var<uniform> p: Params;
 @group(0) @binding(1) var source: texture_2d<f32>;
@@ -38,6 +38,14 @@ fn srgb_decode(c: vec3<f32>) -> vec3<f32> {
 }
 fn srgb_encode(c: vec3<f32>) -> vec3<f32> {
     return select(1.055*pow(max(c,vec3(0.)),vec3(1./2.4))-vec3(0.055),c*12.92,c<=vec3(0.0031308));
+}
+// The level 8-bit history holds each channel's glow at once lit, when the glow floor is on: the
+// brightest level its persistence rounds back to itself, none where a frame of no time keeps
+// all of it.
+fn glow_floor() -> vec3<f32> {
+    let kept=p.persistence.rgb;
+    let level=min(floor(0.5/max(vec3(1.)-kept,vec3(0.000001))),vec3(255.))/255.;
+    return select(vec3(0.),level,(kept<vec3(1.)) & vec3(p.post.y>0.5));
 }
 fn display_luma(c: vec3<f32>) -> f32 {
     return select(luma(c),dot(c,vec3(0.2126,0.7152,0.0722)),p.processing.x>0.5);
@@ -66,9 +74,10 @@ fn display_luma(c: vec3<f32>) -> f32 {
     color = clamp(color+offset*p.signal.x*mix(vec3(1.),a,p.signal.z),vec3(0.),vec3(1.));
     // Interlaced: the beam skips the other field's rows this tick; they only decay below.
     if p.processing.y>0.5 && (u32(q.position.y)%2u)!=u32(p.processing.z) { color=vec3(0.); }
-    let pl = textureSampleLevel(previous,point_clamp,q.uv-dx,0.).rgb;
-    let pr = textureSampleLevel(previous,point_clamp,q.uv+dx,0.).rgb;
-    let pc = textureSampleLevel(previous,point_clamp,q.uv,0.).rgb;
+    let held = glow_floor();
+    let pl = max(textureSampleLevel(previous,point_clamp,q.uv-dx,0.).rgb,held);
+    let pr = max(textureSampleLevel(previous,point_clamp,q.uv+dx,0.).rgb,held);
+    let pc = max(textureSampleLevel(previous,point_clamp,q.uv,0.).rgb,held);
     color = max(color,p.persistence.rgb*(pc+(pl+pr)*p.signal.y)/(1.+2.*p.signal.y));
     return vec4(clamp(color,vec3(0.),vec3(1.)),1.);
 }
@@ -121,7 +130,9 @@ fn shade(v: Surface, across: vec2<f32>, down: vec2<f32>, bezel: bool) -> vec4<f3
     let diffuse=max(dot(n,light),0.);
     let halfvec=safe_normalize(light+cam);
     let spec=pow(max(dot(n,halfvec),0.),p.lighting.z);
-    let fres=pow(1.-dot(cam,n),2.)*p.lighting.w;
+    // Squared by multiplying, as the original does, which pow leaves undefined below 0.
+    let grazing=1.-dot(cam,n);
+    let fres=grazing*grazing*p.lighting.w;
     var color=crt(v.uv,across,down,bezel);
     if bezel {
         let hemi=(dot(n,vec3(0.,0.,1.))*0.5+0.5)*0.4+0.3;
@@ -306,19 +317,32 @@ fn may_meet_bezel(ray: vec3<f32>) -> bool {
     return vec4(select(p.backdrop.rgb,srgb_decode(p.backdrop.rgb),p.processing.x>0.5),1.);
 }
 
-fn blur(uv: vec2<f32>, swap: bool) -> vec4<f32> {
+fn blur(uv: vec2<f32>, swap: bool, lod: f32) -> vec4<f32> {
     var offsets=array<vec2<f32>,7>(vec2(0.,0.),vec2(0.,1.),vec2(0.,-1.),
         vec2(-0.866025,0.5),vec2(-0.866025,-0.5),vec2(0.866025,0.5),vec2(0.866025,-0.5));
     let scale=vec2(p.size.w/p.size.z,1.)*p.bloom.z;
     var total=vec3(0.);
     for (var i=0u;i<7u;i++) {
         let off=select(offsets[i],offsets[i].yx,swap);
-        total+=textureSampleLevel(source,linear_clamp,uv+off*scale,0.).rgb;
+        total+=textureSampleLevel(source,linear_clamp,uv+off*scale,lod).rgb;
     }
     return vec4(total/7.,1.);
 }
-@fragment fn downsample(q: Quad) -> @location(0) vec4<f32> { return blur(q.uv,false); }
-@fragment fn upsample(q: Quad) -> @location(0) vec4<f32> { return blur(q.uv,true); }
+// The bloom's first blur, into a sixteenth of the picture each way, rounded down. Super Win the
+// Game reads the picture through its mipmaps, at the level GL picks for a target that size:
+// level 4, each tap the average of 16x16 of its pixels, and towards 5 where a side does not
+// divide by 16. The public source reads the picture itself.
+@fragment fn downsample(q: Quad) -> @location(0) vec4<f32> {
+    let ratio=p.size.zw/max(floor(p.size.zw/16.),vec2(1.));
+    return blur(q.uv,false,select(0.,log2(max(max(ratio.x,ratio.y),1.)),p.post.x>0.5));
+}
+@fragment fn upsample(q: Quad) -> @location(0) vec4<f32> { return blur(q.uv,true,0.); }
+// A mip level of the picture from the one above, as GL's glGenerateMipmap draws it: filtered
+// at each texel's centre, the average of the 2x2 texels above it, or blended between them
+// where the level above has an odd size.
+@fragment fn halve(q: Quad) -> @location(0) vec4<f32> {
+    return vec4(textureSampleLevel(source,linear_clamp,q.uv,0.).rgb,1.);
+}
 @fragment fn present(q: Quad) -> @location(0) vec4<f32> {
     let base=textureSampleLevel(source,linear_clamp,q.uv,0.).rgb;
     let blurred=textureSampleLevel(previous,linear_clamp,q.uv,0.).rgb;

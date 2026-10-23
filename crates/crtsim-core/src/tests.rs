@@ -650,3 +650,170 @@ fn gpu_smoke() {
             .unwrap();
     }
 }
+
+/// Mip level `level` of `texture`, read back.
+fn mip_level(r: &Renderer, texture: &wgpu::Texture, level: u32) -> RgbaImage {
+    let size = texture
+        .size()
+        .mip_level_size(level, wgpu::TextureDimension::D2);
+    let copy = Target::new(&r.device, "mip level", (size.width, size.height));
+    let mut encoder = r.device.create_command_encoder(&Default::default());
+    encoder.copy_texture_to_texture(
+        wgpu::TexelCopyTextureInfo {
+            mip_level: level,
+            ..texture.as_image_copy()
+        },
+        copy.texture.as_image_copy(),
+        size,
+    );
+    r.queue.submit(Some(encoder.finish()));
+    pollster::block_on(Readback::new(&r.device, copy.size()).read(&r.device, &r.queue, &copy))
+        .unwrap()
+}
+
+/// `image` filtered at `uv` as the GPU does, clamped to its edges.
+fn bilinear(image: &RgbaImage, uv: [f32; 2]) -> [f32; 3] {
+    let (width, height) = image.dimensions();
+    let x = uv[0] * width as f32 - 0.5;
+    let y = uv[1] * height as f32 - 0.5;
+    let texel = |x: f32, y: f32| {
+        let p = image.get_pixel(
+            (x.max(0.) as u32).min(width - 1),
+            (y.max(0.) as u32).min(height - 1),
+        );
+        [p[0], p[1], p[2]].map(|v| f32::from(v) / 255.)
+    };
+    let (x0, y0) = (x.floor(), y.floor());
+    let (fx, fy) = (x - x0, y - y0);
+    let [a, b, c, d] = [
+        texel(x0, y0),
+        texel(x0 + 1., y0),
+        texel(x0, y0 + 1.),
+        texel(x0 + 1., y0 + 1.),
+    ];
+    std::array::from_fn(|i| {
+        let top = a[i] + (b[i] - a[i]) * fx;
+        let bottom = c[i] + (d[i] - c[i]) * fx;
+        top + (bottom - top) * fy
+    })
+}
+
+/// The largest difference between two images' colour channels, in 8-bit steps.
+fn worst_step(a: &RgbaImage, b: &RgbaImage) -> u8 {
+    assert_eq!(a.dimensions(), b.dimensions());
+    a.pixels()
+        .zip(b.pixels())
+        .flat_map(|(p, q)| (0..3).map(move |c| p[c].abs_diff(q[c])))
+        .max()
+        .unwrap_or(0)
+}
+
+#[test]
+#[ignore = "requires a Vulkan adapter"]
+fn the_bloom_reads_the_pictures_mipmaps_as_super_win_the_game_does() {
+    let r = pollster::block_on(Renderer::new(wgpu::Backends::VULKAN)).unwrap();
+    let c = Config {
+        output: "1280x960".into(),
+        bloom_from_mipmaps: true,
+        ..Config::default()
+    };
+    let mut sequence = Sequence::still();
+    pollster::block_on(r.frame(&mut sequence, &config::test_card(), &c, None, |_| {})).unwrap();
+    let workspace = sequence.workspace.as_ref().unwrap();
+    let picture = workspace.full_levels[0].texture();
+    let levels: Vec<_> = (0..picture.mip_level_count())
+        .map(|level| mip_level(&r, picture, level))
+        .collect();
+    assert_eq!(levels.len(), 6);
+    // Each level the one above halved, as GL's glGenerateMipmap makes them: 2×2 averages, a
+    // step apart at most where a half rounds either way.
+    for pair in levels.windows(2) {
+        assert!(worst_step(&gpu::halve(&pair[0]), &pair[1]) <= 1);
+    }
+    // A target a sixteenth the picture's size reads level 4: seven taps of its 16×16 averages.
+    let level = &levels[4];
+    assert_eq!(level.dimensions(), (80, 60));
+    let scale = [960. / 1280. * c.bloom_spread, c.bloom_spread];
+    let taps: [[f32; 2]; 7] = [
+        [0., 0.],
+        [0., 1.],
+        [0., -1.],
+        [-0.866025, 0.5],
+        [-0.866025, -0.5],
+        [0.866025, 0.5],
+        [0.866025, -0.5],
+    ];
+    let expected = RgbaImage::from_fn(80, 60, |x, y| {
+        let uv = [(x as f32 + 0.5) / 80., (y as f32 + 0.5) / 60.];
+        let mut total = [0.; 3];
+        for tap in taps {
+            let sample = bilinear(
+                level,
+                [uv[0] + tap[0] * scale[0], uv[1] + tap[1] * scale[1]],
+            );
+            for i in 0..3 {
+                total[i] += sample[i] / 7.;
+            }
+        }
+        let [r, g, b] = total.map(|v| (v * 255.).round() as u8);
+        image::Rgba([r, g, b, 255])
+    });
+    let blurred = pollster::block_on(Readback::new(&r.device, workspace.down.size()).read(
+        &r.device,
+        &r.queue,
+        &workspace.down,
+    ))
+    .unwrap();
+    assert!(worst_step(&expected, &blurred) <= 2);
+    // The public source's taps read the picture itself, which the mask aliases.
+    let public = Config {
+        bloom_from_mipmaps: false,
+        ..c
+    };
+    let mut sequence = Sequence::still();
+    pollster::block_on(r.frame(&mut sequence, &config::test_card(), &public, None, |_| {}))
+        .unwrap();
+    let workspace = sequence.workspace.as_ref().unwrap();
+    let aliased = pollster::block_on(Readback::new(&r.device, workspace.down.size()).read(
+        &r.device,
+        &r.queue,
+        &workspace.down,
+    ))
+    .unwrap();
+    assert!(worst_step(&expected, &aliased) > 2);
+}
+
+#[test]
+#[ignore = "requires a Vulkan adapter"]
+fn the_glow_floor_holds_black_where_8_bit_history_rounds_it_back() {
+    let r = pollster::block_on(Renderer::new(wgpu::Backends::VULKAN)).unwrap();
+    let c = Config {
+        output: "64x48".into(),
+        signal: "16x16".into(),
+        glow_floor: true,
+        ..Config::default()
+    };
+    let black = RgbaImage::from_pixel(16, 16, image::Rgba([0, 0, 0, 255]));
+    let floor = |c: &Config| {
+        let signal = render(&r, &black, c).unwrap().signal;
+        let pixel = signal.get_pixel(8, 8);
+        [pixel[0], pixel[1], pixel[2]]
+    };
+    // Red's 0.7 and green's 0.525 round 1 back to 1; blue's 0.42 rounds it to 0.
+    assert_eq!(floor(&c), [1, 1, 0]);
+    // 0.85 holds 3, whose 2.55 rounds back up, where 4's 3.4 falls to 3.
+    assert_eq!(
+        floor(&Config {
+            persistence: [0.85, 0.3, 0.],
+            ..c.clone()
+        }),
+        [3, 0, 0]
+    );
+    assert_eq!(
+        floor(&Config {
+            glow_floor: false,
+            ..c
+        }),
+        [0, 0, 0]
+    );
+}

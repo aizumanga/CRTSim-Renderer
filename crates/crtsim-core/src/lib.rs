@@ -64,9 +64,11 @@ struct Pipelines {
     layout: wgpu::PipelineLayout,
 }
 
-/// What follows the signal: the curved glass and its bezel, then the bloom's two blurs.
+/// What follows the signal: the curved glass and its bezel, the mipmaps the bloom may read,
+/// then the bloom's two blurs.
 struct SurfacePasses {
     surface: wgpu::RenderPipeline,
+    halve: wgpu::RenderPipeline,
     downsample: wgpu::RenderPipeline,
     upsample: wgpu::RenderPipeline,
 }
@@ -87,7 +89,10 @@ pub(crate) struct Workspace {
     source: Target,
     /// The simulated signal's feedback: each tick reads one and writes the other.
     history: [Target; 2],
-    full: Target,
+    /// Each mip level of the glass and bezel's picture alone, its own size first: the picture is
+    /// drawn into the first, and each level after from the one before. The bloom and present
+    /// passes read the whole chain.
+    full_levels: Vec<wgpu::TextureView>,
     down: Target,
     up: Target,
     final_target: Target,
@@ -100,6 +105,13 @@ pub(crate) struct Workspace {
     shape: Shape,
 }
 
+/// The mip levels of the glass and bezel's picture of `size` that the bloom may read: down to the
+/// level below a sixteenth, between which a target a sixteenth its size reads, or as many as
+/// the size has.
+fn bloom_levels((width, height): (u32, u32)) -> u32 {
+    (u32::BITS - width.max(height).leading_zeros()).min(6)
+}
+
 /// The most memory a render's targets may take, as `Renderer::fits` estimates them.
 const BUDGET: u64 = 1_500_000_000;
 
@@ -109,6 +121,8 @@ struct Bindings {
     composite: [wgpu::BindGroup; 2],
     /// By the history target holding the signal the glass shows.
     glass: [wgpu::BindGroup; 2],
+    /// By the mip level drawn, from the second: each reads the level before.
+    halve: Vec<wgpu::BindGroup>,
     downsample: wgpu::BindGroup,
     upsample: wgpu::BindGroup,
     present: wgpu::BindGroup,
@@ -369,6 +383,7 @@ impl Renderer {
             let format = surface_format(mode);
             SurfacePasses {
                 surface: pipeline("surface", format),
+                halve: pipeline("halve", format),
                 downsample: pipeline("downsample", format),
                 upsample: pipeline("upsample", format),
             }
@@ -672,8 +687,8 @@ impl Renderer {
         });
         let bindings = self.bind(
             &workspace.uniforms.buffer,
-            &workspace.final_target,
-            &workspace.source,
+            &workspace.final_target.view,
+            &workspace.source.view,
         );
         gpu::draw(
             encoder,
@@ -781,17 +796,31 @@ impl Renderer {
         let device = &self.device;
         let output_size = shape.output;
         let format = surface_format(shape.color_mode);
-        let surface = |name, size| Target::with_format(device, name, size, format, 1);
-        let full = surface("screen and bezel", output_size);
+        let surface = |name, size, levels| Target::with_format(device, name, size, format, levels);
+        let full = surface("screen and bezel", output_size, bloom_levels(output_size));
+        let full_levels: Vec<_> = (0..full.texture.mip_level_count())
+            .map(|level| {
+                full.texture.create_view(&wgpu::TextureViewDescriptor {
+                    base_mip_level: level,
+                    mip_level_count: Some(1),
+                    ..Default::default()
+                })
+            })
+            .collect();
         let down = surface(
             "bloom downsample",
             ((output_size.0 / 16).max(1), (output_size.1 / 16).max(1)),
+            1,
         );
-        let up = surface("bloom upsample", output_size);
-        let bind = |a, b| self.bind(&uniforms.buffer, a, b);
+        let up = surface("bloom upsample", output_size, 1);
+        let bind = |a: &Target, b: &Target| self.bind(&uniforms.buffer, &a.view, &b.view);
         let bindings = Bindings {
             composite: [bind(&source, &history[1]), bind(&source, &history[0])],
             glass: [bind(&history[0], &source), bind(&history[1], &source)],
+            halve: full_levels[..full_levels.len() - 1]
+                .iter()
+                .map(|above| self.bind(&uniforms.buffer, above, &source.view))
+                .collect(),
             downsample: bind(&full, &source),
             upsample: bind(&down, &source),
             present: bind(&full, &up),
@@ -804,7 +833,7 @@ impl Renderer {
             bindings,
             source,
             history,
-            full,
+            full_levels,
             down,
             up,
             shape,
@@ -852,7 +881,8 @@ impl Renderer {
                 .all(|v| *v <= limit),
             "image exceeds adapter texture limit {limit}"
         );
-        // Conservative working-set guard: color targets, depth, readback and history.
+        // Conservative working-set guard: color targets, the glass's mipmaps, depth, readback and
+        // history.
         let linear = shape.color_mode == ColorMode::LinearLight;
         let estimated = u64::from(output.0) * u64::from(output.1) * if linear { 48 } else { 24 }
             + u64::from(signal.0) * u64::from(signal.1) * 16;
@@ -876,13 +906,18 @@ impl Renderer {
         let offset = workspace.uniforms.write(&self.queue, SURFACE_SLOT, params);
         let passes = self.pipelines.surface(c.color_mode);
         let bindings = &workspace.bindings;
-        gpu::fullscreen(
+        gpu::draw(
             encoder,
-            &workspace.full,
+            &workspace.full_levels[0],
             &passes.surface,
             &bindings.glass[latest],
             &[offset],
         );
+        if c.bloom_from_mipmaps {
+            for (level, above) in workspace.full_levels[1..].iter().zip(&bindings.halve) {
+                gpu::draw(encoder, level, &passes.halve, above, &[offset]);
+            }
+        }
         gpu::fullscreen(
             encoder,
             &workspace.down,
@@ -908,7 +943,12 @@ impl Renderer {
 
     /// A bind group reading `source` and `previous`, with the settings slot the pass chooses
     /// by dynamic offset.
-    fn bind(&self, uniforms: &wgpu::Buffer, source: &Target, previous: &Target) -> wgpu::BindGroup {
+    fn bind(
+        &self,
+        uniforms: &wgpu::Buffer,
+        source: &wgpu::TextureView,
+        previous: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
         let mut entries = vec![wgpu::BindGroupEntry {
             binding: 0,
             resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
@@ -917,13 +957,13 @@ impl Renderer {
                 size: PARAMS_SIZE,
             }),
         }];
-        for (i, t) in [source, previous, &self.artifacts, &self.mask]
-            .iter()
+        for (i, view) in [source, previous, &self.artifacts.view, &self.mask.view]
+            .into_iter()
             .enumerate()
         {
             entries.push(wgpu::BindGroupEntry {
                 binding: i as u32 + 1,
-                resource: wgpu::BindingResource::TextureView(&t.view),
+                resource: wgpu::BindingResource::TextureView(view),
             });
         }
         for (i, s) in self.samplers.iter().enumerate() {

@@ -48,6 +48,7 @@ const PASSES: &[(&str, &str)] = &[
         include_str!("../../../ports/passes/surface.inc"),
     ),
     ("bloom.inc", include_str!("../../../ports/passes/bloom.inc")),
+    ("halve.inc", include_str!("../../../ports/passes/halve.inc")),
     (
         "present.inc",
         include_str!("../../../ports/passes/present.inc"),
@@ -62,7 +63,8 @@ fn passes(dir: &str) -> impl Iterator<Item = File> + '_ {
 }
 
 /// The looks a release ships: the original's settings, the same in linear light, the app's
-/// starting point for ordinary images, and the original with the NES palette.
+/// starting point for ordinary images, the original with the NES palette, and Super Win the
+/// Game's CRT options, as the app starts with them and with the game's NES palette.
 pub fn shipped() -> Vec<(String, Config)> {
     let reference = Config::default();
     vec![
@@ -81,6 +83,14 @@ pub fn shipped() -> Vec<(String, Config)> {
                 palette: Some(Default::default()),
                 ..reference
             },
+        ),
+        (
+            "crtsim-renderer-super-win-the-game".into(),
+            crtsim_core::presets::default().config,
+        ),
+        (
+            "crtsim-renderer-super-win-the-game-nes-palette".into(),
+            Config::super_win_the_game(),
         ),
     ]
 }
@@ -509,6 +519,13 @@ pub fn parameters(host: Host) -> Vec<Parameter> {
             ALL,
             |c| flag(c.flip_artifacts),
         ),
+        choice(
+            "CRTSIM_GLOW_FLOOR",
+            "Glow floor, as 8-bit history holds it",
+            OFF_ON,
+            ALL,
+            |c| flag(c.glow_floor),
+        ),
         // A look made on a still says nothing about a picture that switches to 480 rows, so a
         // look that does not interlace leaves it to the picture's size.
         choice(
@@ -530,7 +547,9 @@ pub fn parameters(host: Host) -> Vec<Parameter> {
                 Fit::Stretch => 3.,
             },
         ),
-        // RetroArch says the picture's shape itself, from 1.20 on.
+        // RetroArch says the picture's shape itself, from 1.20 on. Before, a look of a fixed
+        // signal stands in with that signal's shape, as Super Win the Game's 8:7 pixels show
+        // 256x224, and any other with 4:3.
         number(
             "CRTSIM_ASPECT",
             "Picture aspect, when the core gives none",
@@ -538,7 +557,12 @@ pub fn parameters(host: Host) -> Vec<Parameter> {
             4.,
             0.01,
             &[Host::RetroArch],
-            |_| 4. / 3.,
+            |c| match signal(c) {
+                [width, height] if width > 0. && height > 0. => {
+                    (width / height * c.pixel_aspect).clamp(0.25, 4.)
+                }
+                _ => 4. / 3.,
+            },
         ),
         choice(
             "CRTSIM_SCREEN_ONLY",
@@ -553,6 +577,13 @@ pub fn parameters(host: Host) -> Vec<Parameter> {
             &["as the public source", "as the screen"],
             ALL,
             |c| flag(c.reflection_as_screen),
+        ),
+        choice(
+            "CRTSIM_BLOOM_MIPMAPS",
+            "Bloom reads",
+            &["the picture itself", "its mipmaps"],
+            ALL,
+            |c| flag(c.bloom_from_mipmaps),
         ),
         choice(
             "CRTSIM_MASK_ANTIALIAS",
@@ -587,11 +618,14 @@ pub fn parameters(host: Host) -> Vec<Parameter> {
             .find(|s| s.key == *key)
             .expect("a setting the ports read is in the table");
         let numbers = setting.numbers.as_ref().expect("a numeric setting");
-        let (min, mut max) = match &numbers.control {
+        let (mut min, mut max) = match &numbers.control {
             Control::Slider { span, .. } => (*span.start(), *span.end()),
             Control::Color => (0., 1.),
         };
         // A look may hold more than its slider shows; the host's range has to reach it.
+        if let Bound::Included(valid) = numbers.valid.0 {
+            min = min.min(valid);
+        }
         if let Bound::Included(valid) = numbers.valid.1 {
             max = max.max(valid);
         }
@@ -780,6 +814,18 @@ mod tests {
                     parameters(*host).iter().any(|p| p.name == word),
                     "the passes read {word}, which {host:?} does not declare"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn no_choice_has_an_item_with_a_comma() {
+        // Godot's @export_enum takes a comma as the end of an item.
+        for host in ALL {
+            for p in parameters(*host) {
+                if let Kind::Choice(items) = p.kind {
+                    assert!(items.iter().all(|item| !item.contains(',')), "{}", p.name);
+                }
             }
         }
     }

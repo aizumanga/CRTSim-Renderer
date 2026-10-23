@@ -8,7 +8,7 @@
 //! mask's mipmaps its own way, rounding each texel its own way, which moves a third of a
 //! filtered frame's pixels by a step or two. So every case samples the mask unfiltered, where
 //! only a real translation error can move a pixel, and one case keeps the mipmaps under a limit
-//! of its own. The limits were set from the first measurement and frozen; `--nocapture`
+//! of its own, as one keeps the bloom from the surface's halved levels. The limits were set from the first measurement and frozen; `--nocapture`
 //! prints each case's margin.
 
 use crtsim_core::config::{self, ColorMode, Config, Phase};
@@ -27,6 +27,14 @@ pub const UNFILTERED: Limits = Limits {
 pub const MIPMAPPED: Limits = Limits {
     worst: 4,
     mean: 0.3,
+};
+/// The bloom from the surface's halved levels: each level a filtered read of the one above,
+/// which a driver rounds half up in two steps or to the nearest in one, as it filters, so a
+/// level can move by a step where a port's host takes the other path, and the bloom, at full
+/// strength in its case, carries that to about one pixel in eight.
+pub const HALVED: Limits = Limits {
+    worst: 2,
+    mean: 0.08,
 };
 /// A colour table computed in floats, as the NES palette is, which the ports read as an 8-bit
 /// strip.
@@ -156,6 +164,38 @@ pub fn cases() -> Vec<Case> {
                 overscan: 1.25,
                 reflection: 2.,
                 ..base()
+            },
+        ),
+        // The bloom read through the surface's mipmaps, as the game reads it, strong enough to
+        // show; the 16:9 frame's height does not divide by 16, so it reads between two levels.
+        Case {
+            limits: HALVED,
+            ..still(
+                "bloom-from-mipmaps",
+                Config {
+                    bloom_from_mipmaps: true,
+                    bloom: 1.,
+                    ..base()
+                },
+            )
+        },
+        // The glow held at its 8-bit floor, with a persistence that holds it high enough to see:
+        // 7, 3 and 1 of 255, none of them where a half rounds either way.
+        still(
+            "glow-floor",
+            Config {
+                glow_floor: true,
+                persistence: [0.93, 0.85, 0.7],
+                ..base()
+            },
+        ),
+        // Super Win the Game's look as a whole, its mask unfiltered.
+        still(
+            "super-win-the-game",
+            Config {
+                output: base().output,
+                mask_antialias: false,
+                ..Config::super_win_the_game()
             },
         ),
         // A backdrop past the bezel's edges, at the sides of the 16:9 frame.

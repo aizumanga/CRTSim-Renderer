@@ -24,9 +24,10 @@ pub fn default() -> Preset {
     entry(
         "Super Win the Game",
         "The game's own CRT options: the public reference with a 30° field of view, NTSC \
-         blending at 0.35, the artifact pattern as its Windows build draws it and the bezel \
-         reflecting the picture as the screen shows it. Its NES palette is off, so a picture \
-         keeps its colours.",
+         blending at 0.35, the artifact pattern as its Windows build draws it, the bezel \
+         reflecting the picture as the screen shows it, a grey backdrop, the bloom read \
+         through the picture's mipmaps and the glow held at its 8-bit floor. Its NES palette \
+         is off, so a picture keeps its colours.",
         Config {
             palette: None,
             ..Config::super_win_the_game()

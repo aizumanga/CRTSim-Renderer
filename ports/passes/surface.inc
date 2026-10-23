@@ -117,7 +117,9 @@ float4 light_surface(Surface v, float2 across, float2 down, bool bezel) {
     float diffuse = max(dot(n, light), 0.0);
     float3 halfway = safe_normalize(light + cam);
     float spec = pow(max(dot(n, halfway), 0.0), P(CRTSIM_SPECULAR_POWER));
-    float fres = pow(max(1.0 - dot(cam, n), 0.0), 2.0) * P(CRTSIM_RIM);
+    // Squared by multiplying, as the original does, which pow leaves undefined below 0.
+    float grazing = 1.0 - dot(cam, n);
+    float fres = grazing * grazing * P(CRTSIM_RIM);
     float3 color = crt(v.uv, across, down, bezel);
     if (bezel) {
         float hemi = (dot(n, float3(0.0, 0.0, 1.0)) * 0.5 + 0.5) * 0.4 + 0.3;

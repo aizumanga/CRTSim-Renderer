@@ -313,7 +313,7 @@ pub(crate) fn shadow_mask(device: &wgpu::Device, queue: &wgpu::Queue) -> Result<
 
 /// `image` at half size, each texel the rounded average of the 2×2 it replaces. A side that is
 /// already one texel stays one, and those texels average in pairs.
-fn halve(image: &RgbaImage) -> RgbaImage {
+pub(crate) fn halve(image: &RgbaImage) -> RgbaImage {
     let (width, height) = image.dimensions();
     RgbaImage::from_fn((width / 2).max(1), (height / 2).max(1), |x, y| {
         let (left, top) = (2 * x, 2 * y);

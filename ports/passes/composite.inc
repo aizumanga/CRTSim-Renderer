@@ -41,6 +41,18 @@ float3 persistence() {
     return per_tick;
 }
 
+// The level 8-bit history holds a channel's glow at once lit, with the glow floor on: the
+// brightest level its persistence rounds back to itself, none where a frame of no time keeps
+// all of it.
+float floor_level(float kept) {
+    return kept < 1.0 ? min(floor(0.5 / (1.0 - kept)), 255.0) / 255.0 : 0.0;
+}
+
+float3 glow_floor(float3 kept) {
+    if (P(CRTSIM_GLOW_FLOOR) < 0.5) return V3(0.0);
+    return float3(floor_level(kept.x), floor_level(kept.y), floor_level(kept.z));
+}
+
 // The difference between this pixel's luma and its two neighbours d pixels away.
 float ring(int2 xy, int d, float brightness) {
     float lb = luma(prepared_at(xy - int2(d, 0)));
@@ -76,10 +88,12 @@ float4 crtsim_composite(int2 xy) {
     int interlace = int(P(CRTSIM_INTERLACE) + 0.5);
     bool interlaced = interlace == 1 || (interlace == 2 && rows >= 400);
     if (interlaced && (xy.y % 2) != (HOST_FRAME_COUNT % 2)) color = V3(0.0);
-    float3 pl = previous_at(xy - int2(1, 0));
-    float3 pr = previous_at(xy + int2(1, 0));
-    float3 pc = previous_at(xy);
+    float3 kept = persistence();
+    float3 held = glow_floor(kept);
+    float3 pl = max(previous_at(xy - int2(1, 0)), held);
+    float3 pr = max(previous_at(xy + int2(1, 0)), held);
+    float3 pc = max(previous_at(xy), held);
     float bleed = P(CRTSIM_BLEED);
-    color = max(color, persistence() * (pc + (pl + pr) * bleed) / (1.0 + 2.0 * bleed));
+    color = max(color, kept * (pc + (pl + pr) * bleed) / (1.0 + 2.0 * bleed));
     return float4(clamp(color, V3(0.0), V3(1.0)), 1.0);
 }

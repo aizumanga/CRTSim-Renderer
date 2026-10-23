@@ -38,9 +38,13 @@ cannot. The renderer is not embedded in OBS.
   of whole vectors, no arrays, no texture passed to a function, constants as macros, and no
   macro without parameters defined as something in parentheses, which OBS's preprocessor
   reads as its parameters. `ports/passes/common.inc` lists these.
-- Hosts that hand over a picture of any size (ReShade, OBS) resize it to the signal in two
-  passes of their own, `ports/passes/resize.inc`, as the image crate resizes; RetroArch hands
-  over the core's picture.
+- Hosts that hand over a picture of any size (ReShade, OBS, Godot) resize it to the signal in
+  two passes of their own, `ports/passes/resize.inc`, as the image crate resizes; RetroArch
+  hands over the core's picture.
+- ReShade makes the surface's mipmaps for the bloom itself. RetroArch, OBS and Godot halve it
+  level by level with `ports/passes/halve.inc`, as the renderer does: OBS and Godot cannot make
+  a target's mipmaps, and RetroArch's `mipmap_input` is not honoured by librashader's wgpu
+  runtime, through which the port is tested and which some frontends use.
 - The OBS plugin links OBS's library and is built per platform and OBS version from
   `ports/obs`. Releases build it for Linux; elsewhere it is built from source.
 - A look's parameters are one table for every port (`crtsim_shader_ports`), each parameter

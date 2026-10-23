@@ -56,6 +56,10 @@ pub(super) const SOURCES: &[(&str, &str)] = &[
         include_str!("../../../ports/godot/shaders/surface.glsl"),
     ),
     (
+        "halve.glsl",
+        include_str!("../../../ports/godot/shaders/halve.glsl"),
+    ),
+    (
         "bloom_down.glsl",
         include_str!("../../../ports/godot/shaders/bloom_down.glsl"),
     ),
@@ -240,7 +244,8 @@ fn uniforms() -> String {
          \x20   vec2 crtsim_output_size;\n\
          \x20   float crtsim_frame_count;\n\
          \x20   float crtsim_frame_ticks;\n\
-         \x20   float crtsim_has_previous;\n",
+         \x20   float crtsim_has_previous;\n\
+         \x20   float crtsim_bloom_level;\n",
     );
     for p in super::parameters(Host::Godot) {
         writeln!(out, "    float {};", p.name).expect("writing to a string");

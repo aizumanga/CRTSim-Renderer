@@ -279,9 +279,18 @@ impl App {
             }
             numbers(ui, &mut self.config, defaults, Mask, &shown);
         });
-        let bloom = ["reflection_as_screen"];
+        let bloom = ["bloom_from_mipmaps", "reflection_as_screen"];
         section(ui, &shown, "Bloom & reflections", &bloom, &[Bloom], |ui| {
             numbers(ui, &mut self.config, defaults, Bloom, &shown);
+            if shown.key("bloom_from_mipmaps") {
+                ui.checkbox(&mut self.config.bloom_from_mipmaps, "Bloom from mipmaps")
+                    .on_hover_text(
+                        "The bloom reads the picture through averaged, smaller copies of \
+                         itself, as Super Win the Game does, so each of its taps averages \
+                         16×16 pixels. Off is the public CRTSim source: each tap reads the \
+                         picture itself, where the mask can flicker into the glow.",
+                    );
+            }
             if shown.key("reflection_as_screen") {
                 ui.checkbox(
                     &mut self.config.reflection_as_screen,
@@ -297,7 +306,13 @@ impl App {
         section(ui, &shown, "Frame & lighting", &[], &[Lighting], |ui| {
             numbers(ui, &mut self.config, defaults, Lighting, &shown)
         });
-        let persistence = ["warmup", "phase", "flip_artifacts", "interlace"];
+        let persistence = [
+            "warmup",
+            "phase",
+            "flip_artifacts",
+            "interlace",
+            "glow_floor",
+        ];
         let title = "Persistence & artifact phase";
         section(ui, &shown, title, &persistence, &[Persistence], |ui| {
             numbers(ui, &mut self.config, defaults, Persistence, &shown);
@@ -349,10 +364,19 @@ impl App {
                          only fade by persistence. Use with a 480- or 576-row signal.",
                     );
             }
+            if shown.key("glow_floor") {
+                ui.checkbox(&mut self.config.glow_floor, "Glow floor")
+                    .on_hover_text(
+                        "The glow never fades below the level 8-bit history rounds it back to, \
+                         1 of 255 in red and green at the default persistence, as every pixel \
+                         stays once Super Win the Game's title screen has lit it. Off fades \
+                         to black.",
+                    );
+            }
             notes(
                 ui,
-                "Each still starts from black. Higher persistence may require more warm-up \
-                 ticks. Alternating phase depends on tick count.",
+                "Each still starts from a dark tube. Higher persistence may require more \
+                 warm-up ticks. Alternating phase depends on tick count.",
             );
         });
         if self.config != before {

@@ -190,6 +190,8 @@ mod tests {
         assert!(game.reflection_as_screen);
         // Its engine draws a backdrop at 1/16 grey, seen past the bezel in wide windows.
         assert_eq!(game.backdrop_color, [0.0625; 3]);
+        // Its bloom reads the picture's mipmaps, and its history rounds black to a floor.
+        assert!(game.bloom_from_mipmaps && game.glow_floor);
         let palette = game.palette.unwrap();
         assert_eq!(
             (palette.tint, palette.tint_i, palette.tint_q, palette.model),

@@ -22,10 +22,12 @@ static const char *const CRTSIM_TABLE_NEAREST_ITEMS[] = {"blended", "nearest", N
 static const char *const CRTSIM_LINEAR_ITEMS[] = {"off", "on", NULL};
 static const char *const CRTSIM_PHASE_ITEMS[] = {"stable", "A", "B", "alternating", NULL};
 static const char *const CRTSIM_FLIP_ARTIFACTS_ITEMS[] = {"as the public source", "flipped", NULL};
+static const char *const CRTSIM_GLOW_FLOOR_ITEMS[] = {"off", "on", NULL};
 static const char *const CRTSIM_INTERLACE_ITEMS[] = {"off", "on", "auto", NULL};
 static const char *const CRTSIM_FIT_ITEMS[] = {"original", "contain", "cover", "stretch", NULL};
 static const char *const CRTSIM_SCREEN_ONLY_ITEMS[] = {"off", "on", NULL};
 static const char *const CRTSIM_REFLECTION_AS_SCREEN_ITEMS[] = {"as the public source", "as the screen", NULL};
+static const char *const CRTSIM_BLOOM_MIPMAPS_ITEMS[] = {"the picture itself", "its mipmaps", NULL};
 static const char *const CRTSIM_MASK_ANTIALIAS_ITEMS[] = {"off", "on", NULL};
 
 enum crtsim_parameter_index {
@@ -37,10 +39,12 @@ enum crtsim_parameter_index {
 	CRTSIM_LINEAR_INDEX,
 	CRTSIM_PHASE_INDEX,
 	CRTSIM_FLIP_ARTIFACTS_INDEX,
+	CRTSIM_GLOW_FLOOR_INDEX,
 	CRTSIM_INTERLACE_INDEX,
 	CRTSIM_FIT_INDEX,
 	CRTSIM_SCREEN_ONLY_INDEX,
 	CRTSIM_REFLECTION_AS_SCREEN_INDEX,
+	CRTSIM_BLOOM_MIPMAPS_INDEX,
 	CRTSIM_MASK_ANTIALIAS_INDEX,
 	CRTSIM_MASK_COLUMNS_INDEX,
 	CRTSIM_MASK_ROWS_INDEX,
@@ -92,10 +96,12 @@ static const struct crtsim_parameter crtsim_parameters[CRTSIM_PARAMETER_COUNT] =
 	{"CRTSIM_LINEAR", "Linear light", 0.0f, 1.0f, 1.0f, 0.0f, CRTSIM_LINEAR_ITEMS},
 	{"CRTSIM_PHASE", "Phase", 0.0f, 3.0f, 1.0f, 0.0f, CRTSIM_PHASE_ITEMS},
 	{"CRTSIM_FLIP_ARTIFACTS", "Artifact pattern", 0.0f, 1.0f, 1.0f, 0.0f, CRTSIM_FLIP_ARTIFACTS_ITEMS},
+	{"CRTSIM_GLOW_FLOOR", "Glow floor, as 8-bit history holds it", 0.0f, 1.0f, 1.0f, 0.0f, CRTSIM_GLOW_FLOOR_ITEMS},
 	{"CRTSIM_INTERLACE", "Interlaced fields", 0.0f, 2.0f, 1.0f, 2.0f, CRTSIM_INTERLACE_ITEMS},
 	{"CRTSIM_FIT", "Fit on the tube", 0.0f, 3.0f, 1.0f, 1.0f, CRTSIM_FIT_ITEMS},
 	{"CRTSIM_SCREEN_ONLY", "Screen only, without the bezel", 0.0f, 1.0f, 1.0f, 0.0f, CRTSIM_SCREEN_ONLY_ITEMS},
 	{"CRTSIM_REFLECTION_AS_SCREEN", "Bezel reflection", 0.0f, 1.0f, 1.0f, 0.0f, CRTSIM_REFLECTION_AS_SCREEN_ITEMS},
+	{"CRTSIM_BLOOM_MIPMAPS", "Bloom reads", 0.0f, 1.0f, 1.0f, 0.0f, CRTSIM_BLOOM_MIPMAPS_ITEMS},
 	{"CRTSIM_MASK_ANTIALIAS", "Filter mask when shrinking", 0.0f, 1.0f, 1.0f, 1.0f, CRTSIM_MASK_ANTIALIAS_ITEMS},
 	{"CRTSIM_MASK_COLUMNS", "Mask columns (0 follows the signal)", 0.0f, 4096.0f, 1.0f, 128.0f, NULL},
 	{"CRTSIM_MASK_ROWS", "Mask rows (0 follows the signal)", 0.0f, 4096.0f, 1.0f, 224.0f, NULL},
@@ -103,25 +109,25 @@ static const struct crtsim_parameter crtsim_parameters[CRTSIM_PARAMETER_COUNT] =
 	{"CRTSIM_LUT_STRENGTH", "LUT strength", 0.0f, 1.0f, 0.01f, 1.0f, NULL},
 	{"CRTSIM_HUE", "Hue (degrees)", -180.0f, 180.0f, 4.0f, 0.0f, NULL},
 	{"CRTSIM_CHROMA", "Chroma", 0.0f, 2.0f, 0.02f, 1.0f, NULL},
-	{"CRTSIM_SATURATION", "Saturation", 0.0f, 3.0f, 0.03f, 1.0f, NULL},
-	{"CRTSIM_SHARPNESS", "Sharpness / ringing", 0.0f, 3.0f, 0.03f, 0.8f, NULL},
+	{"CRTSIM_SATURATION", "Saturation", 0.0f, 4.0f, 0.04f, 1.0f, NULL},
+	{"CRTSIM_SHARPNESS", "Sharpness / ringing", 0.0f, 4.0f, 0.04f, 0.8f, NULL},
 	{"CRTSIM_BLEED", "Color bleed", 0.0f, 2.0f, 0.02f, 0.5f, NULL},
 	{"CRTSIM_ARTIFACTS", "Composite artifacts", 0.0f, 2.0f, 0.02f, 0.5f, NULL},
 	{"CRTSIM_NTSC_BLENDING", "NTSC blending", 0.0f, 2.0f, 0.02f, 0.0f, NULL},
 	{"CRTSIM_BARREL", "Barrel distortion", -2.0f, 2.0f, 0.04f, -0.115f, NULL},
 	{"CRTSIM_OVERSCAN", "Overscan", 0.1f, 3.0f, 0.03f, 1.0f, NULL},
 	{"CRTSIM_TUBE_ASPECT", "Tube aspect (width ÷ height)", 0.75f, 2.0f, 0.01f, 1.3333334f, NULL},
-	{"CRTSIM_DIMMING", "Edge dimming", 0.0f, 1.0f, 0.01f, 0.5f, NULL},
-	{"CRTSIM_FOV", "Camera field of view", 5.0f, 90.0f, 0.9f, 15.0f, NULL},
-	{"CRTSIM_MASK_OPACITY", "Mask opacity", 0.0f, 1.0f, 0.01f, 1.0f, NULL},
+	{"CRTSIM_DIMMING", "Edge dimming", 0.0f, 2.0f, 0.02f, 0.5f, NULL},
+	{"CRTSIM_FOV", "Camera field of view", 0.05f, 90.0f, 0.9f, 15.0f, NULL},
+	{"CRTSIM_MASK_OPACITY", "Mask opacity", 0.0f, 2.0f, 0.02f, 1.0f, NULL},
 	{"CRTSIM_MASK_BRIGHTNESS", "Mask brightness", 0.0f, 2.0f, 0.02f, 0.45f, NULL},
 	{"CRTSIM_BLOOM", "Bloom amount", 0.0f, 2.0f, 0.02f, 0.25f, NULL},
 	{"CRTSIM_BLOOM_POWER", "Bloom power", 0.1f, 8.0f, 0.08f, 2.0f, NULL},
 	{"CRTSIM_BLOOM_SPREAD", "Bloom spread", 0.0f, 0.2f, 0.002f, 0.025f, NULL},
 	{"CRTSIM_DIFFUSE", "Diffuse light", 0.0f, 2.0f, 0.02f, 0.5f, NULL},
-	{"CRTSIM_SPECULAR", "Specular light", 0.0f, 2.0f, 0.02f, 0.35f, NULL},
+	{"CRTSIM_SPECULAR", "Specular light", 0.0f, 5.0f, 0.05f, 0.35f, NULL},
 	{"CRTSIM_SPECULAR_POWER", "Specular power", 1.0f, 200.0f, 2.0f, 50.0f, NULL},
-	{"CRTSIM_RIM", "Rim light", 0.0f, 2.0f, 0.02f, 1.0f, NULL},
+	{"CRTSIM_RIM", "Rim light", 0.0f, 10.0f, 0.1f, 1.0f, NULL},
 	{"CRTSIM_REFLECTION", "Edge reflection", 0.0f, 2.0f, 0.02f, 0.3f, NULL},
 	{"CRTSIM_BEZEL_R", "Bezel red", 0.0f, 1.0f, 0.01f, 0.06f, NULL},
 	{"CRTSIM_BEZEL_G", "Bezel green", 0.0f, 1.0f, 0.01f, 0.06f, NULL},

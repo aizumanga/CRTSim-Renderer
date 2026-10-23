@@ -235,6 +235,52 @@ fn cases(renderer: &Renderer) -> Vec<(&'static str, RgbaImage)> {
         .crt,
     ));
 
+    // The artifact pattern flipped, as the game's Linux build draws it, seen in the signal.
+    cases.push((
+        "flip-artifacts",
+        render(&Config {
+            phase: Phase::A,
+            flip_artifacts: true,
+            ..base()
+        })
+        .signal,
+    ));
+
+    // The bloom read through the picture's mipmaps, strong enough to show; the 16:9 frame's
+    // height does not divide by 16, so its first blur reads between two levels.
+    cases.push((
+        "bloom-from-mipmaps",
+        render(&Config {
+            bloom_from_mipmaps: true,
+            bloom: 1.,
+            ..base()
+        })
+        .crt,
+    ));
+
+    // The glow held at its 8-bit floor, with a persistence that holds it high enough to see:
+    // 7, 3 and 1 of 255, none of them where a half rounds either way.
+    cases.push((
+        "glow-floor",
+        render(&Config {
+            glow_floor: true,
+            persistence: [0.93, 0.85, 0.7],
+            ..base()
+        })
+        .crt,
+    ));
+
+    // Super Win the Game's look as a whole: its field of view, alternating blended phase,
+    // palette, reflection, backdrop, bloom and glow floor together.
+    cases.push((
+        "super-win-the-game",
+        render(&Config {
+            output: OUTPUT.into(),
+            ..Config::super_win_the_game()
+        })
+        .crt,
+    ));
+
     // A backdrop past the bezel's edges, which the goldens' 16:9 frame shows at its sides.
     cases.push((
         "backdrop",

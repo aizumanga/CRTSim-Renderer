@@ -1,5 +1,31 @@
 # Portable releases (Phase 4)
 
+## Unreleased
+
+Super Win the Game's look comes closer to the game's own: its bloom reads the picture as the game
+reads it, and its black holds where the game's 8-bit glow holds it.
+
+- **Bloom from mipmaps.** The bloom's first blur reads the picture through its mipmaps, at the
+  level a target a sixteenth its size reads, as the game does, so each tap averages 16×16 pixels
+  and the mask no longer flickers into the glow. On in the Super Win the Game looks; the public
+  reference reads the picture itself, as before.
+- **Glow floor.** The glow never fades below the level 8-bit history rounds it back to, 1 of 255
+  in red and green at the default persistence, as every pixel stays once the game's title screen
+  has lit it. On in the Super Win the Game looks.
+- The shader ports ship the Super Win the Game looks, as the app starts with them and with the
+  game's NES palette (`crtsim-renderer-super-win-the-game` and
+  `crtsim-renderer-super-win-the-game-nes-palette`). RetroArch before 1.20, which says no
+  picture shape, takes a look's own for a fixed signal, such as the game's 8:7 pixels.
+- Settings take every value the game's own sliders do: sharpness and saturation up to 4, edge
+  dimming and mask opacity up to 2, specular light up to 5, rim light up to 10, and a field of
+  view down to 0.05°.
+- The ReShade, OBS and Godot ports size the bloom's first target as the renderer and the game
+  do, a sixteenth of the picture rounded down.
+- The glass's rim light is squared by multiplying, as the game squares it.
+- [The research notes](research/swtg-crt/README.md) add session 11: the article, every shipped
+  shader and render state, the rest of the engine around the CRT, and the two changes above
+  checked against the running game.
+
 ## v1.6.0
 
 The CRT runs in games made with Bevy, as the renderer itself, and in Godot 4, as a compositor effect; and a video

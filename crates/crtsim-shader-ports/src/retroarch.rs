@@ -34,6 +34,10 @@ pub(super) const SOURCES: &[(&str, &str)] = &[
         include_str!("../../../ports/retroarch/surface.slang"),
     ),
     (
+        "halve.slang",
+        include_str!("../../../ports/retroarch/halve.slang"),
+    ),
+    (
         "bloom-down.slang",
         include_str!("../../../ports/retroarch/bloom-down.slang"),
     ),
@@ -136,6 +140,10 @@ struct Pass {
     surface: bool,
 }
 
+/// Each mip level's scale of the one above: a hair under a half, so a host rounding to the
+/// nearest size halves an odd one down, as GL sizes mipmaps, and an even one exactly.
+const HALF: f32 = 0.49999;
+
 const PASSES: &[Pass] = &[
     Pass {
         shader: "prepare.slang",
@@ -155,6 +163,41 @@ const PASSES: &[Pass] = &[
         shader: "surface.slang",
         alias: Some("CRTSIM_SURFACE"),
         scale: Some(("viewport", 1.)),
+        linear: true,
+        surface: true,
+    },
+    Pass {
+        shader: "halve.slang",
+        alias: None,
+        scale: Some(("source", HALF)),
+        linear: true,
+        surface: true,
+    },
+    Pass {
+        shader: "halve.slang",
+        alias: None,
+        scale: Some(("source", HALF)),
+        linear: true,
+        surface: true,
+    },
+    Pass {
+        shader: "halve.slang",
+        alias: None,
+        scale: Some(("source", HALF)),
+        linear: true,
+        surface: true,
+    },
+    Pass {
+        shader: "halve.slang",
+        alias: Some("CRTSIM_LEVEL4"),
+        scale: Some(("source", HALF)),
+        linear: true,
+        surface: true,
+    },
+    Pass {
+        shader: "halve.slang",
+        alias: Some("CRTSIM_LEVEL5"),
+        scale: Some(("source", HALF)),
         linear: true,
         surface: true,
     },
@@ -275,6 +318,8 @@ mod tests {
             "CRTSIM_SIGNALFeedback",
             "CRTSIM_SIGNALFeedbackSize",
             "CRTSIM_SURFACE",
+            "CRTSIM_LEVEL4",
+            "CRTSIM_LEVEL5",
         ];
         let not_parameters: Vec<_> = TEXTURES.iter().chain(&aliases).copied().collect();
         for word in super::super::tests::parameters_read(SOURCES, &not_parameters) {

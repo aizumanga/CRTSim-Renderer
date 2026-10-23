@@ -23,6 +23,10 @@ layout(set = 0, binding = 8) uniform sampler2D bezel_shape_filtered;
 layout(set = 0, binding = 9) uniform sampler2D bezel_uv_image;
 layout(set = 0, binding = 10) uniform sampler2D bezel_normal_image;
 layout(set = 0, binding = 11) uniform sampler2D glass_image;
+// The two of the surface's mip levels the bloom's first blur reads between, as CRTSimEffect
+// halves the surface into textures of their own: level crtsim_bloom_level and the one below.
+layout(set = 0, binding = 12) uniform sampler2D bloom_level;
+layout(set = 0, binding = 13) uniform sampler2D bloom_below;
 
 layout(location = 0) in vec2 uv;
 layout(location = 0) out vec4 frag;
@@ -58,8 +62,17 @@ layout(location = 0) out vec4 frag;
 #define HOST_FETCH_BEZEL_NORMAL(xy) texelFetch(bezel_normal_image, xy, 0)
 #define HOST_GLASS_SIZE vec2(textureSize(glass_image, 0))
 #define HOST_FETCH_GLASS(xy) texelFetch(glass_image, xy, 0)
-#define HOST_SAMPLE_BLOOM_INPUT(uv, second) textureLod(pass_input, uv, 0.0)
+#define HOST_SAMPLE_BLOOM_INPUT(uv, second, lod) bloom_input(uv, second, lod)
 #define HOST_SAMPLE_SURFACE(uv) textureLod(surface_image, uv, 0.0)
 #define HOST_SAMPLE_BLOOM(uv) textureLod(pass_input, uv, 0.0)
+#define HOST_SAMPLE_LEVEL_ABOVE(uv) textureLod(pass_input, uv, 0.0)
+
+// The bloom's input: for the second pass the first's output, for the first the surface, or
+// between two of its levels.
+vec4 bloom_input(vec2 at, bool second, float lod) {
+    if (second || lod <= 0.0) return textureLod(pass_input, at, 0.0);
+    return mix(textureLod(bloom_level, at, 0.0), textureLod(bloom_below, at, 0.0),
+        clamp(lod - u.crtsim_bloom_level, 0.0, 1.0));
+}
 
 #include "passes/common.inc"

@@ -7,7 +7,6 @@ use bytemuck::{Pod, Zeroable};
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub(crate) struct Params {
-    mvp: [[f32; 4]; 4],
     size: [f32; 4],
     signal: [f32; 4],
     persistence: [f32; 4],
@@ -21,6 +20,7 @@ pub(crate) struct Params {
     bloom: [f32; 4],
     processing: [f32; 4],
     backdrop: [f32; 4],
+    post: [f32; 4],
 }
 
 /// What a tube's aspect makes of the original's 4:3 one, worked out here so that for 4:3 they
@@ -54,18 +54,13 @@ pub(crate) const PARAMS_SIZE: Option<std::num::NonZeroU64> =
 impl Params {
     /// Everything but the composite phase and the interlaced field, which `tick` sets.
     pub(crate) fn new(c: &Config, signal: (u32, u32), output: (u32, u32)) -> Self {
-        let fov = c.fov.to_radians();
-        let distance = 1. / (fov * 0.5).tan();
+        let distance = 1. / (c.fov.to_radians() * 0.5).tan();
         let camera = glam::Vec3::new(-distance, 0., 0.);
-        let view = glam::Mat4::look_at_rh(camera, glam::Vec3::ZERO, glam::Vec3::Z);
-        let projection =
-            glam::Mat4::perspective_rh(fov, output.0 as f32 / output.1 as f32, 0.1, 100.);
         let uv = c.uv_scale(signal);
         let mask = c.mask_repeats.resolve(signal);
         let tube = Tube::new(c.tube_aspect, output);
         let flag = |on: bool| if on { 1. } else { 0. };
         Self {
-            mvp: (projection * view).to_cols_array_2d(),
             size: [
                 signal.0 as f32,
                 signal.1 as f32,
@@ -114,6 +109,7 @@ impl Params {
                 c.backdrop_color[2],
                 tube.framing,
             ],
+            post: [flag(c.bloom_from_mipmaps), flag(c.glow_floor), 0., 0.],
         }
     }
 

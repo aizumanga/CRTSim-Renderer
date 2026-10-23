@@ -87,7 +87,7 @@ capture, and recolours art drawn in MAME's NES palette, as the included NES LUTs
 Palette slider, mixes any LUT or the palette with the original colours. The game's table is read as the game reads it,
 nearest in red and green and blended in blue, here and in every shader port; other tables blend in all three.
 **Optional color grade** rotates hue and changes chroma in YIQ before the composite simulation. Neutral values leave the prepared signal unchanged.
-It is an artistic grade, not the private NES palette LUT or a full NTSC decoder.
+It is an artistic grade, not Super Win the Game's NES palette or a full NTSC decoder.
 **Linear light (experimental)** decodes the SDR signal for glass sampling, performs lighting and bloom with RGBA16Float intermediates,
 then encodes the final SDR PNG. Composite/persistence remains gamma-space RGBA8. It uses more GPU memory and changes the look;
 it is not a full linear-light pipeline, HDR export or an exact match to the game.
@@ -228,6 +228,11 @@ The glass and its bezel draw as the app draws them, from the same baked bezel.
 - **Bevy**, as the renderer itself on Bevy's own device: the
   [`crtsim-bevy`](crates/crtsim-bevy) crate, published to crates.io with each release, draws any
   camera holding a `Crt` with any look.
+
+The shipped looks are the public reference (`crtsim-renderer`), the same in linear light
+(`-linear`), General image (`-general`), the reference with the NES palette (`-nes-palette`), and
+Super Win the Game as the app starts with it (`-super-win-the-game`) and with the game's NES
+palette (`-super-win-the-game-nes-palette`).
 
 Every port is checked against the renderer: the RetroArch port through librashader, the OBS
 filter in OBS itself and the Godot effect in Godot itself, picture for picture, and the ReShade
