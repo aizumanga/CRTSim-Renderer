@@ -145,6 +145,15 @@ jobs:
           sudo apt-get install -y --no-install-recommends retroarch
           retroarch --version
           xvfb-run -a cargo test --locked -p crtsim-ports --test retroarch_real -- --ignored --nocapture
+      # vkBasalt, the Vulkan layer that runs ReShade's effects on Linux, drawing the ReShade
+      # effect over the frames of a window that shows each case's pictures, read back from
+      # Xvfb. The layer runs only where ENABLE_VKBASALT is set, as the test sets it.
+      - name: ReShade effect against the renderer, in vkBasalt
+        env:
+          CRTSIM_VKBASALT: /usr/share/vulkan/implicit_layer.d/vkBasalt.json
+        run: |
+          sudo apt-get install -y vkbasalt
+          xvfb-run -a cargo test --locked -p crtsim-ports --test reshade_vkbasalt -- --ignored --nocapture
       - name: Video history, FFmpeg and audio integration
         run: |
           cargo test --locked -p crtsim-core video_history -- --ignored --nocapture

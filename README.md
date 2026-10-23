@@ -234,10 +234,11 @@ The shipped looks are the public reference (`crtsim-renderer`), the same in line
 Super Win the Game as the app starts with it (`-super-win-the-game`) and with the game's NES
 palette (`-super-win-the-game-nes-palette`).
 
-Every port is checked against the renderer: the RetroArch port through librashader, the OBS
-filter in OBS itself and the Godot effect in Godot itself, picture for picture, and the ReShade
-effect compiled by ReShade's own compiler as each shipped look sets it. Bevy draws the
-renderer's own picture, which a headless Bevy app checks.
+Every port is checked against the renderer, picture for picture: the RetroArch port through
+librashader and in RetroArch itself, the ReShade effect in vkBasalt, the OBS filter in OBS itself
+and the Godot effect in Godot itself; and the ReShade effect is compiled by ReShade's own compiler
+as each shipped look sets it. Bevy draws the renderer's own picture, which a headless Bevy app
+checks.
 
 ## In video editors and Aseprite
 

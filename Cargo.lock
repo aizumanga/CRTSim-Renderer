@@ -2326,6 +2326,7 @@ dependencies = [
  "librashader",
  "pollster 0.3.0",
  "wgpu",
+ "x11-dl",
 ]
 
 [[package]]

@@ -19,3 +19,5 @@ anyhow.workspace = true
 image.workspace = true
 wgpu.workspace = true
 pollster = "0.3"
+# The present binary's X window, which vkBasalt's test shows a picture in and reads back.
+x11-dl = "2.21"

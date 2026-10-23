@@ -61,6 +61,17 @@ A mismatch writes the rendered frame and a 64x-amplified difference image into
 even when it fails. When the goldens have to be regenerated against a driver only CI has, an
 update run there leaves them in the same uploaded directory to download and commit.
 
+## Shader ports in their hosts
+
+`crates/crtsim-ports` draws every case of `parity::cases()` through each port and compares it
+with the renderer's picture: the RetroArch port through librashader and in RetroArch itself
+(1.18, as Ubuntu packages it, with glcore and with Vulkan: `tests/retroarch_real.rs`), the ReShade
+effect in vkBasalt (`tests/reshade_vkbasalt.rs`), the OBS filter in OBS and the Godot effect in
+Godot. RetroArch's image viewer shows one picture, so the glow's trail between pictures is
+checked in librashader and vkBasalt only; and RetroArch's Vulkan driver restarts a preset's
+feedback after the first frame while `FrameCount` runs on, so in RetroArch the looks that follow
+the frame count are checked with glcore.
+
 ## Colour management
 
 A picture is read into sRGB from the profile its file carries, with moxcms (`crtsim_core::color`).
