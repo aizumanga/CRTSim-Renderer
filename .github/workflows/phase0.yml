@@ -135,6 +135,16 @@ jobs:
           unzip -q godot.zip
           cd ../..
           CRTSIM_GODOT="$PWD/build/godot/Godot_v${GODOT_VERSION}_linux.x86_64" xvfb-run -a cargo test --locked -p crtsim-ports --test godot_parity -- --ignored --nocapture
+      # RetroArch as Ubuntu packages it, 1.18, whose built-in image viewer shows each case's
+      # picture through the port's preset until RetroArch saves a screenshot with the shader;
+      # once drawn with glcore on llvmpipe and once with Vulkan on lavapipe.
+      - name: RetroArch port against the renderer, in RetroArch itself
+        env:
+          CRTSIM_RETROARCH: retroarch
+        run: |
+          sudo apt-get install -y --no-install-recommends retroarch
+          retroarch --version
+          xvfb-run -a cargo test --locked -p crtsim-ports --test retroarch_real -- --ignored --nocapture
       - name: Video history, FFmpeg and audio integration
         run: |
           cargo test --locked -p crtsim-core video_history -- --ignored --nocapture
