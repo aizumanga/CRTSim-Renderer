@@ -28,6 +28,7 @@ layout(set = 0, binding = 0, std140) uniform Parameters {
     float crtsim_frame_count;
     float crtsim_frame_ticks;
     float crtsim_has_previous;
+    float crtsim_bloom_level;
     float CRTSIM_SIGNAL_WIDTH;
     float CRTSIM_SIGNAL_HEIGHT;
     float CRTSIM_RESIZE;
@@ -36,10 +37,15 @@ layout(set = 0, binding = 0, std140) uniform Parameters {
     float CRTSIM_LINEAR;
     float CRTSIM_PHASE;
     float CRTSIM_FLIP_ARTIFACTS;
+    float CRTSIM_GLOW_FLOOR;
+    float CRTSIM_GLOW_PER_FRAME;
     float CRTSIM_INTERLACE;
     float CRTSIM_FIT;
     float CRTSIM_SCREEN_ONLY;
     float CRTSIM_REFLECTION_AS_SCREEN;
+    float CRTSIM_FACETED_GLASS;
+    float CRTSIM_BLOOM_MIPMAPS;
+    float CRTSIM_FXAA;
     float CRTSIM_MASK_ANTIALIAS;
     float CRTSIM_MASK_COLUMNS;
     float CRTSIM_MASK_ROWS;
@@ -62,6 +68,7 @@ layout(set = 0, binding = 0, std140) uniform Parameters {
     float CRTSIM_BLOOM;
     float CRTSIM_BLOOM_POWER;
     float CRTSIM_BLOOM_SPREAD;
+    float CRTSIM_BLOOM_SPREAD_UP;
     float CRTSIM_DIFFUSE;
     float CRTSIM_SPECULAR;
     float CRTSIM_SPECULAR_POWER;
@@ -79,6 +86,9 @@ layout(set = 0, binding = 0, std140) uniform Parameters {
     float CRTSIM_PERSISTENCE_R;
     float CRTSIM_PERSISTENCE_G;
     float CRTSIM_PERSISTENCE_B;
+    float CRTSIM_BRIGHTNESS;
+    float CRTSIM_STATIC_AMOUNT;
+    float CRTSIM_STATIC_CYCLE;
 } u;
 
 // What the pass reads: the camera's picture, its rows resized, the picture at the signal's
@@ -97,6 +107,10 @@ layout(set = 0, binding = 8) uniform sampler2D bezel_shape_filtered;
 layout(set = 0, binding = 9) uniform sampler2D bezel_uv_image;
 layout(set = 0, binding = 10) uniform sampler2D bezel_normal_image;
 layout(set = 0, binding = 11) uniform sampler2D glass_image;
+// The two of the surface's mip levels the bloom's first blur reads between, as CRTSimEffect
+// halves the surface into textures of their own: level crtsim_bloom_level and the one below.
+layout(set = 0, binding = 12) uniform sampler2D bloom_level;
+layout(set = 0, binding = 13) uniform sampler2D bloom_below;
 
 layout(location = 0) in vec2 uv;
 layout(location = 0) out vec4 frag;
@@ -145,9 +159,18 @@ layout(location = 0) out vec4 frag;
 #define HOST_FETCH_BEZEL_NORMAL(xy) texelFetch(bezel_normal_image, xy, 0)
 #define HOST_GLASS_SIZE vec2(textureSize(glass_image, 0))
 #define HOST_FETCH_GLASS(xy) texelFetch(glass_image, xy, 0)
-#define HOST_SAMPLE_BLOOM_INPUT(uv, second) textureLod(pass_input, uv, 0.0)
+#define HOST_SAMPLE_BLOOM_INPUT(uv, second, lod) bloom_input(uv, second, lod)
 #define HOST_SAMPLE_SURFACE(uv) textureLod(surface_image, uv, 0.0)
 #define HOST_SAMPLE_BLOOM(uv) textureLod(pass_input, uv, 0.0)
+#define HOST_SAMPLE_LEVEL_ABOVE(uv) textureLod(pass_input, uv, 0.0)
+
+// The bloom's input: for the second pass the first's output, for the first the surface, or
+// between two of its levels.
+vec4 bloom_input(vec2 at, bool second, float lod) {
+    if (second || lod <= 0.0) return textureLod(pass_input, at, 0.0);
+    return mix(textureLod(bloom_level, at, 0.0), textureLod(bloom_below, at, 0.0),
+        clamp(lod - u.crtsim_bloom_level, 0.0, 1.0));
+}
 
 // CC0. The CRT's passes, written once for every shader port of CRTSim Renderer
 // (https://github.com/aizumanga/CRTSim-Renderer): the same arithmetic as shaders/crtsim.wgsl
@@ -159,7 +182,8 @@ layout(location = 0) out vec4 frag;
 // So no vector is made from one number (V2 and V3 spell it out), no comparison is made of whole
 // vectors, no array is written, no texture is a function's argument, and no global constant is
 // declared: constants are macros. And no macro without parameters is defined as something in
-// parentheses, which OBS's preprocessor would read as its parameters.
+// parentheses, which OBS's preprocessor would read as its parameters; and nothing is named u,
+// the block Godot's port reads its parameters from.
 //
 // Each host defines what the passes read of it before including them, as HOST_ macros:
 //
@@ -209,10 +233,11 @@ float3 quantize(float3 v) { return floor(clamp(v, V3(0.0), V3(255.0)) + V3(0.5))
 // HOST_FETCH_BEZEL_SHAPE, HOST_FETCH_BEZEL_UV, HOST_FETCH_BEZEL_NORMAL and HOST_BEZEL_SIZE, the
 // bezel's depth, shade and reflection, its UV and its normal, 16-bit values split over two
 // channels, high byte first; HOST_SAMPLE_BEZEL_SHAPE(uv), the first filtered, for its depth's
-// high byte; HOST_FETCH_GLASS and HOST_GLASS_SIZE, the glass's shade and the distance to its
-// outline, baked from its mesh across its UVs, the distance positive inside and within
-// ±GLASS_EDGE, texel (i, j) at UV (i, j) / (size - 1); HOST_OUTPUT_SIZE, HOST_PICTURE_ASPECT
-// and HOST_LINEAR.
+// high byte; HOST_FETCH_GLASS and HOST_GLASS_SIZE, two maps baked from the glass's mesh across
+// its UVs, one above the other, texel (i, j) of each at UV (i, j) / (size - 1): the glass's shade
+// and the distance to its outline, positive inside and within ±GLASS_EDGE, then how far behind
+// the sphere its flat triangles lie, up to GLASS_FACET; HOST_OUTPUT_SIZE, HOST_PICTURE_ASPECT and
+// HOST_LINEAR.
 //
 // A tube wider or narrower than 4:3 (CRTSIM_TUBE_ASPECT) stretches the glass's sphere across,
 // and moves the bezel's sides as `original_y` says.
@@ -220,6 +245,7 @@ float3 quantize(float3 v) { return floor(clamp(v, V3(0.0), V3(255.0)) + V3(0.5))
 #define GLASS_CENTRE float3(4.0, 0.0, 0.0)
 #define GLASS_RADIUS 4.0
 #define GLASS_EDGE 0.015625
+#define GLASS_FACET 0.00048828125
 #define BEZEL_HALF float2(1.6533334, 1.32)
 #define BEZEL_NEAR float(-0.1)
 #define BEZEL_FAR 0.33
@@ -318,7 +344,9 @@ float4 light_surface(Surface v, float2 across, float2 down, bool bezel) {
     float diffuse = max(dot(n, light), 0.0);
     float3 halfway = safe_normalize(light + cam);
     float spec = pow(max(dot(n, halfway), 0.0), P(CRTSIM_SPECULAR_POWER));
-    float fres = pow(max(1.0 - dot(cam, n), 0.0), 2.0) * P(CRTSIM_RIM);
+    // Squared by multiplying, as the original does, which pow leaves undefined below 0.
+    float grazing = 1.0 - dot(cam, n);
+    float fres = grazing * grazing * P(CRTSIM_RIM);
     float3 color = crt(v.uv, across, down, bezel);
     if (bezel) {
         float hemi = (dot(n, float3(0.0, 0.0, 1.0)) * 0.5 + 0.5) * 0.4 + 0.3;
@@ -405,46 +433,54 @@ float4 glass_at_texel(int2 xy) {
     return HOST_FETCH_GLASS(clamp(xy, int2(0, 0), int2(HOST_GLASS_SIZE) - int2(1, 1)));
 }
 
+// The glass's two values at uv, from its map `rows` down.
+float2 glass_pairs(float2 uv, float rows) {
+    float2 half_size = float2(HOST_GLASS_SIZE.x, HOST_GLASS_SIZE.y * 0.5);
+    float2 g = clamp(uv, V2(0.0), V2(1.0)) * (half_size - V2(1.0)) + float2(0.0, rows);
+    int2 xy = int2(floor(g));
+    return blend_pairs(glass_at_texel(xy), glass_at_texel(xy + int2(1, 0)),
+        glass_at_texel(xy + int2(0, 1)), glass_at_texel(xy + int2(1, 1)), frac(g));
+}
+
 // The glass's shade and distance to its outline at uv.
 float2 glass_baked(float2 uv) {
-    float2 g = clamp(uv, V2(0.0), V2(1.0)) * (HOST_GLASS_SIZE - V2(1.0));
-    int2 xy = int2(floor(g));
-    float2 v = blend_pairs(glass_at_texel(xy), glass_at_texel(xy + int2(1, 0)),
-        glass_at_texel(xy + int2(0, 1)), glass_at_texel(xy + int2(1, 1)), frac(g));
+    float2 v = glass_pairs(uv, 0.0);
     return float2(v.x, lerp(-GLASS_EDGE, GLASS_EDGE, v.y));
 }
+
+// How far behind the sphere the mesh's facet lies at uv, along the view.
+float glass_facet(float2 uv) { return glass_pairs(uv, HOST_GLASS_SIZE.y * 0.5).x * GLASS_FACET; }
 
 // The point a ray from `camera` along `ray` meets at depth x.
 float3 along(float3 camera, float3 ray, float x) { return camera + ray * ((x - camera.x) / ray.x); }
 
 // Where the ray first meets the bezel, NOTHING when it does not: stepping across its depths on
 // the depth's high byte, filtered by the sampler, then halving the step it passed the surface
-// in on the full depth. It takes no derivatives, so it may stop at the first step inside.
+// in on the full depth. At the bezel's outer rim the filtered byte blends in the empty texels
+// past it, so a step can seem inside where the full depth is still empty; the march goes on
+// from there. It takes no derivatives, so it may stop at the first step inside.
 float bezel_hit(float3 camera, float3 ray) {
     float stride = (BEZEL_FAR - BEZEL_NEAR) / float(BEZEL_STEPS);
     float before = BEZEL_NEAR - stride;
-    float after = NOTHING;
     for (int i = 0; i <= BEZEL_STEPS; i++) {
         float x = BEZEL_NEAR + stride * float(i);
         float2 at = (bezel_texel(along(camera, ray, x).yz) + V2(0.5)) / HOST_BEZEL_SIZE;
         float coarse = lerp(BEZEL_NEAR, BEZEL_FAR,
             HOST_SAMPLE_BEZEL_SHAPE(at).r * 255.0 * 256.0 / 65534.0);
         if (x >= coarse && at.x >= 0.0 && at.y >= 0.0 && at.x <= 1.0 && at.y <= 1.0) {
-            after = x;
-            break;
+            float low = before;
+            float high = x;
+            for (int j = 0; j < BEZEL_HALVINGS; j++) {
+                float middle = 0.5 * (low + high);
+                bool inside = middle >= bezel_depth(along(camera, ray, middle).yz);
+                high = inside ? middle : high;
+                low = inside ? low : middle;
+            }
+            if (bezel_depth(along(camera, ray, high).yz) < NOTHING) return high;
         }
         before = x;
     }
-    float low = before;
-    float high = after;
-    for (int j = 0; j < BEZEL_HALVINGS; j++) {
-        float middle = 0.5 * (low + high);
-        bool inside = middle >= bezel_depth(along(camera, ray, middle).yz);
-        high = inside ? middle : high;
-        low = inside ? low : middle;
-    }
-    bool found = after < NOTHING && bezel_depth(along(camera, ray, high).yz) < NOTHING;
-    return found ? high : NOTHING;
+    return NOTHING;
 }
 
 // Whether a ray can meet the bezel at all: not if it stays within the opening's clear box
@@ -458,9 +494,10 @@ bool may_meet_bezel(float3 camera, float3 ray) {
 float4 crtsim_surface(float2 uv) {
     float2 ndc = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
     // The camera looks along +x from 1/tan(fov/2) in front, with z up and -y to the right. A
-    // tube wider than the picture is framed as a 4:3 tube is in a picture of the tube's shape.
+    // tube wider than the picture fits across it, as the game fits its 4:3 tube across tate's
+    // portrait picture.
     float2 output_size = HOST_OUTPUT_SIZE;
-    float framing = max(1.0, tube_aspect() / max(output_size.x / output_size.y, 4.0 / 3.0));
+    float framing = max(1.0, tube_aspect() / (output_size.x / output_size.y));
     float spread = tan(radians(P(CRTSIM_FOV)) * 0.5);
     float3 camera = float3(-1.0 / spread, 0.0, 0.0);
     spread *= framing;
@@ -476,6 +513,15 @@ float4 crtsim_surface(float2 uv) {
     float b = dot(to, traced);
     float reach = b * b - dot(to, to) + GLASS_RADIUS * GLASS_RADIUS;
     float3 sphere_at = camera + traced * (-b - sqrt(max(reach, 0.0)));
+    if (P(CRTSIM_FACETED_GLASS) > 0.5) {
+        // On to the mesh's flat triangle there, as far behind as the facet lies: one step of
+        // Newton's along the ray, which lands on it within a ten-thousandth of a signal pixel
+        // on average.
+        float facet = glass_facet(float2((4.0 / 3.0 - sphere_at.y) * 0.375,
+            (1.0 - sphere_at.z) * 0.5));
+        float3 from_centre = sphere_at - GLASS_CENTRE;
+        sphere_at += traced * (facet * from_centre.x / min(dot(traced, from_centre), -0.000001));
+    }
     float3 glass_at = float3(sphere_at.x, sphere_at.y * s, sphere_at.z);
     Surface glass;
     // The picture spans the whole glass; its outline and shading keep the original's corners.

@@ -28,6 +28,7 @@ layout(set = 0, binding = 0, std140) uniform Parameters {
     float crtsim_frame_count;
     float crtsim_frame_ticks;
     float crtsim_has_previous;
+    float crtsim_bloom_level;
     float CRTSIM_SIGNAL_WIDTH;
     float CRTSIM_SIGNAL_HEIGHT;
     float CRTSIM_RESIZE;
@@ -36,10 +37,15 @@ layout(set = 0, binding = 0, std140) uniform Parameters {
     float CRTSIM_LINEAR;
     float CRTSIM_PHASE;
     float CRTSIM_FLIP_ARTIFACTS;
+    float CRTSIM_GLOW_FLOOR;
+    float CRTSIM_GLOW_PER_FRAME;
     float CRTSIM_INTERLACE;
     float CRTSIM_FIT;
     float CRTSIM_SCREEN_ONLY;
     float CRTSIM_REFLECTION_AS_SCREEN;
+    float CRTSIM_FACETED_GLASS;
+    float CRTSIM_BLOOM_MIPMAPS;
+    float CRTSIM_FXAA;
     float CRTSIM_MASK_ANTIALIAS;
     float CRTSIM_MASK_COLUMNS;
     float CRTSIM_MASK_ROWS;
@@ -62,6 +68,7 @@ layout(set = 0, binding = 0, std140) uniform Parameters {
     float CRTSIM_BLOOM;
     float CRTSIM_BLOOM_POWER;
     float CRTSIM_BLOOM_SPREAD;
+    float CRTSIM_BLOOM_SPREAD_UP;
     float CRTSIM_DIFFUSE;
     float CRTSIM_SPECULAR;
     float CRTSIM_SPECULAR_POWER;
@@ -79,6 +86,9 @@ layout(set = 0, binding = 0, std140) uniform Parameters {
     float CRTSIM_PERSISTENCE_R;
     float CRTSIM_PERSISTENCE_G;
     float CRTSIM_PERSISTENCE_B;
+    float CRTSIM_BRIGHTNESS;
+    float CRTSIM_STATIC_AMOUNT;
+    float CRTSIM_STATIC_CYCLE;
 } u;
 
 // What the pass reads: the camera's picture, its rows resized, the picture at the signal's
@@ -97,6 +107,10 @@ layout(set = 0, binding = 8) uniform sampler2D bezel_shape_filtered;
 layout(set = 0, binding = 9) uniform sampler2D bezel_uv_image;
 layout(set = 0, binding = 10) uniform sampler2D bezel_normal_image;
 layout(set = 0, binding = 11) uniform sampler2D glass_image;
+// The two of the surface's mip levels the bloom's first blur reads between, as CRTSimEffect
+// halves the surface into textures of their own: level crtsim_bloom_level and the one below.
+layout(set = 0, binding = 12) uniform sampler2D bloom_level;
+layout(set = 0, binding = 13) uniform sampler2D bloom_below;
 
 layout(location = 0) in vec2 uv;
 layout(location = 0) out vec4 frag;
@@ -145,9 +159,18 @@ layout(location = 0) out vec4 frag;
 #define HOST_FETCH_BEZEL_NORMAL(xy) texelFetch(bezel_normal_image, xy, 0)
 #define HOST_GLASS_SIZE vec2(textureSize(glass_image, 0))
 #define HOST_FETCH_GLASS(xy) texelFetch(glass_image, xy, 0)
-#define HOST_SAMPLE_BLOOM_INPUT(uv, second) textureLod(pass_input, uv, 0.0)
+#define HOST_SAMPLE_BLOOM_INPUT(uv, second, lod) bloom_input(uv, second, lod)
 #define HOST_SAMPLE_SURFACE(uv) textureLod(surface_image, uv, 0.0)
 #define HOST_SAMPLE_BLOOM(uv) textureLod(pass_input, uv, 0.0)
+#define HOST_SAMPLE_LEVEL_ABOVE(uv) textureLod(pass_input, uv, 0.0)
+
+// The bloom's input: for the second pass the first's output, for the first the surface, or
+// between two of its levels.
+vec4 bloom_input(vec2 at, bool second, float lod) {
+    if (second || lod <= 0.0) return textureLod(pass_input, at, 0.0);
+    return mix(textureLod(bloom_level, at, 0.0), textureLod(bloom_below, at, 0.0),
+        clamp(lod - u.crtsim_bloom_level, 0.0, 1.0));
+}
 
 // CC0. The CRT's passes, written once for every shader port of CRTSim Renderer
 // (https://github.com/aizumanga/CRTSim-Renderer): the same arithmetic as shaders/crtsim.wgsl
@@ -159,7 +182,8 @@ layout(location = 0) out vec4 frag;
 // So no vector is made from one number (V2 and V3 spell it out), no comparison is made of whole
 // vectors, no array is written, no texture is a function's argument, and no global constant is
 // declared: constants are macros. And no macro without parameters is defined as something in
-// parentheses, which OBS's preprocessor would read as its parameters.
+// parentheses, which OBS's preprocessor would read as its parameters; and nothing is named u,
+// the block Godot's port reads its parameters from.
 //
 // Each host defines what the passes read of it before including them, as HOST_ macros:
 //
