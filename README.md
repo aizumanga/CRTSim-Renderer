@@ -58,6 +58,9 @@ The desktop includes five interface themes: **CRT Dark**, **Paper Light**, **Lun
 and **Sky Diary**. The two classic desktop palettes are operating-system-inspired rather than pixel-perfect replicas.
 Sky Diary adapts the blue/pink window language of the aizumanga-neocities site without its animated background effects.
 Themes change the application chrome only: render presets, previews and exported pixels are unaffected.
+Each theme draws sliders as meters of its own kind, from glowing LEDs to a pink pill with a star. **View → Interface effects**
+chooses how much the interface moves, from the preview switching on like a set to nothing moving at all, and
+**View → Interface sounds** turns on short sounds for the controls, which the app makes itself; they are off until you turn them on.
 
 Full-resolution export shows stage-based progress and can be cancelled; routine live-preview updates stay unobtrusive. Warm-up advances after completed GPU batches,
 followed by surface rendering/readback and PNG saving.
@@ -168,8 +171,8 @@ cargo run --release --locked -p crtsim-app -- "image.png" --backend vulkan
 Windows uses the system file picker and normally DX12 for rendering; macOS uses its system picker and Metal.
 The window draws on the same device as the renderer, through eframe's wgpu backend.
 macOS runtime support remains provisional until tested on a real Mac.
-For Linux source-build errors about windowing libraries, install your distribution's Wayland and xkbcommon development packages
-(Debian/Ubuntu: `libwayland-dev libxkbcommon-dev libegl1-mesa-dev`; Arch: `wayland libxkbcommon`).
+For Linux source-build errors about windowing or sound libraries, install your distribution's Wayland, xkbcommon and ALSA development packages
+(Debian/Ubuntu: `libwayland-dev libxkbcommon-dev libegl1-mesa-dev libasound2-dev`; Arch: `wayland libxkbcommon alsa-lib`).
 
 ### Graphics-card compatibility
 
@@ -303,7 +306,7 @@ Nothing is downloaded automatically.
    and offers GIF, animated WebP and animated PNG with their own size, frame-rate and length settings and a file-size estimate.
    For MKV, **Picture quality → Lossless** writes FFV1 that keeps every pixel exactly. Then choose the destination.
 
-The compact toolbar groups media/projects under **File**, gallery/imports under **Presets**, themes under **View**, rendering under **Export**, and credits and the update check under **Help**. Video previews are silent; audio is retained in exports unless explicitly muted.
+The compact toolbar groups media/projects under **File**, gallery/imports under **Presets**, themes, interface effects and sounds under **View**, rendering under **Export**, and credits and the update check under **Help**. Video previews are silent; audio is retained in exports unless explicitly muted.
 
 Exports retain CRT history between ordered frames. Variable-frame-rate input is normalized to the detected average frame rate,
 or to 60 FPS in 60 Hz mode. Source-rate mode corrects persistence decay by media time; this is an approximation of the spatial feedback effect.

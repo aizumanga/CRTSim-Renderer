@@ -27,9 +27,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Install Linux windowing development libraries
+      - name: Install Linux windowing and sound development libraries
         if: runner.os == 'Linux'
-        run: sudo apt-get update -qq && sudo apt-get install -y libxkbcommon-dev libwayland-dev libegl1-mesa-dev
+        run: sudo apt-get update -qq && sudo apt-get install -y libxkbcommon-dev libwayland-dev libegl1-mesa-dev libasound2-dev
       # crtsim-ports, the shader ports' test harness, builds librashader and its C++ shader
       # compilers; the Vulkan job below builds and runs it once, on Linux.
       - run: cargo test --workspace --exclude crtsim-ports --locked
@@ -84,7 +84,7 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install software Vulkan driver
-        run: sudo apt-get update -qq && sudo apt-get install -y mesa-vulkan-drivers libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libegl1-mesa-dev xvfb ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y mesa-vulkan-drivers libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libegl1-mesa-dev libasound2-dev xvfb ffmpeg
       - run: cargo test --locked -p crtsim-core gpu_smoke -- --ignored --nocapture
       - name: GPU prepare step against the CPU implementation
         run: cargo test --locked -p crtsim-core gpu_prepare_matches_cpu_prepare -- --ignored --nocapture

@@ -1,13 +1,21 @@
 //! The preview area: the rendered picture, its comparison split and the video controls.
-use crate::widgets::{choice, notes, show_image, Keyed};
+use crate::widgets::{channels, choice, notes, show_image, Keyed, Switches};
 use crate::*;
 
 impl App {
     pub(crate) fn preview(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(&mut self.view, View::Original, "Original");
-            ui.selectable_value(&mut self.view, View::Crt, "CRT");
-            ui.selectable_value(&mut self.view, View::Compare, "Compare");
+            if channels(
+                ui,
+                &mut self.view,
+                &[
+                    (View::Original, "Original"),
+                    (View::Crt, "CRT"),
+                    (View::Compare, "Compare"),
+                ],
+            ) {
+                self.screen.flicker(ui.ctx());
+            }
             if self.preview.pinned(self.source.input()).is_some() {
                 if ui
                     .button("Unpin look")
@@ -29,7 +37,7 @@ impl App {
                 self.view = View::Compare;
             }
             ui.separator();
-            ui.checkbox(self.preview.live_mut(), "Live preview");
+            ui.switch(self.preview.live_mut(), "Live preview");
             // Live, the preview already follows every change; off, Refresh catches it up.
             if !self.preview.live()
                 && ui
@@ -62,7 +70,7 @@ impl App {
                 self.preview.quality.choose(chosen);
                 self.changed();
             }
-            ui.checkbox(&mut self.fit_preview, "Fit view");
+            ui.switch(&mut self.fit_preview, "Fit view");
             if !self.fit_preview {
                 Keyed::new(0.25..=4.)
                     .reset_to(1.)
@@ -142,7 +150,7 @@ impl App {
                         ),
                     };
                     if let Some(im) = self.preview.picture() {
-                        compare(
+                        let shown = compare(
                             ui,
                             left,
                             im,
@@ -152,17 +160,20 @@ impl App {
                             &mut self.comparison,
                             label,
                         );
+                        self.screen.paint(ui, shown);
                     }
                 } else if self.view == View::Original {
-                    show_image(
+                    let shown = show_image(
                         ui,
                         egui::load::SizedTexture::from_handle(self.source.original()),
                         available,
                         self.fit_preview,
                         self.zoom,
                     );
+                    self.screen.paint(ui, shown);
                 } else if let Some(im) = self.preview.picture() {
-                    show_image(ui, im, available, self.fit_preview, self.zoom);
+                    let shown = show_image(ui, im, available, self.fit_preview, self.zoom);
+                    self.screen.paint(ui, shown);
                 } else {
                     ui.label(
                         "Open an image, video or test card. Your rendered preview \
@@ -234,7 +245,7 @@ impl App {
                     .clicked();
                 ui.small("Silent preview");
                 looped = ui
-                    .checkbox(&mut self.loop_playback, "Loop")
+                    .switch(&mut self.loop_playback, "Loop")
                     .on_hover_text(
                         "Play again from the start when the video ends, with the CRT's glow \
                          carrying over. Useful for short clips and GIFs.",
@@ -370,7 +381,7 @@ pub fn compare(
     zoom: f32,
     split: &mut f32,
     label: &str,
-) {
+) -> egui::Rect {
     let native = rendered.size;
     let size = if fit {
         native * (area.x / native.x).min(area.y / native.y)
@@ -412,4 +423,5 @@ pub fn compare(
         .on_hover_text(format!(
             "Drag to compare · {label} on the left, the settings in use on the right"
         ));
+    rect
 }

@@ -49,6 +49,18 @@ impl Theme {
         }
     }
 
+    /// How the theme draws its meters.
+    pub const fn meter(self) -> crate::meter::Skin {
+        use crate::meter::Skin;
+        match self {
+            Self::CrtDark => Skin::Led,
+            Self::PaperLight => Skin::Flat,
+            Self::LunaBlue => Skin::Glossy,
+            Self::ClassicPlatinum => Skin::Striped,
+            Self::SkyDiary => Skin::Pill,
+        }
+    }
+
     pub fn from_id(id: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|theme| theme.id() == id)
     }
@@ -180,6 +192,9 @@ impl Theme {
         ] {
             widget.corner_radius = egui::CornerRadius::same(3);
         }
+        // A button grows a little under the pointer and sinks while pressed, as a key would.
+        visuals.widgets.hovered.expansion = 1.;
+        visuals.widgets.active.expansion = -1.;
 
         let mut style = (*ctx.global_style()).clone();
         style.visuals = visuals;
@@ -198,6 +213,7 @@ impl Theme {
         // The same style whatever the system's light or dark preference: the theme is the
         // person's choice here, not the system's.
         ctx.all_styles_mut(|each| *each = style.clone());
+        crate::meter::set_skin(ctx, self.meter());
     }
 }
 

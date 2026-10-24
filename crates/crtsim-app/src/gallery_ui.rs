@@ -116,7 +116,7 @@ impl App {
             self.preview.offer(label, config);
         }
         if let Some(config) = selected {
-            self.replace_config(config);
+            self.apply_preset(config);
         }
     }
     /// Reads the personal presets again, which may have changed on disk.

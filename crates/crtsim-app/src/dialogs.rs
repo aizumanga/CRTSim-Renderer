@@ -251,6 +251,7 @@ impl App {
                 Ok(()) => {
                     self.status = format!("Exported the {}", host.port_name());
                     self.notices.saved(path);
+                    sound::cue(&self.ui_context, sound::Sound::Done);
                 }
                 Err(e) => self.notices.failed(
                     Topic::Saving,

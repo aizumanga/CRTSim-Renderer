@@ -123,10 +123,13 @@ pub fn status_light(ui: &mut egui::Ui, busy: bool, error: bool) {
     );
 }
 
+/// A section of settings: a plate screwed to the panel, whose header opens it, with a lamp that
+/// lights while any setting in it differs from the preset.
 pub struct Section<'a> {
     title: &'a str,
     open: bool,
     changes: bool,
+    differs: Option<bool>,
 }
 impl<'a> Section<'a> {
     pub fn new(title: &'a str) -> Self {
@@ -134,7 +137,13 @@ impl<'a> Section<'a> {
             title,
             open: false,
             changes: false,
+            differs: None,
         }
+    }
+    /// Whether a setting in the section differs from the preset, which its lamp shows.
+    pub fn differs(mut self, differs: bool) -> Self {
+        self.differs = Some(differs);
+        self
     }
     pub fn default_open(mut self, open: bool) -> Self {
         self.open = open;
@@ -161,9 +170,45 @@ impl<'a> Section<'a> {
                 if self.changes {
                     header = header.id_salt((self.title, "changes"));
                 }
-                header.show(ui, contents);
+                let header = header.show(ui, contents).header_response;
+                if let Some(differs) = self.differs {
+                    let center = header.rect.right_center() - egui::vec2(12., 0.);
+                    let how = ui.ctx().animate_bool_with_time(
+                        header.id.with("lamp"),
+                        differs,
+                        crate::interface::effects(ui.ctx()).glide(),
+                    );
+                    crate::widgets::lamp_light(ui.painter(), center, 4., how, LAMP, ui.visuals());
+                    if differs {
+                        header.on_hover_text("Settings here differ from the preset");
+                    }
+                }
             });
-        bevel(ui, response.response.rect);
+        let rect = response.response.rect;
+        bevel(ui, rect);
+        screws(ui, rect);
+    }
+}
+
+/// The amber of a lamp that shows something differs.
+const LAMP: Color32 = Color32::from_rgb(255, 184, 64);
+
+/// Small round screw heads in the corners of a plate.
+fn screws(ui: &egui::Ui, rect: Rect) {
+    let visuals = ui.visuals();
+    let head = crate::meter::blend(visuals.faint_bg_color, visuals.text_color(), 0.3);
+    let slot = Stroke::new(1., visuals.faint_bg_color);
+    for corner in [
+        rect.left_top() + egui::vec2(3.5, 3.5),
+        rect.right_top() + egui::vec2(-3.5, 3.5),
+        rect.left_bottom() + egui::vec2(3.5, -3.5),
+        rect.right_bottom() + egui::vec2(-3.5, -3.5),
+    ] {
+        ui.painter().circle_filled(corner, 1.8, head);
+        ui.painter().line_segment(
+            [corner - egui::vec2(1., 1.), corner + egui::vec2(1., 1.)],
+            slot,
+        );
     }
 }
 
