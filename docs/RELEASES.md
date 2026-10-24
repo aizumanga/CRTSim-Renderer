@@ -1,6 +1,6 @@
 # Portable releases (Phase 4)
 
-## Unreleased
+## v1.7.0
 
 Super Win the Game's look comes closer to the game's own: its bloom reads the picture as the game
 reads it, and its black holds where the game's 8-bit glow holds it.
