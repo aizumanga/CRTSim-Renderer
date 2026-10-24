@@ -40,7 +40,16 @@ only their executables differ:
 | `SuperGame.dmg` (macOS) | 4302829 | `de6188f005a3ebd68ad6ef349a4511f311ca14cc999f5499161acbb2f75f4635` |
 | … `SuperGame.app/Contents/MacOS/Valkyrie` | 3994980 | `0920957cc4701fc83de7f0e1127d0c22572383f74bdcf7bc0194d7c9a7186113` |
 
-The Steam build may differ; nothing here has been checked against it.
+The Steam build (Linux, session 13) ships the same four data files too, byte for byte, with its
+own executable and Steamworks:
+
+| File | Size | SHA-256 |
+| --- | ---: | --- |
+| `Super_Win_the_Game_steam.zip` (the Steam depot's files) | 5017324 | `178faef4735904757287b1e0022926c9b935f201ad3fc8319419aaddc8b829c4` |
+| … `SuperGame_NFML` | 8143097 | `1e5add533372481622f3fb052b0394c4d256b2eac0029b7891f35726ae2790a5` |
+| … `libsteam_api.so` | 66598 | `83c02f3b64c97f7bef0d34af9f90945d88e7a030b2ac2782445dcc39bfa78e22` |
+
+`steam_appid.txt` holds 310700, which the macOS image carries as well.
 
 `SuperGame_NFML` is a 32-bit i386 ELF, OpenGL via GLEW, SDL2 statically linked. It is **not
 stripped**: all C++ symbols remain (class and method names, static locals). DWARF is present but
