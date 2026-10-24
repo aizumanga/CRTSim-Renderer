@@ -51,7 +51,8 @@ impl App {
             ctx.request_repaint();
             return;
         }
-        let thumbnails_pending = self.thumbnails_pending();
+        // The screen switching on as the first picture shows, which the screenshot waits out.
+        let thumbnails_pending = self.thumbnails_pending() || self.screen.busy();
         let (error, preview_error) = (&self.notices, &self.preview.error);
         let Some(smoke) = &mut self.smoke else {
             return;

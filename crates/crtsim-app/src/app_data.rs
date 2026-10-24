@@ -1,9 +1,9 @@
 //! Everything the app remembers between runs: the welcome acknowledged, the interface theme,
-//! what to do with colours, where tool windows were, personal presets, recent projects and the session to recover. On
+//! its effects and sounds, what to do with colours, where tool windows were, personal presets, recent projects and the session to recover. On
 //! the desktop they are files in one folder, each replaced only once the whole of its new
 //! contents is written; in a browser, entries in its storage for the site. Each has a size it
 //! may not exceed.
-use crate::{project, theme::Theme};
+use crate::{interface::Interface, project, theme::Theme};
 use anyhow::{ensure, Context, Result};
 use crtsim_core::config::Config;
 use std::{
@@ -13,6 +13,7 @@ use std::{
 
 const WELCOME: &str = "welcome-v1.txt";
 const THEME: &str = "theme-v1.txt";
+const INTERFACE: &str = "interface-v1.txt";
 const UPDATES: &str = "updates-v1.txt";
 const WINDOWS: &str = "windows-v1.json";
 const PRESETS: &str = "presets";
@@ -201,6 +202,18 @@ impl Store {
 
     pub fn set_theme(&self, theme: Theme) -> Result<()> {
         self.write(THEME, format!("{}\n", theme.id()).as_bytes())
+    }
+
+    /// The interface's effects and sounds, or their defaults before any were chosen.
+    pub fn interface(&self) -> Result<Interface> {
+        match self.read(INTERFACE, 256, "Interface settings are too large")? {
+            Some(bytes) => Interface::from_text(&String::from_utf8(bytes)?),
+            None => Ok(Interface::default()),
+        }
+    }
+
+    pub fn set_interface(&self, interface: Interface) -> Result<()> {
+        self.write(INTERFACE, interface.to_text().as_bytes())
     }
 
     /// What pictures' colour profiles do, and the space PNG stills are written in.
@@ -552,6 +565,11 @@ mod tests {
         assert_eq!(s.theme().unwrap(), None);
         s.set_theme(Theme::SkyDiary).unwrap();
         assert_eq!(s.theme().unwrap(), Some(Theme::SkyDiary));
+        assert_eq!(s.interface().unwrap(), Interface::default());
+        let mut interface = Interface::default();
+        interface.sounds.on = true;
+        s.set_interface(interface).unwrap();
+        assert_eq!(s.interface().unwrap(), interface);
         assert!(s.tool_windows().unwrap().is_empty());
         let mut layout = Layout::new();
         layout.insert(

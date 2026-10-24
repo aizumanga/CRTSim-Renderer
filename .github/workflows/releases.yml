@@ -49,7 +49,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Linux dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update -qq && sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libegl1-mesa-dev mesa-vulkan-drivers xvfb ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libegl1-mesa-dev libasound2-dev mesa-vulkan-drivers xvfb ffmpeg
       - name: Static Windows C runtime
         if: runner.os == 'Windows'
         shell: bash

@@ -1,5 +1,5 @@
 //! The settings panel: CRT settings by section, then source framing and color.
-use crate::widgets::{choice, notes, numbers, resolution, Keyed, Shown};
+use crate::widgets::{choice, notes, numbers, resolution, Keyed, Shown, Switches};
 use crate::*;
 use crtsim_core::palette::Model;
 use crtsim_core::settings::Section::*;
@@ -121,7 +121,7 @@ impl App {
                 )
                 .clicked()
             {
-                self.replace_config(Config::general());
+                self.apply_preset(Config::general());
             }
         });
         let before = self.config.clone();
@@ -251,7 +251,7 @@ impl App {
                 );
             });
             if shown.key("mask_antialias") {
-                ui.checkbox(
+                ui.switch(
                     &mut self.config.mask_antialias,
                     "Filter mask when shrinking",
                 )
@@ -267,6 +267,7 @@ impl App {
             chrome::Section::new("CRT signal")
                 .default_open(true)
                 .changes(shown.changes())
+                .differs(shown.differs(&[], &[Signal]))
                 .show(ui, |ui| {
                     numbers(ui, &mut self.config, defaults, Signal, &shown)
                 });
@@ -280,7 +281,7 @@ impl App {
             |ui| {
                 numbers(ui, &mut self.config, defaults, Glass, &shown);
                 if shown.key("faceted_glass") {
-                    ui.checkbox(&mut self.config.faceted_glass, "Glass as the mesh's facets")
+                    ui.switch(&mut self.config.faceted_glass, "Glass as the mesh's facets")
                         .on_hover_text(
                             "The glass as Super Win the Game's mesh draws it, each triangle flat \
                          between corners on the curve, so the picture shifts a hair from facet \
@@ -299,7 +300,7 @@ impl App {
         section(ui, &shown, "Bloom & reflections", &bloom, &[Bloom], |ui| {
             numbers(ui, &mut self.config, defaults, Bloom, &shown);
             if shown.key("bloom_from_mipmaps") {
-                ui.checkbox(&mut self.config.bloom_from_mipmaps, "Bloom from mipmaps")
+                ui.switch(&mut self.config.bloom_from_mipmaps, "Bloom from mipmaps")
                     .on_hover_text(
                         "The bloom reads the picture through averaged, smaller copies of \
                          itself, as Super Win the Game does, so each of its taps averages \
@@ -308,7 +309,7 @@ impl App {
                     );
             }
             if shown.key("reflection_as_screen") {
-                ui.checkbox(
+                ui.switch(
                     &mut self.config.reflection_as_screen,
                     "Reflection as on the screen",
                 )
@@ -366,7 +367,7 @@ impl App {
                 );
             }
             if shown.key("flip_artifacts") {
-                ui.checkbox(&mut self.config.flip_artifacts, "Flip artifact pattern")
+                ui.switch(&mut self.config.flip_artifacts, "Flip artifact pattern")
                     .on_hover_text(
                         "The composite artifact pattern upside down, each tick blending in the \
                          row above rather than below, as Super Win the Game's Linux build draws \
@@ -375,14 +376,14 @@ impl App {
                     );
             }
             if shown.key("interlace") {
-                ui.checkbox(&mut self.config.interlace, "Interlaced fields")
+                ui.switch(&mut self.config.interlace, "Interlaced fields")
                     .on_hover_text(
                         "Each tick scans every other row, alternating fields; the rows it skips \
                          only fade by persistence. Use with a 480- or 576-row signal.",
                     );
             }
             if shown.key("glow_floor") {
-                ui.checkbox(&mut self.config.glow_floor, "Glow floor")
+                ui.switch(&mut self.config.glow_floor, "Glow floor")
                     .on_hover_text(
                         "The glow never fades below the level 8-bit history rounds it back to, \
                          1 of 255 in red and green at the default persistence, as every pixel \
@@ -391,7 +392,7 @@ impl App {
                     );
             }
             if shown.key("glow_per_frame") {
-                ui.checkbox(&mut self.config.glow_per_frame, "Glow fades per frame")
+                ui.switch(&mut self.config.glow_per_frame, "Glow fades per frame")
                     .on_hover_text(
                         "The glow fades by persistence once each frame drawn, as Super Win the \
                          Game does, so on a display faster than 60 Hz it fades faster. Off \
@@ -435,7 +436,7 @@ impl App {
                 );
             }
             if shown.key("crt_off") {
-                ui.checkbox(&mut self.config.crt_off, "CRT off")
+                ui.switch(&mut self.config.crt_off, "CRT off")
                     .on_hover_text(
                         "The clean picture without the CRT: square-cut pixels at the signal's \
                          aspect, fitted inside the frame, as Super Win the Game draws it with \
@@ -443,7 +444,7 @@ impl App {
                     );
             }
             if shown.key("screenshot_stills") {
-                ui.checkbox(&mut self.config.screenshot_stills, "Stills as screenshots")
+                ui.switch(&mut self.config.screenshot_stills, "Stills as screenshots")
                     .on_hover_text(
                         "With alternating phase, a still's last tick draws both artifact \
                          patterns at once, as Super Win the Game's screenshots do. Video \
@@ -481,7 +482,7 @@ impl App {
         };
         ui.horizontal_wrapped(|ui| {
             let label = ui.label(egui::RichText::new(text).strong());
-            ui.checkbox(&mut self.changed_only, "Changed only")
+            ui.switch(&mut self.changed_only, "Changed only")
                 .on_hover_text("Show only the settings that differ from this preset");
             if closest.changes.is_empty() {
                 return;
@@ -506,27 +507,27 @@ impl App {
     /// from the preset named above them. While a pointer is down, one that showed keeps showing,
     /// so a slider dragged across the preset's value does not vanish from under it.
     fn shown_settings(&mut self, ui: &egui::Ui) -> Shown {
-        if !self.changed_only {
-            return Shown::all();
-        }
         let changes: HashSet<&'static str> = self
             .presets
             .closest(&self.config)
             .map(|closest| closest.changes.iter().map(|change| change.key).collect())
             .unwrap_or_default();
-        if ui.input(|i| i.pointer.any_down()) {
-            self.changes_shown.extend(changes);
-        } else {
-            self.changes_shown = changes;
+        if !self.changed_only {
+            return Shown::all().differing(changes);
         }
-        Shown::only(self.changes_shown.clone())
+        if ui.input(|i| i.pointer.any_down()) {
+            self.changes_shown.extend(changes.iter().copied());
+        } else {
+            self.changes_shown = changes.clone();
+        }
+        Shown::only(self.changes_shown.clone()).differing(changes)
     }
     /// Whether the mask follows the signal, as the original's did, or has columns and rows of
     /// its own, which start from the density in use so the picture does not jump.
     fn mask_density(&mut self, ui: &mut egui::Ui) {
         let mut follows = self.config.mask_repeats == MaskRepeats::Signal;
         let toggled = ui
-            .checkbox(&mut follows, "Mask follows the signal")
+            .switch(&mut follows, "Mask follows the signal")
             .on_hover_text(
                 "A mask column for every two signal columns and a row for every signal row, as \
                  the original drew it, so a finer signal gets a finer mask. Off sets the mask's \
@@ -561,6 +562,7 @@ impl App {
             chrome::Section::new("Source & framing")
                 .default_open(true)
                 .changes(shown.changes())
+                .differs(shown.differs(&framing, &[]))
                 .show(ui, |ui| self.framing(ui, shown));
         }
         section(
@@ -601,7 +603,7 @@ impl App {
     /// The source's crop, rotation, zoom and pan, and what shows through its transparency.
     fn framing(&mut self, ui: &mut egui::Ui, shown: &Shown) {
         if shown.key("screen_only") {
-            ui.checkbox(&mut self.config.screen_only, "Screen only · no bezel");
+            ui.switch(&mut self.config.screen_only, "Screen only · no bezel");
         }
         if shown.key("source.crop") {
             egui::CollapsingHeader::new("Crop edges · percent")
@@ -660,7 +662,7 @@ impl App {
                     source.checkerboard = false;
                     source.background = [255; 3];
                 }
-                ui.checkbox(&mut source.checkerboard, "Checker");
+                ui.switch(&mut source.checkerboard, "Checker");
             });
             if ui.color_edit_button_srgb(&mut source.background).changed() {
                 source.checkerboard = false;
@@ -674,7 +676,7 @@ impl App {
     fn nes_palette(&mut self, ui: &mut egui::Ui) {
         let mut generated = self.config.palette.is_some();
         let toggled = ui
-            .checkbox(&mut generated, "NES palette")
+            .switch(&mut generated, "NES palette")
             .on_hover_text(
                 "Super Win the Game's NTSC palette, set by Tint, Tint I and Tint Q. It recolours \
                  images drawn in the NES palette and replaces any LUT.",
@@ -717,6 +719,7 @@ fn section(
     if shown.any(keys, sections) {
         chrome::Section::new(title)
             .changes(shown.changes())
+            .differs(shown.differs(keys, sections))
             .show(ui, contents);
     }
 }

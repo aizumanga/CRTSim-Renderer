@@ -29,6 +29,8 @@ directories = "5"
 flate2 = "1"
 # Instant as std's on the desktop, and one that works in a browser, where std's panics.
 web-time = "1"
+# Plays the interface's sounds, which the app makes itself, once a person turns them on.
+cpal = "0.18"
 
 [dev-dependencies]
 # Makes ICC profiles for a test of the colour settings; the core reads them with it.
@@ -44,6 +46,8 @@ rfd = "0.14.1"
 ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+# Plays the interface's sounds through the page's Web Audio.
+cpal = { version = "0.18", features = ["wasm-bindgen"] }
 wasm-bindgen = "0.2.128"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"

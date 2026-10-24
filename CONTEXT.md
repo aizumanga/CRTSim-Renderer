@@ -191,8 +191,26 @@ file open and the recent ones). It is never saved over a session still on offer,
 load or a project being restored leaves the settings half applied.
 
 **App data**: the folder holding everything the app remembers between runs: the welcome
-acknowledged, the theme, tool window placement, personal presets, recent projects and the
+acknowledged, the theme, the interface's effects and sounds, tool window placement, personal presets, recent projects and the
 session (`crates/crtsim-app/src/app_data.rs`). Only that module knows the files in it.
+
+**Meter**: a slider drawn as a recessed well of cells that light up to its value, with a mark at
+its default, in the theme's **skin** (LED, flat, glossy, striped or pill;
+`crates/crtsim-app/src/meter.rs`). egui's own slider still takes the pointer, the keys, the
+number box and screen readers; the meter is drawn over its rail.
+
+**Interface effects**: how much the interface moves: Full, Reduced or Off
+(`crates/crtsim-app/src/interface.rs`). Meters ease and switches slide unless Off; only Full
+switches the preview's **screen** on for new media and flickers it with static when the channel
+or the preset changes (`crates/crtsim-app/src/screen.rs`), drawn over the picture on screen and
+never into an export. A browser page starts at Reduced.
+
+**Interface sounds**: short tones and noise the app makes itself as the controls are used, off
+until a person turns them on, in three groups that can each be turned off: meters and switches,
+buttons, channels and sections, and power-on, presets and finished exports
+(`crates/crtsim-app/src/sound.rs`). A widget **cues** a sound through egui's context; a click no
+widget cued one for is heard as what egui says was clicked. The audio output opens the first
+time a sound is heard.
 
 **FFmpeg setup**: whether the FFmpeg programs video work needs start, which export formats
 they can write, and how to install them (`crates/crtsim-app/src/ffmpeg_setup.rs`). The

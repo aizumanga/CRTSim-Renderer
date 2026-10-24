@@ -76,7 +76,7 @@ impl App {
                 });
             });
         if let Some(config) = chosen {
-            self.replace_config(config);
+            self.apply_preset(config);
             self.first_look = false;
         }
         if !open {

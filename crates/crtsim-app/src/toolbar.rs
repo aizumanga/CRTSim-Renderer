@@ -96,6 +96,8 @@ impl App {
                         ui.close();
                     }
                     ui.separator();
+                    self.interface_menu(ui, ctx);
+                    ui.separator();
                     ui.label("Pictures' colour profiles");
                     let mut profiles = self.colors.profiles;
                     ui.selectable_value(&mut profiles, Profiles::Convert, "Convert to sRGB")
@@ -252,6 +254,55 @@ impl App {
 }
 
 impl App {
+    /// The View menu's choice of how much the interface moves and which sounds it makes.
+    fn interface_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let before = self.interface;
+        ui.label("Interface effects");
+        for effects in interface::Effects::ALL {
+            ui.radio_value(&mut self.interface.effects, effects, effects.name())
+                .on_hover_text(effects.description());
+        }
+        ui.separator();
+        let sounds = &mut self.interface.sounds;
+        ui.checkbox(&mut sounds.on, "Interface sounds")
+            .on_hover_text(
+                "Short clicks and tones as you use the controls, which the app makes itself. \
+                 The preview and exports stay as they are.",
+            );
+        ui.add_enabled_ui(sounds.on, |ui| {
+            widgets::Keyed::new(0.0..=1.)
+                .reset_to(interface::Sounds::default().volume)
+                .show(ui, &mut sounds.volume, |slider| slider.text("Volume"));
+            for group in sound::Group::ALL {
+                ui.checkbox(sounds.group_mut(group), group.name());
+            }
+        });
+        if self.interface != before {
+            self.interface.apply(ctx);
+        }
+    }
+
+    /// Remembers the interface's effects and sounds once they have changed and nothing is held,
+    /// so dragging the volume writes it once, when let go.
+    pub(crate) fn save_interface(&mut self, ctx: &egui::Context) {
+        if self.interface == self.interface_saved || ctx.input(|i| i.pointer.any_down()) {
+            return;
+        }
+        self.interface_saved = self.interface;
+        let Some(saved) = self
+            .app_data()
+            .map(|store| store.set_interface(self.interface))
+        else {
+            return;
+        };
+        if let Err(e) = saved {
+            self.notices.failed(
+                Topic::AppData,
+                format!("Could not remember the interface's effects and sounds: {e:#}"),
+            );
+        }
+    }
+
     /// Uses `colors` from now on, and remembers them. A picture opened from a file opens again
     /// when what its colour profile does has changed, so the change shows.
     pub(crate) fn set_colors(&mut self, colors: worker::Colors) {

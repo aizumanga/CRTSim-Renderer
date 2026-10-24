@@ -1,42 +1,69 @@
 //! Small widgets shared by the settings panel and the preview.
+use crate::{meter, sound};
 use crtsim_core::{config::Config, settings};
-use eframe::{egui, emath};
+use eframe::{egui, egui::Rect, emath};
 use std::{collections::HashSet, ops::RangeInclusive};
 
 /// Which settings the panel shows, by their keys in `settings::SETTINGS`: every one, or, with
-/// Changed only on, the ones that differ from the preset the panel names.
-pub(crate) struct Shown(Option<HashSet<&'static str>>);
+/// Changed only on, the ones that differ from the preset the panel names. Also which differ,
+/// whether shown alone or not, for the lamps on the panel's sections.
+pub(crate) struct Shown {
+    only: Option<HashSet<&'static str>>,
+    differ: HashSet<&'static str>,
+}
 
 impl Shown {
     pub fn all() -> Self {
-        Self(None)
+        Self {
+            only: None,
+            differ: HashSet::new(),
+        }
     }
     pub fn only(keys: HashSet<&'static str>) -> Self {
-        Self(Some(keys))
+        Self {
+            only: Some(keys),
+            differ: HashSet::new(),
+        }
+    }
+    /// The same, knowing that `keys` differ from the preset.
+    pub fn differing(self, keys: HashSet<&'static str>) -> Self {
+        Self {
+            differ: keys,
+            ..self
+        }
     }
     /// Whether only changed settings show.
     pub fn changes(&self) -> bool {
-        self.0.is_some()
+        self.only.is_some()
     }
     /// Whether only changed settings show, and none has changed.
     pub fn none(&self) -> bool {
-        self.0.as_ref().is_some_and(HashSet::is_empty)
+        self.only.as_ref().is_some_and(HashSet::is_empty)
     }
     pub fn key(&self, key: &str) -> bool {
-        self.0.as_ref().is_none_or(|keys| keys.contains(key))
+        self.only.as_ref().is_none_or(|keys| keys.contains(key))
     }
     /// Whether any of `keys`, or of the numeric settings of `sections`, shows: a section of the
     /// panel holding them is shown when one does.
     pub fn any(&self, keys: &[&str], sections: &[settings::Section]) -> bool {
-        keys.iter().any(|key| self.key(key))
-            || settings::SETTINGS.iter().any(|setting| {
-                setting
-                    .numbers
-                    .as_ref()
-                    .is_some_and(|n| sections.contains(&n.section))
-                    && self.key(setting.key)
-            })
+        any_of(keys, sections, |key| self.key(key))
     }
+    /// Whether any of `keys`, or of the numeric settings of `sections`, differs from the preset.
+    pub fn differs(&self, keys: &[&str], sections: &[settings::Section]) -> bool {
+        any_of(keys, sections, |key| self.differ.contains(key))
+    }
+}
+
+/// Whether `test` holds for any of `keys`, or of the numeric settings of `sections`.
+fn any_of(keys: &[&str], sections: &[settings::Section], test: impl Fn(&str) -> bool) -> bool {
+    keys.iter().any(|key| test(key))
+        || settings::SETTINGS.iter().any(|setting| {
+            setting
+                .numbers
+                .as_ref()
+                .is_some_and(|n| sections.contains(&n.section))
+                && test(setting.key)
+        })
 }
 
 /// Notes that hold whatever the settings are, behind a hover rather than always on screen.
@@ -105,6 +132,10 @@ pub(crate) fn slider(
             .on_hover_text(format!("Reset {label} to {}", format_value(default)))
             .clicked()
         {
+            let from = Keyed::new(range.clone())
+                .logarithmic(logarithmic)
+                .fraction(*value);
+            sound::cue(ui.ctx(), sound::Sound::Reset { from });
             *value = default;
         }
         let slider = Keyed::new(range).logarithmic(logarithmic).reset_to(default);
@@ -163,6 +194,14 @@ impl Pace {
     }
 }
 
+/// What the keys pressed did to a slider with the keyboard.
+enum Keys<N> {
+    /// ←/→ stepped it to this.
+    Stepped(N),
+    /// Delete or Backspace returned it to its default.
+    Reset(N),
+}
+
 /// Where a slider being dragged along its rail has got to: its value, before it is rounded to
 /// show, and the pointer's position along the rail then. Each frame moves on from it at the
 /// pace held then, so a whole-number slider gathers movements too small to show. Kept from the
@@ -201,7 +240,7 @@ impl<N: emath::Numeric> Keyed<N> {
     }
 
     /// Adds the slider for `value`, finished by `configure`, and applies any drag and key
-    /// presses.
+    /// presses. It is drawn as a meter.
     pub fn show(
         self,
         ui: &mut egui::Ui,
@@ -210,7 +249,8 @@ impl<N: emath::Numeric> Keyed<N> {
     ) -> egui::Response {
         let before = *value;
         // The slider's own id, which its rail takes when added.
-        let anchor_id = ui.next_auto_id().with("drag anchor");
+        let id = ui.next_auto_id();
+        let anchor_id = id.with("drag anchor");
         // The slider is drawn at the value as it stands. What it proposes, from the pointer,
         // its number box or assistive technology, is decided on once it is added.
         let mut proposed = None;
@@ -219,7 +259,8 @@ impl<N: emath::Numeric> Keyed<N> {
             proposed = set.or(proposed);
             before.to_f64()
         })
-        .logarithmic(self.logarithmic);
+        .logarithmic(self.logarithmic)
+        .handle_shape(meter::handle(thickness(ui)));
         let slider = if N::INTEGRAL {
             slider.integer()
         } else {
@@ -229,22 +270,65 @@ impl<N: emath::Numeric> Keyed<N> {
         if response.clicked() || response.drag_started() {
             response.request_focus();
         }
-        let next = self
-            .keyed(ui, &response, before)
-            .or_else(|| self.rail_dragged(ui, &response, anchor_id, proposed))
-            .or(proposed.map(N::from_f64))
-            .filter(|next| *next != before);
+        let (next, reset) = match self.keyed(ui, &response, before) {
+            Some(Keys::Reset(default)) => (Some(default), true),
+            Some(Keys::Stepped(next)) => (Some(next), false),
+            None => (
+                self.rail_dragged(ui, &response, anchor_id, proposed)
+                    .or(proposed.map(N::from_f64)),
+                false,
+            ),
+        };
+        let next = next.filter(|next| *next != before);
+        // The rail egui laid out first in the slider's row: its full height, as wide as set.
+        let rail = Rect::from_center_size(
+            egui::pos2(
+                response.rect.left() + ui.spacing().slider_width / 2.,
+                response.rect.center().y,
+            ),
+            egui::vec2(ui.spacing().slider_width, thickness(ui)),
+        );
         if let Some(next) = next {
             *value = next;
             response.mark_changed();
+            if reset {
+                sound::cue(
+                    ui.ctx(),
+                    sound::Sound::Reset {
+                        from: self.fraction(before),
+                    },
+                );
+            } else {
+                meter::moved(ui, rail, self.fraction(before), self.reading(next));
+            }
         }
+        meter::paint(ui, rail, id.with("meter"), self.reading(*value), &response);
         response
+    }
+
+    /// How far along the slider `value` is, from 0 to 1, as its meter shows it.
+    fn fraction(&self, value: N) -> f32 {
+        let (min, max) = self.span();
+        let value = value.to_f64();
+        let fraction = if self.logarithmic && min > 0. && value > 0. {
+            (value.ln() - min.ln()) / (max.ln() - min.ln())
+        } else {
+            (value - min) / (max - min)
+        };
+        fraction as f32
+    }
+
+    fn reading(&self, value: N) -> meter::Reading {
+        meter::Reading {
+            fraction: self.fraction(value),
+            default: self.default.map(|default| self.fraction(default)),
+        }
     }
 
     /// What the keys pressed make the slider while it has the keyboard: ←/→ step it from
     /// `before`, replacing the pixel's worth the slider itself moves for each, and Delete or
     /// Backspace returns it to its default.
-    fn keyed(&self, ui: &egui::Ui, response: &egui::Response, before: N) -> Option<N> {
+    fn keyed(&self, ui: &egui::Ui, response: &egui::Response, before: N) -> Option<Keys<N>> {
         if !response.has_focus() {
             return None;
         }
@@ -259,14 +343,14 @@ impl<N: emath::Numeric> Keyed<N> {
             input.consume_key(egui::Modifiers::NONE, egui::Key::Backspace) || delete
         });
         match self.default {
-            Some(default) if reset => Some(default),
-            _ if fraction != 0. => Some(N::from_f64(stepped(
+            Some(default) if reset => Some(Keys::Reset(default)),
+            _ if fraction != 0. => Some(Keys::Stepped(N::from_f64(stepped(
                 before.to_f64(),
                 self.span(),
                 fraction,
                 self.logarithmic,
                 N::INTEGRAL,
-            ))),
+            )))),
             _ => None,
         }
     }
@@ -324,13 +408,16 @@ impl<N: emath::Numeric> Keyed<N> {
     }
 }
 
-/// How far a slider's handle travels from one end to the other: its width, less the handle's
-/// radius at each end, as egui draws it.
+/// How tall a slider's rail is, as egui lays it out: a line of text, or a button if taller.
+fn thickness(ui: &egui::Ui) -> f32 {
+    ui.text_style_height(&egui::TextStyle::Body)
+        .max(ui.spacing().interact_size.y)
+}
+
+/// How far a slider's handle travels from one end to the other: its width, less the meter's
+/// inset at each end, where the handle stops.
 fn travel(ui: &egui::Ui) -> f64 {
-    let thickness = ui
-        .text_style_height(&egui::TextStyle::Body)
-        .max(ui.spacing().interact_size.y);
-    f64::from(ui.spacing().slider_width - 2. * thickness / 2.5)
+    f64::from(ui.spacing().slider_width - 2. * meter::INSET)
 }
 
 /// `value` moved `fraction` of the way across `range`, down when negative: evenly, or evenly in
@@ -370,6 +457,248 @@ pub(crate) fn format_value(value: f32) -> String {
     let text = format!("{value:.3}");
     text.trim_end_matches('0').trim_end_matches('.').to_owned()
 }
+/// A switch that turns a setting on or off: a slide in a recessed track, with a lamp beside it
+/// that lights while on. To a screen reader it is a checkbox.
+pub(crate) struct Switch<'a> {
+    on: &'a mut bool,
+    text: egui::WidgetText,
+}
+
+impl<'a> Switch<'a> {
+    pub fn new(on: &'a mut bool, text: impl Into<egui::WidgetText>) -> Self {
+        Self {
+            on,
+            text: text.into(),
+        }
+    }
+}
+
+impl egui::Widget for Switch<'_> {
+    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+        let track = egui::vec2(30., 16.);
+        let lamp = 7.;
+        let spacing = ui.spacing().icon_spacing + 2.;
+        let galley = self.text.into_galley(
+            ui,
+            None,
+            ui.available_width() - track.x - lamp - 2. * spacing,
+            egui::TextStyle::Button,
+        );
+        let size = egui::vec2(
+            track.x + lamp + 2. * spacing + galley.size().x,
+            galley
+                .size()
+                .y
+                .max(track.y)
+                .max(ui.spacing().interact_size.y),
+        );
+        let (rect, mut response) = ui.allocate_exact_size(size, egui::Sense::click());
+        if response.clicked() {
+            *self.on = !*self.on;
+            response.mark_changed();
+        }
+        let (on, enabled, text) = (*self.on, ui.is_enabled(), galley.text().to_owned());
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, &text)
+        });
+        if !ui.is_rect_visible(rect) {
+            return response;
+        }
+        let glide = crate::interface::effects(ui.ctx()).glide();
+        let along = ui.ctx().animate_bool_with_time(response.id, on, glide);
+        let visuals = ui.style().interact(&response);
+        let accent = ui.visuals().selection.bg_fill;
+        let border = ui.visuals().widgets.inactive.bg_stroke.color;
+        let well = egui::Rect::from_min_size(
+            egui::pos2(rect.left(), rect.center().y - track.y / 2.),
+            track,
+        );
+        let painter = ui.painter();
+        let round = well.height() / 2.;
+        painter.rect(
+            well,
+            round,
+            ui.visuals().extreme_bg_color,
+            if response.hovered() || response.has_focus() {
+                egui::Stroke::new(1.5, accent)
+            } else {
+                egui::Stroke::new(1., border)
+            },
+            egui::StrokeKind::Inside,
+        );
+        let knob_size = well.height() - 4.;
+        let knob = egui::Rect::from_center_size(
+            egui::pos2(
+                egui::lerp(
+                    well.left() + 2. + knob_size / 2. ..=well.right() - 2. - knob_size / 2.,
+                    along,
+                ),
+                well.center().y,
+            ),
+            egui::Vec2::splat(knob_size + visuals.expansion.min(0.) * 2.),
+        );
+        painter.circle(
+            knob.center(),
+            knob.width() / 2.,
+            meter::blend(ui.visuals().widgets.inactive.bg_fill, accent, along),
+            egui::Stroke::new(1., border),
+        );
+        // A highlight on the knob, as on a moulded switch.
+        painter.circle_filled(
+            knob.center() - egui::vec2(1.5, 1.5),
+            knob.width() / 5.,
+            egui::Color32::from_white_alpha(110),
+        );
+        let lamp_center = egui::pos2(well.right() + spacing + lamp / 2., rect.center().y);
+        lamp_light(painter, lamp_center, lamp / 2., along, accent, ui.visuals());
+        let text_pos = egui::pos2(
+            lamp_center.x + lamp / 2. + spacing,
+            rect.center().y - galley.size().y / 2.,
+        );
+        painter.galley(text_pos, galley, visuals.text_color());
+        response
+    }
+}
+
+/// A round lamp, lit `how` much in `color`, glowing when lit.
+pub(crate) fn lamp_light(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    radius: f32,
+    how: f32,
+    color: egui::Color32,
+    visuals: &egui::Visuals,
+) {
+    let border = visuals.widgets.inactive.bg_stroke.color;
+    let dark = meter::blend(visuals.extreme_bg_color, border, 0.35);
+    if how > 0. {
+        painter.circle_filled(center, radius + 2.5, color.gamma_multiply(0.3 * how));
+    }
+    painter.circle(
+        center,
+        radius,
+        meter::blend(dark, color, how),
+        egui::Stroke::new(1., border),
+    );
+}
+
+/// [`Switch`] in place of a checkbox.
+pub(crate) trait Switches {
+    fn switch(&mut self, on: &mut bool, text: impl Into<egui::WidgetText>) -> egui::Response;
+}
+
+impl Switches for egui::Ui {
+    fn switch(&mut self, on: &mut bool, text: impl Into<egui::WidgetText>) -> egui::Response {
+        self.add(Switch::new(on, text))
+    }
+}
+
+/// A row of channels, one chosen, with a lit block that slides to the one chosen, as a set's
+/// channel selector. Whether the choice changed.
+pub(crate) fn channels<T: PartialEq + Clone>(
+    ui: &mut egui::Ui,
+    value: &mut T,
+    options: &[(T, &str)],
+) -> bool {
+    let padding = egui::vec2(10., 4.);
+    let galleys: Vec<_> = options
+        .iter()
+        .map(|(_, name)| {
+            egui::WidgetText::from(*name).into_galley(
+                ui,
+                Some(egui::TextWrapMode::Extend),
+                f32::INFINITY,
+                egui::TextStyle::Button,
+            )
+        })
+        .collect();
+    let widths: Vec<f32> = galleys
+        .iter()
+        .map(|g| g.size().x + 2. * padding.x)
+        .collect();
+    let height = ui.spacing().interact_size.y;
+    let size = egui::vec2(widths.iter().sum::<f32>() + 4., height);
+    let id = ui.next_auto_id();
+    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    let mut changed = false;
+    let mut left = rect.left() + 2.;
+    let mut segments = vec![];
+    for (index, ((option, name), width)) in options.iter().zip(&widths).enumerate() {
+        let segment = egui::Rect::from_min_size(
+            egui::pos2(left, rect.top() + 2.),
+            egui::vec2(*width, height - 4.),
+        );
+        let response = ui.interact(segment, id.with(index), egui::Sense::click());
+        if response.clicked() && *value != *option {
+            *value = option.clone();
+            changed = true;
+            sound::cue(ui.ctx(), sound::Sound::Channel);
+        }
+        let selected = *value == *option;
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, selected, *name)
+        });
+        segments.push((segment, response));
+        left += width;
+    }
+    if !ui.is_rect_visible(rect) {
+        return changed;
+    }
+    let visuals = ui.visuals();
+    let accent = visuals.selection.bg_fill;
+    let painter = ui.painter();
+    painter.rect(
+        rect,
+        4.,
+        visuals.extreme_bg_color,
+        visuals.widgets.inactive.bg_stroke,
+        egui::StrokeKind::Inside,
+    );
+    let chosen = options
+        .iter()
+        .position(|(option, _)| option == value)
+        .unwrap_or(0);
+    // Where the lamp is, from the row's left, so moving the row does not slide it.
+    let glide = crate::interface::effects(ui.ctx()).glide() * 2.;
+    let target = segments[chosen].0;
+    let x = ui
+        .ctx()
+        .animate_value_with_time(id.with("x"), target.left() - rect.left(), glide);
+    let width = ui
+        .ctx()
+        .animate_value_with_time(id.with("width"), target.width(), glide);
+    let lamp = egui::Rect::from_min_size(
+        egui::pos2(rect.left() + x, target.top()),
+        egui::vec2(width, target.height()),
+    );
+    painter.rect_filled(lamp.expand(2.), 5., accent.gamma_multiply(0.2));
+    painter.rect(
+        lamp,
+        3.,
+        visuals.widgets.active.bg_fill,
+        egui::Stroke::new(1., accent),
+        egui::StrokeKind::Inside,
+    );
+    for (index, ((segment, response), galley)) in segments.iter().zip(galleys).enumerate() {
+        let color = if index == chosen || response.hovered() {
+            visuals.strong_text_color()
+        } else {
+            visuals.weak_text_color()
+        };
+        let pos = segment.center() - galley.size() / 2.;
+        painter.galley(pos, galley, color);
+        if response.has_focus() {
+            painter.rect_stroke(
+                *segment,
+                3.,
+                egui::Stroke::new(1.5, accent),
+                egui::StrokeKind::Inside,
+            );
+        }
+    }
+    changed
+}
+
 /// A drop-down that chooses `value` from `options`, each shown by its name, with the chosen
 /// one's name on the closed box too. Whether the choice changed.
 pub(crate) fn choice<T: PartialEq + Clone>(
@@ -406,13 +735,14 @@ pub(crate) fn resolution(ui: &mut egui::Ui, label: &str, value: &mut String, pre
             .on_hover_text("Preset name or custom WIDTHxHEIGHT");
     });
 }
+/// Draws `im` to fit `available`, or at `zoom`, and says where.
 pub(crate) fn show_image(
     ui: &mut egui::Ui,
     im: egui::load::SizedTexture,
     available: egui::Vec2,
     fit: bool,
     zoom: f32,
-) {
+) -> egui::Rect {
     let size = im.size;
     let factor = if fit {
         (available.x / size.x).min(available.y / size.y).max(0.01)
@@ -429,6 +759,7 @@ pub(crate) fn show_image(
         egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.)),
         egui::Color32::WHITE,
     );
+    rect
 }
 
 #[cfg(test)]

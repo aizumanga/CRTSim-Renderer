@@ -71,6 +71,7 @@ impl App {
                         Ok(path) => {
                             self.status = "Export finished".into();
                             self.notices.saved(path);
+                            sound::cue(ctx, sound::Sound::Done);
                         }
                         Err(Failure::Cancelled) => {
                             self.status = "Export cancelled; destination kept unchanged".into();

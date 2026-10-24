@@ -17,9 +17,11 @@ mod frames;
 mod gallery;
 mod gallery_ui;
 mod incoming;
+mod interface;
 mod lane;
 mod look_link;
 mod lut_gallery;
+mod meter;
 mod model;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native;
@@ -28,10 +30,12 @@ mod playback;
 mod preview;
 mod preview_ui;
 mod project;
+mod screen;
 mod session;
 mod settings_ui;
 mod sheet_ui;
 mod smoke;
+mod sound;
 mod source;
 mod theme;
 mod thumbnails;
@@ -86,6 +90,11 @@ struct App {
     worker_thread: Option<std::thread::JoinHandle<()>>,
     store: Option<app_data::Store>,
     theme: theme::Theme,
+    /// How much the interface moves, and the sounds it makes.
+    interface: interface::Interface,
+    /// The interface's settings as last remembered.
+    interface_saved: interface::Interface,
+    speaker: sound::Speaker,
     /// What pictures' colour profiles do, and the space PNG stills are written in.
     colors: worker::Colors,
     show_welcome: bool,
@@ -117,6 +126,8 @@ struct App {
     source: source::Source,
     /// The CRT picture on screen, and when to render the next one.
     preview: preview::Preview,
+    /// The preview's screen switching on and flickering, as a set's.
+    screen: screen::Screen,
     view: View,
     /// Where the Compare view divides the original from the CRT, from 0 to 1 across.
     comparison: f32,
@@ -228,6 +239,18 @@ impl App {
         };
         ctx.set_fonts(theme::fonts());
         theme.apply(ctx);
+        let interface = match store.as_ref().map(app_data::Store::interface) {
+            Some(Ok(interface)) => interface,
+            Some(Err(e)) => {
+                storage_error = Some(format!(
+                    "Could not load the interface's effects and sounds: {e:#}. Using the \
+                     defaults."
+                ));
+                interface::Interface::default()
+            }
+            None => interface::Interface::default(),
+        };
+        interface.apply(ctx);
         let colors = match store.as_ref().map(app_data::Store::colors) {
             Some(Ok(colors)) => colors,
             Some(Err(e)) => {
@@ -262,6 +285,9 @@ impl App {
             worker_thread,
             store,
             theme,
+            interface,
+            interface_saved: interface,
+            speaker: Default::default(),
             colors,
             show_welcome,
             first_look: smoke.as_ref().is_some_and(|smoke| smoke.first_look),
@@ -283,6 +309,7 @@ impl App {
             config,
             source: source::Source::new(ctx),
             preview: preview::Preview::new(jobs.preview_lane(), render_state, Instant::now()),
+            screen: Default::default(),
             view: View::Crt,
             comparison: 0.5,
             export_dialog: None,
@@ -308,6 +335,8 @@ impl App {
             app.notices.failed(Topic::AppData, error);
         }
         app.source.profiles = app.colors.profiles;
+        // The screen switches on for the first picture, as a set does when the app starts.
+        app.screen.new_media();
         app.ffmpeg.start_check(ctx);
         #[cfg(not(target_arch = "wasm32"))]
         app.check_for_updates_at_start(ctx);
@@ -357,7 +386,15 @@ impl App {
     /// The picture changed: what was on screen is of another source.
     fn source_changed(&mut self) {
         self.preview.clear();
+        self.screen.new_media();
         self.changed();
+    }
+    /// A preset chosen from a gallery replaces the settings, to the sound of a coin and a
+    /// flicker of the screen.
+    fn apply_preset(&mut self, config: Config) {
+        self.replace_config(config);
+        sound::cue(&self.ui_context, sound::Sound::Preset);
+        self.screen.flicker(&self.ui_context);
     }
     fn show_test_card(&mut self) {
         self.source.test_card();
@@ -738,6 +775,11 @@ impl eframe::App for App {
         self.ticked(tick);
         if self.preview.needs_frames(now) || self.lane.is_working() {
             ctx.request_repaint_after(Duration::from_millis(50));
+        }
+        self.save_interface(ctx);
+        let sounds = sound::take(ctx);
+        if let Some(error) = self.speaker.play(&sounds, &self.interface.sounds) {
+            self.notices.failed(Topic::Sounds, error);
         }
         self.advance_smoke(ctx);
     }
