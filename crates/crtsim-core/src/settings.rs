@@ -23,6 +23,10 @@ pub enum Section {
     Bloom,
     Lighting,
     Persistence,
+    /// What is done to the finished picture: brightness, FXAA and turning it.
+    Finish,
+    /// TV static over the signal.
+    Static,
 }
 
 pub struct Setting {
@@ -246,12 +250,15 @@ pub static SETTINGS: &[Setting] = &[
     Setting::numbers(
         "saturation",
         "Saturation",
-        Numbers::slider(Signal, access!(saturation), 0.0..=3.),
+        // Super Win the Game's sliders reach further than these; a look may hold their values.
+        Numbers::slider(Signal, access!(saturation), 0.0..=3.)
+            .accepting((Included(0.), Included(4.))),
     ),
     Setting::numbers(
         "sharpness",
         "Sharpness / ringing",
-        Numbers::slider(Signal, access!(sharpness), 0.0..=3.),
+        Numbers::slider(Signal, access!(sharpness), 0.0..=3.)
+            .accepting((Included(0.), Included(4.))),
     ),
     Setting::numbers(
         "bleed",
@@ -288,17 +295,18 @@ pub static SETTINGS: &[Setting] = &[
     Setting::numbers(
         "dimming",
         "Edge dimming",
-        Numbers::slider(Glass, access!(dimming), 0.0..=1.),
+        Numbers::slider(Glass, access!(dimming), 0.0..=1.).accepting((Included(0.), Included(2.))),
     ),
     Setting::numbers(
         "fov",
         "Camera field of view",
-        Numbers::slider(Glass, access!(fov), 5.0..=90.),
+        Numbers::slider(Glass, access!(fov), 5.0..=90.).accepting((Included(0.05), Included(90.))),
     ),
     Setting::numbers(
         "mask_opacity",
         "Mask opacity",
-        Numbers::slider(Mask, access!(mask_opacity), 0.0..=1.),
+        Numbers::slider(Mask, access!(mask_opacity), 0.0..=1.)
+            .accepting((Included(0.), Included(2.))),
     ),
     Setting::numbers(
         "mask_brightness",
@@ -325,8 +333,13 @@ pub static SETTINGS: &[Setting] = &[
     ),
     Setting::numbers(
         "bloom_spread",
-        "Bloom spread",
+        "Bloom spread, first blur",
         Numbers::slider(Bloom, access!(bloom_spread), 0.0..=0.2),
+    ),
+    Setting::numbers(
+        "bloom_spread_up",
+        "Bloom spread, second blur",
+        Numbers::slider(Bloom, access!(bloom_spread_up), 0.0..=0.2),
     ),
     Setting::numbers(
         "reflection",
@@ -334,6 +347,8 @@ pub static SETTINGS: &[Setting] = &[
         Numbers::slider(Bloom, access!(reflection), 0.0..=2.),
     ),
     Setting::other("reflection_as_screen", "Reflection as on the screen"),
+    Setting::other("faceted_glass", "Glass as the mesh's facets"),
+    Setting::other("bloom_from_mipmaps", "Bloom from mipmaps"),
     Setting::numbers(
         "frame_color",
         "Bezel color",
@@ -360,7 +375,8 @@ pub static SETTINGS: &[Setting] = &[
     Setting::numbers(
         "specular",
         "Specular light",
-        Numbers::slider(Lighting, access!(specular), 0.0..=2.),
+        Numbers::slider(Lighting, access!(specular), 0.0..=2.)
+            .accepting((Included(0.), Included(5.))),
     ),
     Setting::numbers(
         "specular_power",
@@ -370,7 +386,7 @@ pub static SETTINGS: &[Setting] = &[
     Setting::numbers(
         "rim",
         "Rim light",
-        Numbers::slider(Lighting, access!(rim), 0.0..=2.),
+        Numbers::slider(Lighting, access!(rim), 0.0..=2.).accepting((Included(0.), Included(10.))),
     ),
     Setting::numbers(
         "light_position",
@@ -389,6 +405,27 @@ pub static SETTINGS: &[Setting] = &[
     Setting::other("phase", "Phase"),
     Setting::other("interlace", "Interlaced fields"),
     Setting::other("flip_artifacts", "Flip artifact pattern"),
+    Setting::other("glow_floor", "Glow floor"),
+    Setting::other("glow_per_frame", "Glow decays per frame"),
+    Setting::numbers(
+        "brightness",
+        "Brightness",
+        Numbers::slider(Finish, access!(brightness), -1.0..=1.),
+    ),
+    Setting::other("fxaa", "FXAA"),
+    Setting::other("tate", "Tate"),
+    Setting::other("crt_off", "CRT off"),
+    Setting::other("screenshot_stills", "Stills as the game's screenshots"),
+    Setting::numbers(
+        "static_amount",
+        "TV static",
+        Numbers::slider(Static, access!(static_amount), 0.0..=1.),
+    ),
+    Setting::numbers(
+        "static_cycle",
+        "Channel cycle, seconds (0 holds the static)",
+        Numbers::slider(Static, access!(static_cycle), 0.0..=60.),
+    ),
 ];
 
 /// Checks every numeric setting against what a preset may hold, naming the first that is not.

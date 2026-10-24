@@ -30,12 +30,14 @@ effect:
   as an image of its slices side by side, and how many there are.
 
 **Pixel aspect** says how wide each of the game's pixels is shown; a game drawn for square
-pixels wants 1. The glow fades by real time, so it looks the same at any frame rate.
+pixels wants 1. The glow fades by real time, so it looks the same at any frame rate; **Glow fades** once a
+frame fades it as Super Win the Game does, faster above 60 frames a second.
 
 The effect is made for games on Direct3D 10 and later, OpenGL and Vulkan. Every change to it is
 compiled with ReShade's own compiler as each shipped look sets it, and it shares its passes, line
-for line, with the RetroArch port and the OBS filter, which are tested against the app's
-renderer.
+for line, with the RetroArch port, the OBS filter and the Godot effect, which are tested against
+the app's renderer. The shipped looks include Super Win the Game's, with and without the game's
+NES palette.
 
 ## Making your own
 

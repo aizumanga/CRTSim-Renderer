@@ -4,23 +4,27 @@ This is a runnable prototype, not a claim of completed cross-platform visual par
 
 ## Golden-image rendering regression
 
-`cargo test -p crtsim-core --test golden -- --ignored --nocapture` compares twenty rendered
+`cargo test -p crtsim-core --test golden -- --ignored --nocapture` compares thirty-six rendered
 images against images committed in `crates/crtsim-core/tests/golden/`. The CI fixtures show
-that a render finished; these show that it still produces the same picture. One case per route
-the renderer can take: the reference frame and its signal, both composite phases, linear-light,
-the unfiltered mask, screen-only, interlaced scanning, a bundled NES LUT, and the second frame
-of a sequence, which is the only case that sees frame-to-frame persistence.
+that a render finished; these show that it still produces the same picture. Twenty-four take one
+route each through the renderer: the reference frame and its signal, both composite phases,
+NTSC blending and the flipped artifact pattern in the signal, linear-light, the unfiltered mask,
+screen-only, the bezel's reflection as on the screen, a backdrop, a widescreen and a portrait
+tube, interlaced scanning, a bundled NES LUT, the bloom from mipmaps, the glow floor, FXAA at
+its finest, a brighter picture, the picture turned for tate, the CRT off, TV static in the
+signal, Super Win the Game's look as a whole, drawn as the game's screenshots on its mesh's facets, and the second
+frame of a sequence, which is the only case that sees frame-to-frame persistence.
 
-The other ten capture the prepare step's output -- the clean signal, before the simulation --
+The other twelve capture the prepare step's output -- the clean signal, before the simulation --
 since the test card reaches it only as an identity: Lanczos down, up and along one axis, Nearest
-down and up, the alpha composite, source edits with each sampler, the grade, and a LUT with the
-grade. They were rendered by the CPU prepare step and still pass bit-exactly now that it runs on
+down and up, the alpha composite, source edits with each sampler, the grade, the NES palette,
+a LUT at half strength, and a LUT with the grade. They were rendered by the CPU prepare step and still pass bit-exactly now that it runs on
 the GPU.
 
 Comparison is effectively bit-exact (max one 0-255 step on any channel, mean under 0.002).
 That is not a cosmetic choice: perceptual limits loose enough to survive a driver change were
 measured against a deliberate regression -- luma weights rounded to 0.30/0.59/0.11 -- and
-missed it in all nine cases, because that edit moves the mean by only 0.015-0.039 steps. A
+missed it in every case it was tried on, because that edit moves the mean by only 0.015-0.039 steps. A
 single driver renders a frame bit-exactly, so tight limits are what makes the test able to
 fail at all.
 
@@ -56,6 +60,17 @@ A mismatch writes the rendered frame and a 64x-amplified difference image into
 `$CRTSIM_TEST_OUTPUT/golden-failures/`, which the Vulkan job uploads with the other fixtures
 even when it fails. When the goldens have to be regenerated against a driver only CI has, an
 update run there leaves them in the same uploaded directory to download and commit.
+
+## Shader ports in their hosts
+
+`crates/crtsim-ports` draws every case of `parity::cases()` through each port and compares it
+with the renderer's picture: the RetroArch port through librashader and in RetroArch itself
+(1.18, as Ubuntu packages it, with glcore and with Vulkan: `tests/retroarch_real.rs`), the ReShade
+effect in vkBasalt (`tests/reshade_vkbasalt.rs`), the OBS filter in OBS and the Godot effect in
+Godot. RetroArch's image viewer shows one picture, so the glow's trail between pictures is
+checked in librashader and vkBasalt only; and RetroArch's Vulkan driver restarts a preset's
+feedback after the first frame while `FrameCount` runs on, so in RetroArch the looks that follow
+the frame count are checked with glcore.
 
 ## Colour management
 
@@ -139,6 +154,8 @@ These are reproducible diagnostics, not approved golden images or a real-GPU per
 ## Remaining fidelity checks
 
 - Compare the same input against a running D3D9 upstream reference, not a compressed game video.
+  The Super Win the Game look is compared with the game itself, its Linux build pass by pass
+  and its Windows build under Wine (`docs/research/swtg-crt`).
 - Check mask aliasing at all output/display sizes. The filtered mask, the default as in the original, chooses mip levels from screen-space derivatives; with filtering off it samples only mip zero.
 - Check mesh projection, channel order, UV orientation and reflected corners on multiple adapters.
 - Compare Vulkan and DX12 captures of the same preset using perceptual tolerance, not exact hashes.
@@ -148,6 +165,7 @@ These are reproducible diagnostics, not approved golden images or a real-GPU per
 
 ## Environment
 
-The development workspace can compile Rust and validate shader source, but initially has no configured Vulkan ICD.
-Driver package installation was blocked by workspace permissions. No attempt is made to bypass that restriction.
-GPU runtime validation is delegated to the repository's explicit CI job or a user's configured GPU machine.
+A development container without a GPU runs the GPU tests on Mesa's software Vulkan
+(`apt-get install mesa-vulkan-drivers`, with `XDG_RUNTIME_DIR` set), as CI does; the goldens
+record the driver they were made with. Otherwise GPU runtime validation is delegated to the
+repository's explicit CI job or a user's configured GPU machine.

@@ -20,7 +20,8 @@ buffers between passes; switch **Linear light** only in a preset made for it.
 
 The picture's shape comes from the core on RetroArch 1.20 and later, and from **Picture
 aspect** on older versions. On 1.20 and later the glow also fades by real time, so it looks the
-same at any frame rate; older versions fade it by frames.
+same at any frame rate, unless **Glow fades** is once a frame, as Super Win the Game's does;
+older versions fade it by frames.
 
 ## Making your own
 

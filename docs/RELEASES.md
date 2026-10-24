@@ -1,5 +1,69 @@
 # Portable releases (Phase 4)
 
+## v1.7.0
+
+Super Win the Game's look comes closer to the game's own: its bloom reads the picture as the game
+reads it, and its black holds where the game's 8-bit glow holds it.
+
+- **Bloom from mipmaps.** The bloom's first blur reads the picture through its mipmaps, at the
+  level a target a sixteenth its size reads, as the game does, so each tap averages 16×16 pixels
+  and the mask no longer flickers into the glow. On in the Super Win the Game looks; the public
+  reference reads the picture itself, as before.
+- **Glow floor.** The glow never fades below the level 8-bit history rounds it back to, 1 of 255
+  in red and green at the default persistence, as every pixel stays once the game's title screen
+  has lit it. On in the Super Win the Game looks.
+- The shader ports ship the Super Win the Game looks, as the app starts with them and with the
+  game's NES palette (`crtsim-renderer-super-win-the-game` and
+  `crtsim-renderer-super-win-the-game-nes-palette`). RetroArch before 1.20, which says no
+  picture shape, takes a look's own for a fixed signal, such as the game's 8:7 pixels.
+- Settings take every value the game's own sliders do: sharpness and saturation up to 4, edge
+  dimming and mask opacity up to 2, specular light up to 5, rim light up to 10, and a field of
+  view down to 0.05°.
+- The ReShade, OBS and Godot ports size the bloom's first target as the renderer and the game
+  do, a sixteenth of the picture rounded down.
+- The glass's rim light is squared by multiplying, as the game squares it.
+- [The research notes](research/swtg-crt/README.md) add session 11: the article, every shipped
+  shader and render state, the rest of the engine around the CRT, and the two changes above
+  checked against the running game.
+
+The rest of the game's options screen, TV static, and the game's glow and screenshots:
+
+- **Picture finish.** Brightness, which raises or lowers the picture's luma keeping its hue, as
+  the game's slider does; FXAA at the game's four levels, its FXAA 3 quality smoothing the glass
+  and bezel before the bloom is added; tate, turning the finished picture a quarter, a half or
+  three quarters counter-clockwise for a screen on its side, the tube drawn across the frame's
+  height as the game draws it; and the CRT off, the picture drawn flat in its pixel aspect
+  inside the frame, as the game draws it without its CRT simulation. Each was checked against
+  the running game.
+- **Two bloom spreads.** The bloom's two blurs each have their spread, as the game's do. Saved
+  settings keep one spread for both.
+- **TV static.** Snow, a rolling band and a wavering, slipping picture, from a touch to all
+  static, written for this renderer. A channel cycle brings it and takes it away over that many
+  seconds of video, for a channel change.
+- **Glow fades per frame.** The glow fades by persistence once each frame drawn, as the game's
+  does, so above 60 Hz it fades faster. On in the Super Win the Game looks; off, the glow fades
+  by the time that passes, the same at any rate.
+- **Stills as screenshots.** With alternating phase, a still's last tick draws both artifact
+  patterns averaged, as the game's screenshots do. On in the Super Win the Game looks; video
+  keeps alternating.
+- **Faceted glass.** The glass as the game's mesh draws it, each triangle flat between corners
+  on the curve, so the picture shifts a hair from facet to facet as the game's does: the glass
+  now within 0.03 of a step of the game's meshes on average, from 0.34. On in the Super Win the
+  Game looks; the reference keeps the smooth curve.
+- **The bezel's outer rim** is drawn where the game draws it: rays there no longer stop a step
+  short of it and show the backdrop, nor leave a column of backdrop where a narrow tube's bezel
+  meets its glass.
+- A picture narrower than its tube fits the tube's width, as the game fits its 4:3 tube for
+  tate, where it kept the height and cut the sides off. This changes portrait pictures in the
+  renderer and every shader port.
+- The shader ports gain brightness, FXAA, the two spreads, TV static, the glow fading per
+  frame and faceted glass, each checked against the renderer in RetroArch, OBS and Godot.
+- The RetroArch port is now also checked in RetroArch itself, with its OpenGL and Vulkan
+  drivers, and the ReShade effect in vkBasalt, which runs it over a window's frames, picture for
+  picture against the renderer. Tate and the CRT off are
+  left to the host, which turns its screen and its effects itself; exporting a look with either
+  says so.
+
 ## v1.6.0
 
 The CRT runs in games made with Bevy, as the renderer itself, and in Godot 4, as a compositor effect; and a video

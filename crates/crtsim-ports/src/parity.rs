@@ -8,8 +8,8 @@
 //! mask's mipmaps its own way, rounding each texel its own way, which moves a third of a
 //! filtered frame's pixels by a step or two. So every case samples the mask unfiltered, where
 //! only a real translation error can move a pixel, and one case keeps the mipmaps under a limit
-//! of its own. The limits were set from the first measurement and frozen; `--nocapture`
-//! prints each case's margin.
+//! of its own, as one keeps the bloom from the surface's halved levels and one FXAA. The limits
+//! were set from the first measurement and frozen; `--nocapture` prints each case's margin.
 
 use crtsim_core::config::{self, ColorMode, Config, Phase};
 use crtsim_core::{nes_luts, Renderer, Sequence};
@@ -23,26 +23,52 @@ pub const OUTPUT: (u32, u32) = (320, 180);
 pub const UNFILTERED: Limits = Limits {
     worst: 2,
     mean: 0.01,
+    past: SEAM_PIXELS,
 };
 pub const MIPMAPPED: Limits = Limits {
     worst: 4,
     mean: 0.3,
+    past: SEAM_PIXELS,
+};
+/// The bloom from the surface's halved levels: each level a filtered read of the one above,
+/// which a driver rounds half up in two steps or to the nearest in one, as it filters, so a
+/// level can move by a step where a port's host takes the other path, and the bloom, at full
+/// strength in its case, carries that to about one pixel in eight.
+pub const HALVED: Limits = Limits {
+    worst: 2,
+    mean: 0.08,
+    past: SEAM_PIXELS,
 };
 /// A colour table computed in floats, as the NES palette is, which the ports read as an 8-bit
 /// strip.
 pub const FLOAT_TABLE: Limits = Limits {
     worst: 3,
     mean: 0.08,
+    past: SEAM_PIXELS,
+};
+
+/// FXAA reads the surface filtered at fractions of a texel and turns those reads into choices:
+/// which way an edge runs, where it ends. Where a host filters a last bit apart from Vulkan, as
+/// OpenGL does, rounds the surface through half floats, as Godot does, or compiles the
+/// arithmetic its own way, as ReShade does, a pixel at a tie goes the other way: measured at up
+/// to 26 pixels of 57,344 past 2 steps in OBS, 19 of 57,600 in Godot, 9 in RetroArch's glcore
+/// and 24 in vkBasalt, by up to 25 steps; none through librashader or RetroArch's Vulkan.
+pub const FXAA: Limits = Limits {
+    worst: 2,
+    mean: 0.01,
+    past: 32,
 };
 
 /// Pixels allowed past a case's worst: where the bezel meets the glass, both lie at nearly the
 /// same depth, and the last digit GLSL and WGSL round differently can pick either.
-const SEAM_PIXELS: usize = 4;
+pub const SEAM_PIXELS: usize = 4;
 
 #[derive(Clone, Copy)]
 pub struct Limits {
     pub worst: u8,
     pub mean: f64,
+    /// Pixels allowed past the worst.
+    pub past: usize,
 }
 
 /// The reference look at the goldens' size, its mask unfiltered.
@@ -155,6 +181,84 @@ pub fn cases() -> Vec<Case> {
                 reflection_as_screen: true,
                 overscan: 1.25,
                 reflection: 2.,
+                ..base()
+            },
+        ),
+        // The bloom read through the surface's mipmaps, as the game reads it, strong enough to
+        // show; the 16:9 frame's height does not divide by 16, so it reads between two levels.
+        Case {
+            limits: HALVED,
+            ..still(
+                "bloom-from-mipmaps",
+                Config {
+                    bloom_from_mipmaps: true,
+                    bloom: 1.,
+                    ..base()
+                },
+            )
+        },
+        // The glow held at its 8-bit floor, with a persistence that holds it high enough to see:
+        // 7, 3 and 1 of 255, none of them where a half rounds either way.
+        still(
+            "glow-floor",
+            Config {
+                glow_floor: true,
+                persistence: [0.93, 0.85, 0.7],
+                ..base()
+            },
+        ),
+        // Super Win the Game's look as a whole, its mask unfiltered; a port's picture is a
+        // game's frame, not a screenshot.
+        still(
+            "super-win-the-game",
+            Config {
+                output: base().output,
+                mask_antialias: false,
+                screenshot_stills: false,
+                ..Config::super_win_the_game()
+            },
+        ),
+        // The finish of the game's options screen: its finest FXAA, a brighter picture, and the
+        // two blurs of the bloom spread apart.
+        Case {
+            limits: FXAA,
+            ..still(
+                "fxaa-ultra",
+                Config {
+                    fxaa: config::Fxaa::Ultra,
+                    ..base()
+                },
+            )
+        },
+        still(
+            "brightness",
+            Config {
+                brightness: 0.5,
+                ..base()
+            },
+        ),
+        still(
+            "bloom-spreads",
+            Config {
+                bloom: 1.,
+                bloom_spread: 0.01,
+                bloom_spread_up: 0.06,
+                ..base()
+            },
+        ),
+        // The glass on its mesh's facets, as the game draws it.
+        still(
+            "faceted-glass",
+            Config {
+                faceted_glass: true,
+                ..base()
+            },
+        ),
+        // TV static, half over the picture.
+        still(
+            "tv-static",
+            Config {
+                static_amount: 0.5,
                 ..base()
             },
         ),
@@ -275,6 +379,10 @@ pub fn cases() -> Vec<Case> {
     // Not 0.9 here: 0.9 of white is 229.5 steps, where a frame of 33,333 microseconds, a
     // hair short of a thirtieth of a second, rounds the other way.
     cases.push(trail("persistence-trail-30fps", 0.8, Timing::Video(30.)));
+    // At 30 frames a second still fading as at 60, as Super Win the Game's glow fades a frame.
+    let mut per_frame = trail("glow-per-frame-30fps", 0.8, Timing::Video(30.));
+    per_frame.config.glow_per_frame = true;
+    cases.push(per_frame);
     cases
 }
 
@@ -311,9 +419,10 @@ pub fn aspect(case: &Case) -> f32 {
     width as f32 / height as f32 * case.config.pixel_aspect
 }
 
-/// The worst channel difference once the `SEAM_PIXELS` worst pixels are set aside, the mean
-/// over every pixel, and how many pixels differ by more than `worst`, all in 8-bit steps.
-pub fn compare(a: &RgbaImage, b: &RgbaImage, worst: u8) -> (u8, f64, usize) {
+/// The worst channel difference once the `limits.past` worst pixels are set aside, the mean
+/// over every pixel, and how many pixels differ by more than the limits' worst, all in 8-bit
+/// steps.
+pub fn compare(a: &RgbaImage, b: &RgbaImage, limits: Limits) -> (u8, f64, usize) {
     assert_eq!(a.dimensions(), b.dimensions());
     let mut differences: Vec<u8> = a
         .pixels()
@@ -325,9 +434,9 @@ pub fn compare(a: &RgbaImage, b: &RgbaImage, worst: u8) -> (u8, f64, usize) {
         .zip(b.pixels())
         .flat_map(|(p, q)| (0..3).map(move |c| u64::from(p[c].abs_diff(q[c]))))
         .sum();
-    let past = differences.iter().filter(|&&d| d > worst).count();
+    let past = differences.iter().filter(|&&d| d > limits.worst).count();
     differences.sort_unstable();
-    let kept = differences.len().saturating_sub(SEAM_PIXELS + 1);
+    let kept = differences.len().saturating_sub(limits.past + 1);
     (
         differences[kept],
         total as f64 / (a.pixels().len() * 3) as f64,
@@ -356,7 +465,7 @@ pub fn check(cases: Vec<Case>, dir: &Path, mut port: impl FnMut(&Case, &Path) ->
         let expected = render(&renderer, &case);
         let got = port(&case, &dir.join(case.name));
         let limits = case.limits;
-        let (worst, mean, past) = compare(&expected, &got, limits.worst);
+        let (worst, mean, past) = compare(&expected, &got, limits);
         eprintln!(
             "{}: worst channel {worst}/{}, mean {mean:.4}/{} steps, {past} pixels past the worst",
             case.name, limits.worst, limits.mean

@@ -7,7 +7,6 @@ use bytemuck::{Pod, Zeroable};
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub(crate) struct Params {
-    mvp: [[f32; 4]; 4],
     size: [f32; 4],
     signal: [f32; 4],
     persistence: [f32; 4],
@@ -21,6 +20,9 @@ pub(crate) struct Params {
     bloom: [f32; 4],
     processing: [f32; 4],
     backdrop: [f32; 4],
+    post: [f32; 4],
+    finish: [f32; 4],
+    picture: [f32; 4],
 }
 
 /// What a tube's aspect makes of the original's 4:3 one, worked out here so that for 4:3 they
@@ -30,8 +32,9 @@ struct Tube {
     stretch: f32,
     /// How much wider each side is than the original's, or narrower where it is negative.
     widening: f32,
-    /// How much more the view takes in, so a tube wider than an output of `output`'s shape is
-    /// framed as a 4:3 one is in an output of the tube's shape; 1 for any other.
+    /// How much more the view takes in, so a tube wider than the output fits across it, as
+    /// Super Win the Game fits its 4:3 tube across the portrait picture it draws for tate; 1 for
+    /// any other.
     framing: f32,
 }
 
@@ -42,7 +45,7 @@ impl Tube {
         Self {
             stretch: aspect / ORIGINAL,
             widening: aspect - ORIGINAL,
-            framing: (aspect / output.max(ORIGINAL)).max(1.),
+            framing: (aspect / output).max(1.),
         }
     }
 }
@@ -54,18 +57,13 @@ pub(crate) const PARAMS_SIZE: Option<std::num::NonZeroU64> =
 impl Params {
     /// Everything but the composite phase and the interlaced field, which `tick` sets.
     pub(crate) fn new(c: &Config, signal: (u32, u32), output: (u32, u32)) -> Self {
-        let fov = c.fov.to_radians();
-        let distance = 1. / (fov * 0.5).tan();
+        let distance = 1. / (c.fov.to_radians() * 0.5).tan();
         let camera = glam::Vec3::new(-distance, 0., 0.);
-        let view = glam::Mat4::look_at_rh(camera, glam::Vec3::ZERO, glam::Vec3::Z);
-        let projection =
-            glam::Mat4::perspective_rh(fov, output.0 as f32 / output.1 as f32, 0.1, 100.);
         let uv = c.uv_scale(signal);
         let mask = c.mask_repeats.resolve(signal);
         let tube = Tube::new(c.tube_aspect, output);
         let flag = |on: bool| if on { 1. } else { 0. };
         Self {
-            mvp: (projection * view).to_cols_array_2d(),
             size: [
                 signal.0 as f32,
                 signal.1 as f32,
@@ -101,7 +99,13 @@ impl Params {
                 tube.stretch,
             ],
             camera: [camera.x, camera.y, camera.z, c.tube_aspect],
-            bloom: [c.bloom, c.bloom_power, c.bloom_spread, tube.widening],
+            // With the CRT off there is no bloom, as in the game.
+            bloom: [
+                if c.crt_off { 0. } else { c.bloom },
+                c.bloom_power,
+                c.bloom_spread,
+                tube.widening,
+            ],
             processing: [
                 flag(c.color_mode == ColorMode::LinearLight),
                 flag(c.interlace),
@@ -114,13 +118,27 @@ impl Params {
                 c.backdrop_color[2],
                 tube.framing,
             ],
+            post: [
+                flag(c.bloom_from_mipmaps),
+                flag(c.glow_floor),
+                flag(c.faceted_glass),
+                0.,
+            ],
+            finish: [
+                2_f32.powf(-c.brightness),
+                c.fxaa as u32 as f32,
+                c.tate.quarters() as f32,
+                c.bloom_spread_up,
+            ],
+            picture: [c.pixel_aspect, c.static_amount, c.static_cycle, 0.],
         }
     }
 
-    /// The composite phase for `tick`, and the field it scans when interlaced. `blending` moves
-    /// the two phases towards their average as the game's NTSC Blending does: its `NTSCLerp` is
-    /// `p + (0.5 - p) * blending` for the tick's phase `p` of 0 or 1.
-    pub(crate) fn tick(&mut self, phase: Phase, blending: f32, tick: u64) {
+    /// The composite phase for `tick`, the field it scans when interlaced, and where TV static's
+    /// clock stands, in sixtieths of a second, which also draws its noise anew each whole one.
+    /// `blending` moves the two phases towards their average as the game's NTSC Blending does:
+    /// its `NTSCLerp` is `p + (0.5 - p) * blending` for the tick's phase `p` of 0 or 1.
+    pub(crate) fn tick(&mut self, phase: Phase, blending: f32, tick: u64, clock: f64) {
         let (a, b) = (0.5 * blending, 1. - 0.5 * blending);
         self.signal[3] = match phase {
             Phase::Stable => 0.5,
@@ -130,6 +148,8 @@ impl Params {
             Phase::Alternating => b,
         };
         self.processing[2] = (tick % 2) as f32;
+        // Whole sixtieths are exact up to 2^24, over 77 hours.
+        self.picture[3] = (clock % f64::from(1 << 24)) as f32;
     }
 }
 
@@ -184,7 +204,7 @@ mod tests {
                 ..Config::default()
             };
             let mut params = Params::new(&c, (256, 224), (320, 240));
-            params.tick(c.phase, c.ntsc_blending, tick);
+            params.tick(c.phase, c.ntsc_blending, tick, 0.);
             params.signal[3]
         };
         // Unblended, the public source's switch between the two patterns.

@@ -31,6 +31,9 @@ MODULE_EXPORT const char *obs_module_description(void)
 #define TABLE_FILE "table_file"
 #define LOOK_FILE "look_file"
 
+/* The surface's mip levels the bloom may read below it: down to the one below a sixteenth. */
+#define BLOOM_LEVELS 5
+
 struct crtsim {
 	obs_source_t *context;
 	gs_effect_t *effect;
@@ -48,6 +51,13 @@ struct crtsim {
 	/* This frame's signal and the last one's, in turn. */
 	gs_texrender_t *signals[2];
 	gs_texrender_t *surface;
+	/* The surface's mip levels below it, from the second, for the bloom from mipmaps. */
+	gs_texrender_t *levels[BLOOM_LEVELS];
+	/* The two of the surface's levels the bloom's first blur reads between, and the first's
+	 * number. */
+	gs_texture_t *bloom_level;
+	gs_texture_t *bloom_below;
+	int bloom_level_index;
 	gs_texrender_t *bloom_down;
 	gs_texrender_t *bloom_up;
 	gs_texrender_t *output;
@@ -134,6 +144,11 @@ static void free_targets(struct crtsim *f)
 		gs_texrender_destroy(*targets[i]);
 		*targets[i] = NULL;
 	}
+	for (int i = 0; i < BLOOM_LEVELS; i++) {
+		gs_texrender_destroy(f->levels[i]);
+		f->levels[i] = NULL;
+	}
+	f->bloom_level = f->bloom_below = NULL;
 }
 
 /* The textures the passes draw into. In linear light the surface and what follows it keep
@@ -150,6 +165,8 @@ static void make_targets(struct crtsim *f, bool linear)
 	f->signals[0] = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
 	f->signals[1] = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
 	f->surface = gs_texrender_create(surface, GS_ZS_NONE);
+	for (int i = 0; i < BLOOM_LEVELS; i++)
+		f->levels[i] = gs_texrender_create(surface, GS_ZS_NONE);
 	f->bloom_down = gs_texrender_create(surface, GS_ZS_NONE);
 	f->bloom_up = gs_texrender_create(surface, GS_ZS_NONE);
 	f->output = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
@@ -367,6 +384,10 @@ static void set_values(struct crtsim *f)
 			set_texture(f, crtsim_images[i].param, f->images[i]);
 	set_texture(f, "previous_signal", gs_texrender_get_texture(f->signals[!f->current]));
 	set_texture(f, "surface_image", gs_texrender_get_texture(f->surface));
+	set_texture(f, "bloom_level", f->bloom_level);
+	set_texture(f, "bloom_below", f->bloom_below);
+	gs_effect_set_float(gs_effect_get_param_by_name(f->effect, "crtsim_bloom_level"),
+			    (float)f->bloom_level_index);
 }
 
 /* Draws `technique` over all of `target`, at cx×cy, reading `input`. */
@@ -382,6 +403,33 @@ static void run(struct crtsim *f, gs_texrender_t *target, uint32_t cx, uint32_t 
 	while (gs_effect_loop(f->effect, technique))
 		gs_draw_sprite(NULL, 0, cx, cy);
 	gs_texrender_end(target);
+}
+
+/* The two of the surface's mip levels the bloom's first blur reads between, into a target of
+ * bloom_cx×bloom_cy: with the bloom from mipmaps, the level GL picks for it and the one below,
+ * the surface halved level by level down to them as GL makes mipmaps; else the surface. */
+static void halve_surface(struct crtsim *f, uint32_t cx, uint32_t cy, uint32_t bloom_cx,
+			  uint32_t bloom_cy)
+{
+	gs_texture_t *above = gs_texrender_get_texture(f->surface);
+	f->bloom_level = f->bloom_below = above;
+	f->bloom_level_index = 0;
+	if (f->values[CRTSIM_BLOOM_MIPMAPS_INDEX] < 0.5f)
+		return;
+	double ratio = fmax((double)cx / bloom_cx, (double)cy / bloom_cy);
+	int first = 0;
+	while (first + 1 < BLOOM_LEVELS && ratio >= (double)(1u << (first + 1)))
+		first++;
+	for (int level = 1; level <= first + 1; level++) {
+		cx = cx > 1 ? cx / 2 : 1;
+		cy = cy > 1 ? cy / 2 : 1;
+		run(f, f->levels[level - 1], cx, cy, "Halve", above);
+		above = gs_texrender_get_texture(f->levels[level - 1]);
+		if (level == first)
+			f->bloom_level = above;
+	}
+	f->bloom_below = above;
+	f->bloom_level_index = first;
 }
 
 /* The source's picture, drawn over black into f->input, as OBS draws a filter's input: the
@@ -451,9 +499,10 @@ static bool simulate(struct crtsim *f, uint32_t cx, uint32_t cy)
 	gs_texrender_t *signal = f->signals[f->current];
 	run(f, signal, scx, scy, "Composite", gs_texrender_get_texture(f->prepared));
 	run(f, f->surface, cx, cy, "Surface", gs_texrender_get_texture(signal));
-	uint32_t bloom_cx = (cx + 8) / 16, bloom_cy = (cy + 8) / 16;
-	run(f, f->bloom_down, bloom_cx ? bloom_cx : 1, bloom_cy ? bloom_cy : 1, "BloomDown",
-	    gs_texrender_get_texture(f->surface));
+	/* A sixteenth of the picture each way, rounded down, as the renderer and the game size it. */
+	uint32_t bloom_cx = cx >= 16 ? cx / 16 : 1, bloom_cy = cy >= 16 ? cy / 16 : 1;
+	halve_surface(f, cx, cy, bloom_cx, bloom_cy);
+	run(f, f->bloom_down, bloom_cx, bloom_cy, "BloomDown", gs_texrender_get_texture(f->surface));
 	run(f, f->bloom_up, cx, cy, "BloomUp", gs_texrender_get_texture(f->bloom_down));
 	run(f, f->output, cx, cy, "Present", gs_texrender_get_texture(f->bloom_up));
 

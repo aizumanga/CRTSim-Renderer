@@ -64,9 +64,13 @@ struct Pipelines {
     layout: wgpu::PipelineLayout,
 }
 
-/// What follows the signal: the curved glass and its bezel, then the bloom's two blurs.
+/// What follows the signal: the curved glass and its bezel, the mipmaps the bloom may read,
+/// then the bloom's two blurs.
 struct SurfacePasses {
     surface: wgpu::RenderPipeline,
+    /// The picture flat in its place, with the CRT off.
+    flat: wgpu::RenderPipeline,
+    halve: wgpu::RenderPipeline,
     downsample: wgpu::RenderPipeline,
     upsample: wgpu::RenderPipeline,
 }
@@ -87,7 +91,10 @@ pub(crate) struct Workspace {
     source: Target,
     /// The simulated signal's feedback: each tick reads one and writes the other.
     history: [Target; 2],
-    full: Target,
+    /// Each mip level of the glass and bezel's picture alone, its own size first: the picture is
+    /// drawn into the first, and each level after from the one before. The bloom and present
+    /// passes read the whole chain.
+    full_levels: Vec<wgpu::TextureView>,
     down: Target,
     up: Target,
     final_target: Target,
@@ -100,6 +107,13 @@ pub(crate) struct Workspace {
     shape: Shape,
 }
 
+/// The mip levels of the glass and bezel's picture of `size` that the bloom may read: down to the
+/// level below a sixteenth, between which a target a sixteenth its size reads, or as many as
+/// the size has.
+fn bloom_levels((width, height): (u32, u32)) -> u32 {
+    (u32::BITS - width.max(height).leading_zeros()).min(6)
+}
+
 /// The most memory a render's targets may take, as `Renderer::fits` estimates them.
 const BUDGET: u64 = 1_500_000_000;
 
@@ -109,6 +123,10 @@ struct Bindings {
     composite: [wgpu::BindGroup; 2],
     /// By the history target holding the signal the glass shows.
     glass: [wgpu::BindGroup; 2],
+    /// The clean signal, drawn flat with the CRT off.
+    flat: wgpu::BindGroup,
+    /// By the mip level drawn, from the second: each reads the level before.
+    halve: Vec<wgpu::BindGroup>,
     downsample: wgpu::BindGroup,
     upsample: wgpu::BindGroup,
     present: wgpu::BindGroup,
@@ -185,6 +203,16 @@ pub struct PreviewFrame {
 /// Which history target tick `tick` writes. It reads the other, which the tick before wrote.
 fn written(tick: u64) -> usize {
     (tick % 2) as usize
+}
+
+/// The settings a frame is drawn with: with the CRT off, no colour table, which belongs to the
+/// CRT's signal, as the game draws its picture without one.
+fn drawn(mut c: Config) -> Config {
+    if c.crt_off {
+        c.palette = None;
+        c.lut = None;
+    }
+    c
 }
 
 /// How far a render has got.
@@ -369,6 +397,8 @@ impl Renderer {
             let format = surface_format(mode);
             SurfacePasses {
                 surface: pipeline("surface", format),
+                flat: pipeline("flat", format),
+                halve: pipeline("halve", format),
                 downsample: pipeline("downsample", format),
                 upsample: pipeline("upsample", format),
             }
@@ -435,7 +465,7 @@ impl Renderer {
         let mut report = |fraction, stage| progress(RenderProgress { fraction, stage });
         report(0., Stage::Preparing);
         config.validate()?;
-        let c = &sequence.timed(config);
+        let c = &drawn(sequence.timed(config));
         let plan = self.plan(input, c)?;
         let clean = if plan.prepare_on_gpu {
             None
@@ -444,7 +474,12 @@ impl Renderer {
         };
         self.follow(sequence, plan.shape)?;
         let ticks = sequence.ticks(c.warmup);
+        let clocks = sequence.clocks(ticks);
+        // A still drawn as the game's screenshots ends on a tick of both patterns averaged.
+        let screenshot =
+            sequence.still_frame() && c.screenshot_stills && c.phase == config::Phase::Alternating;
         let workspace = sequence.workspace.as_mut().expect("made by follow");
+        self.finish_at(workspace, c.tate.turned(plan.shape.output));
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -466,14 +501,17 @@ impl Renderer {
         report(0.05, Stage::Simulating { done: 0, of: ticks });
         for step in 0..ticks {
             ensure!(!cancelled(), "Render cancelled");
-            self.composite(
-                &mut encoder,
-                workspace,
-                &mut params,
-                c,
-                sequence.tick,
-                step % BATCH,
-            );
+            let phase = if screenshot && step + 1 == ticks {
+                config::Phase::Stable
+            } else {
+                c.phase
+            };
+            let tick = sequence.tick;
+            params.tick(phase, c.ntsc_blending, tick, clocks[step as usize]);
+            // With the CRT off nothing glows: the picture is drawn flat, its static still ticking.
+            if !c.crt_off {
+                self.composite(&mut encoder, workspace, &params, tick, step % BATCH);
+            }
             sequence.tick += 1;
             // Report completed GPU work, not just command encoding. Small batches keep overhead bounded.
             if (step + 1) % BATCH == 0 || step + 1 == ticks {
@@ -508,7 +546,7 @@ impl Renderer {
             .workspace
             .as_mut()
             .context("Render a frame before reading it")?;
-        let size = workspace.shape.output;
+        let size = workspace.final_target.size();
         workspace
             .readback
             .get_or_insert_with(|| Readback::new(&self.device, size))
@@ -622,21 +660,25 @@ impl Renderer {
         // The settings as given, since a frame of no time holds the glow as it is, which
         // settings could not ask for.
         config.validate()?;
-        let c = &sequence.timed(config);
+        let c = &drawn(sequence.timed(config));
         let input = (source.width(), source.height());
         let limit = self.device.limits().max_texture_dimension_2d;
         ensure!(
             input.0 <= limit && input.1 <= limit,
             "the host's picture exceeds adapter texture limit {limit}"
         );
+        // The target is the finished picture's size; tate turns the tube's into it.
+        let finished = (target.width(), target.height());
         let shape = Shape {
             signal: c.signal_size(input)?,
-            output: (target.width(), target.height()),
+            output: c.tate.turned(finished),
             color_mode: c.color_mode,
         };
         self.fits(shape)?;
         self.follow(sequence, shape)?;
+        let clock = sequence.clocks(1)[0];
         let workspace = sequence.workspace.as_mut().expect("made by follow");
+        self.finish_at(workspace, finished);
         self.prepare_pipelines.encode(
             &self.device,
             &self.queue,
@@ -648,7 +690,12 @@ impl Renderer {
         );
         let tick = sequence.tick;
         let mut params = Params::new(c, shape.signal, shape.output);
-        let offset = self.composite(encoder, workspace, &mut params, c, tick, 0);
+        params.tick(c.phase, c.ntsc_blending, tick, clock);
+        let offset = if c.crt_off {
+            workspace.uniforms.write(&self.queue, 0, &params)
+        } else {
+            self.composite(encoder, workspace, &params, tick, 0)
+        };
         sequence.tick += 1;
         self.surface(encoder, workspace, written(tick), &params, c);
         let format = target.format();
@@ -672,8 +719,8 @@ impl Renderer {
         });
         let bindings = self.bind(
             &workspace.uniforms.buffer,
-            &workspace.final_target,
-            &workspace.source,
+            &workspace.final_target.view,
+            &workspace.source.view,
         );
         gpu::draw(
             encoder,
@@ -686,14 +733,13 @@ impl Renderer {
     }
 
     /// Records tick `tick` of a sequence: the clean signal composited onto the history the tick
-    /// before wrote, with the tick's settings in uniform slot `slot`, whose offset it returns. A
-    /// sequence's first tick clears its history first, so it starts from a dark tube.
+    /// before wrote, with the tick's settings, `params`, in uniform slot `slot`, whose offset it
+    /// returns. A sequence's first tick clears its history first, so it starts from a dark tube.
     fn composite(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         workspace: &Workspace,
-        params: &mut Params,
-        c: &Config,
+        params: &Params,
         tick: u64,
         slot: u32,
     ) -> u32 {
@@ -702,7 +748,6 @@ impl Renderer {
                 gpu::clear(encoder, target);
             }
         }
-        params.tick(c.phase, c.ntsc_blending, tick);
         let offset = workspace.uniforms.write(&self.queue, slot, params);
         gpu::fullscreen(
             encoder,
@@ -712,6 +757,14 @@ impl Renderer {
             &[offset],
         );
         offset
+    }
+
+    /// Makes `workspace`'s finished picture `size`, which tate may have turned from the tube's.
+    fn finish_at(&self, workspace: &mut Workspace, size: (u32, u32)) {
+        if workspace.final_target.size() != size {
+            workspace.final_target = Target::new(&self.device, "output", size);
+            workspace.readback = None;
+        }
     }
 
     /// Makes `sequence` ready for a frame of `shape`, as the sequence says it follows into
@@ -781,17 +834,32 @@ impl Renderer {
         let device = &self.device;
         let output_size = shape.output;
         let format = surface_format(shape.color_mode);
-        let surface = |name, size| Target::with_format(device, name, size, format, 1);
-        let full = surface("screen and bezel", output_size);
+        let surface = |name, size, levels| Target::with_format(device, name, size, format, levels);
+        let full = surface("screen and bezel", output_size, bloom_levels(output_size));
+        let full_levels: Vec<_> = (0..full.texture.mip_level_count())
+            .map(|level| {
+                full.texture.create_view(&wgpu::TextureViewDescriptor {
+                    base_mip_level: level,
+                    mip_level_count: Some(1),
+                    ..Default::default()
+                })
+            })
+            .collect();
         let down = surface(
             "bloom downsample",
             ((output_size.0 / 16).max(1), (output_size.1 / 16).max(1)),
+            1,
         );
-        let up = surface("bloom upsample", output_size);
-        let bind = |a, b| self.bind(&uniforms.buffer, a, b);
+        let up = surface("bloom upsample", output_size, 1);
+        let bind = |a: &Target, b: &Target| self.bind(&uniforms.buffer, &a.view, &b.view);
         let bindings = Bindings {
             composite: [bind(&source, &history[1]), bind(&source, &history[0])],
             glass: [bind(&history[0], &source), bind(&history[1], &source)],
+            flat: bind(&source, &source),
+            halve: full_levels[..full_levels.len() - 1]
+                .iter()
+                .map(|above| self.bind(&uniforms.buffer, above, &source.view))
+                .collect(),
             downsample: bind(&full, &source),
             upsample: bind(&down, &source),
             present: bind(&full, &up),
@@ -804,7 +872,7 @@ impl Renderer {
             bindings,
             source,
             history,
-            full,
+            full_levels,
             down,
             up,
             shape,
@@ -852,7 +920,8 @@ impl Renderer {
                 .all(|v| *v <= limit),
             "image exceeds adapter texture limit {limit}"
         );
-        // Conservative working-set guard: color targets, depth, readback and history.
+        // Conservative working-set guard: color targets, the glass's mipmaps, depth, readback and
+        // history.
         let linear = shape.color_mode == ColorMode::LinearLight;
         let estimated = u64::from(output.0) * u64::from(output.1) * if linear { 48 } else { 24 }
             + u64::from(signal.0) * u64::from(signal.1) * 16;
@@ -876,13 +945,35 @@ impl Renderer {
         let offset = workspace.uniforms.write(&self.queue, SURFACE_SLOT, params);
         let passes = self.pipelines.surface(c.color_mode);
         let bindings = &workspace.bindings;
-        gpu::fullscreen(
+        if c.crt_off {
+            gpu::draw(
+                encoder,
+                &workspace.full_levels[0],
+                &passes.flat,
+                &bindings.flat,
+                &[offset],
+            );
+            gpu::fullscreen(
+                encoder,
+                &workspace.final_target,
+                &self.pipelines.present,
+                &bindings.present,
+                &[offset],
+            );
+            return;
+        }
+        gpu::draw(
             encoder,
-            &workspace.full,
+            &workspace.full_levels[0],
             &passes.surface,
             &bindings.glass[latest],
             &[offset],
         );
+        if c.bloom_from_mipmaps {
+            for (level, above) in workspace.full_levels[1..].iter().zip(&bindings.halve) {
+                gpu::draw(encoder, level, &passes.halve, above, &[offset]);
+            }
+        }
         gpu::fullscreen(
             encoder,
             &workspace.down,
@@ -908,7 +999,12 @@ impl Renderer {
 
     /// A bind group reading `source` and `previous`, with the settings slot the pass chooses
     /// by dynamic offset.
-    fn bind(&self, uniforms: &wgpu::Buffer, source: &Target, previous: &Target) -> wgpu::BindGroup {
+    fn bind(
+        &self,
+        uniforms: &wgpu::Buffer,
+        source: &wgpu::TextureView,
+        previous: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
         let mut entries = vec![wgpu::BindGroupEntry {
             binding: 0,
             resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
@@ -917,13 +1013,13 @@ impl Renderer {
                 size: PARAMS_SIZE,
             }),
         }];
-        for (i, t) in [source, previous, &self.artifacts, &self.mask]
-            .iter()
+        for (i, view) in [source, previous, &self.artifacts.view, &self.mask.view]
+            .into_iter()
             .enumerate()
         {
             entries.push(wgpu::BindGroupEntry {
                 binding: i as u32 + 1,
-                resource: wgpu::BindingResource::TextureView(&t.view),
+                resource: wgpu::BindingResource::TextureView(view),
             });
         }
         for (i, s) in self.samplers.iter().enumerate() {

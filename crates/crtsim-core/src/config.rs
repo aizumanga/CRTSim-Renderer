@@ -25,6 +25,47 @@ pub enum Filter {
     Lanczos,
 }
 
+/// Super Win the Game's FXAA, run over the glass and bezel before the bloom is added: off, or
+/// its Low, Medium, High or Ultra level, which find edges more readily and follow them further.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum Fxaa {
+    #[default]
+    Off,
+    Low,
+    Medium,
+    High,
+    Ultra,
+}
+
+/// Super Win the Game's tate: the finished picture turned in quarter turns counter-clockwise, for
+/// a screen on its side, as the game's Tate 1 to 3 turn it. An odd number of quarters draws the
+/// tube in an output of the other shape, a 4:3 tube fitted to its width, and turns that.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum Tate {
+    #[default]
+    Off,
+    Quarter,
+    Half,
+    ThreeQuarters,
+}
+
+impl Tate {
+    /// Quarter turns.
+    pub fn quarters(self) -> u32 {
+        self as u32
+    }
+    /// The size a picture of `size` is turned into.
+    pub fn turned(self, (width, height): (u32, u32)) -> (u32, u32) {
+        if self.quarters() % 2 == 1 {
+            (height, width)
+        } else {
+            (width, height)
+        }
+    }
+}
+
 /// How many times the shadow mask repeats across the screen.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum MaskRepeats {
@@ -102,9 +143,9 @@ pub enum ColorMode {
 }
 
 /// The version settings are saved as. Version 2 measures NTSC blending in Super Win the Game's
-/// units, twice version 1's; settings saved as version 1, or with no version, are migrated as
-/// they load.
-pub const VERSION: u32 = 2;
+/// units, twice version 1's; version 3 gives the bloom's second blur a spread of its own. Settings
+/// saved by an earlier version, or with no version, are migrated as they load.
+pub const VERSION: u32 = 3;
 
 /// Settings saved with no version are the first version's.
 fn unversioned() -> u32 {
@@ -148,6 +189,16 @@ pub struct Config {
     /// is the public source's (Direct3D) orientation, which the game's Windows build draws.
     pub flip_artifacts: bool,
     pub persistence: [f32; 3],
+    /// The glow decays once a frame, whatever the frame's length, as Super Win the Game's does
+    /// on any display: faster above 60 frames a second, slower below. Off, the glow decays by
+    /// how long each frame lasts, as a 60 Hz tube's would, which is the same at 60. For videos
+    /// and hosts; a still's and an editing preview's ticks are each a sixtieth either way.
+    pub glow_per_frame: bool,
+    /// The glow never fades below the level 8-bit history holds it at once a pixel has been lit:
+    /// each channel at the brightest level its persistence rounds back to itself, 1 of 255 in
+    /// red and green at the defaults. Super Win the Game's title screen lights every pixel with
+    /// static, so its blacks sit there from then on. Off fades to black, as a tube never lit.
+    pub glow_floor: bool,
     pub overscan: f32,
     pub barrel: f32,
     /// The picture tube's width over its height: the original's 4:3, or wider, as later sets
@@ -164,6 +215,10 @@ pub struct Config {
     /// Win the Game draws it. Off, as the public source draws it, the reflection takes the
     /// overscan unreciprocated and half the mask's rows.
     pub reflection_as_screen: bool,
+    /// The glass as Super Win the Game's mesh draws it, each triangle flat between corners on
+    /// the sphere, so the picture shifts a hair from facet to facet, as the game's mask does.
+    /// Off, the glass is the smooth sphere the mesh was cut from.
+    pub faceted_glass: bool,
     pub diffuse: f32,
     pub specular: f32,
     pub specular_power: f32,
@@ -177,6 +232,37 @@ pub struct Config {
     pub bloom: f32,
     pub bloom_power: f32,
     pub bloom_spread: f32,
+    /// The bloom's first blur reads the picture through its mipmaps, each level the average of
+    /// 2×2 texels of the one above, at the level GL picks for a target a sixteenth its size, as
+    /// Super Win the Game draws it: each tap averages 16×16 of the picture's pixels. Off, as
+    /// the public source draws it, each tap reads the picture itself, where the mask can alias
+    /// into the glow.
+    pub bloom_from_mipmaps: bool,
+    /// The second blur's spread, which Super Win the Game sets apart from the first's
+    /// (`bloom_spread`); 0.025 both.
+    pub bloom_spread_up: f32,
+    /// Super Win the Game's Video Brightness: the finished picture's luma raised to 2^-brightness,
+    /// its hue kept, from -1, darker, to 1, brighter; 0 leaves it as it is.
+    pub brightness: f32,
+    /// Super Win the Game's FXAA over the glass and bezel.
+    pub fxaa: Fxaa,
+    /// Super Win the Game's tate: the finished picture turned for a screen on its side.
+    pub tate: Tate,
+    /// The CRT off, as Super Win the Game draws without its CRT simulation: the picture flat,
+    /// pixel for pixel in its pixel aspect fitted inside the output, whatever the overscan, over
+    /// black, with no colour table, glow or bloom; brightness, FXAA and tate still apply.
+    pub crt_off: bool,
+    /// A still of an alternating look ends on a tick showing both artifact patterns averaged,
+    /// as Super Win the Game draws the frame it saves as a screenshot, after warm-up ticks that
+    /// alternate as the frames before it did. Off, a still shows its last tick's one pattern.
+    pub screenshot_stills: bool,
+    /// TV static over the signal, from 0 to 1: noise rolling under a dark band, the picture
+    /// wavering beneath it, as a set between channels shows it. Each tick draws new noise.
+    pub static_amount: f32,
+    /// Seconds of a channel-changing cycle, as Super Win the Game's title screen runs one: static,
+    /// fading to the picture, the picture, and back, over and over at `static_amount`'s
+    /// strength. 0 holds the static at `static_amount`.
+    pub static_cycle: f32,
     pub color_mode: ColorMode,
     /// Samples the mask from mipmaps, each the average of the level above, and between them,
     /// as the original did: the mask stays smooth where it is drawn smaller than it is. Off
@@ -213,7 +299,10 @@ impl Default for Config {
             ntsc_blending: 0.,
             flip_artifacts: false,
             reflection_as_screen: false,
+            faceted_glass: false,
             persistence: [0.7, 0.525, 0.42],
+            glow_per_frame: false,
+            glow_floor: false,
             overscan: 1.,
             barrel: -0.115,
             tube_aspect: 4. / 3.,
@@ -234,6 +323,15 @@ impl Default for Config {
             bloom: 0.25,
             bloom_power: 2.,
             bloom_spread: 0.025,
+            bloom_from_mipmaps: false,
+            bloom_spread_up: 0.025,
+            brightness: 0.,
+            fxaa: Fxaa::Off,
+            tate: Tate::Off,
+            crt_off: false,
+            screenshot_stills: false,
+            static_amount: 0.,
+            static_cycle: 0.,
             color_mode: ColorMode::Reference,
             mask_antialias: true,
             interlace: false,
@@ -282,6 +380,11 @@ impl Config {
             self.ntsc_blending *= 2.;
             self.version = 2;
         }
+        if self.version == 2 {
+            // Version 2's one spread was both blurs'.
+            self.bloom_spread_up = self.bloom_spread;
+            self.version = 3;
+        }
     }
 
     /// The starting point for ordinary images rather than 256x224 game frames: square pixels,
@@ -302,17 +405,25 @@ impl Config {
     }
 
     /// Super Win the Game's own CRT options: the public reference with a 30° field of view,
-    /// NTSC blending at 0.35 and its NTSC palette made as the game makes it, with the artifact
-    /// pattern as its Windows build draws it and the bezel reflecting the picture as the screen
-    /// shows it.
+    /// alternating phase with NTSC blending at 0.35 and its NTSC palette made as the game makes
+    /// it, with the artifact pattern as its Windows build draws it, the bezel reflecting the
+    /// picture as the screen shows it, a grey backdrop past the bezel, the bloom read through
+    /// the picture's mipmaps, the glow held at its 8-bit floor, as after the title screen, and
+    /// decaying once a frame, stills drawn as its screenshots, and the glass as its mesh's
+    /// facets.
     pub fn super_win_the_game() -> Self {
         Self {
             fov: 30.,
             phase: Phase::Alternating,
             ntsc_blending: 0.35,
             reflection_as_screen: true,
+            faceted_glass: true,
             // The game's engine draws a backdrop at 1/16 grey, seen past the bezel.
             backdrop_color: [0.0625; 3],
+            bloom_from_mipmaps: true,
+            glow_floor: true,
+            glow_per_frame: true,
+            screenshot_stills: true,
             palette: Some(Default::default()),
             ..Self::default()
         }
@@ -377,7 +488,8 @@ impl Config {
     pub fn sequence_shape(&self, input: (u32, u32)) -> Result<crate::Shape> {
         Ok(crate::Shape {
             signal: self.signal_size(input)?,
-            output: self.output_size(input)?,
+            // The CRT draws at the output's size, or for tate at the size it turns into it.
+            output: self.tate.turned(self.output_size(input)?),
             color_mode: self.color_mode,
         })
     }
@@ -715,8 +827,8 @@ mod tests {
                 .version,
             VERSION
         );
-        let error = Config::from_json_slice(b"{\"version\":3}").unwrap_err();
-        assert!(error.to_string().contains("unsupported config version 3"));
+        let error = Config::from_json_slice(b"{\"version\":4}").unwrap_err();
+        assert!(error.to_string().contains("unsupported config version 4"));
     }
 
     #[test]
@@ -731,6 +843,7 @@ mod tests {
         // Past the average, which version 1 allowed, stays where it was.
         assert_eq!(blending(r#"{"version":1,"ntsc_blending":1.0}"#), 2.);
         assert_eq!(blending(r#"{"version":2,"ntsc_blending":0.35}"#), 0.35);
+        assert_eq!(blending(r#"{"version":3,"ntsc_blending":0.35}"#), 0.35);
         // Settings nested in other files, such as a project's, migrate too.
         let nested: Vec<Config> =
             serde_json::from_str(r#"[{"version":1,"ntsc_blending":0.25}]"#).unwrap();
@@ -739,6 +852,23 @@ mod tests {
         let saved = serde_json::to_vec(&nested[0]).unwrap();
         assert_eq!(Config::from_json_slice(&saved).unwrap(), nested[0]);
     }
+    #[test]
+    fn version_2_spread_is_both_blurs() {
+        let spreads = |json: &str| {
+            let c = Config::from_json_slice(json.as_bytes()).unwrap();
+            (c.bloom_spread, c.bloom_spread_up)
+        };
+        assert_eq!(
+            spreads(r#"{"version":2,"bloom_spread":0.05}"#),
+            (0.05, 0.05)
+        );
+        assert_eq!(spreads(r#"{"bloom_spread":0.04}"#), (0.04, 0.04));
+        assert_eq!(
+            spreads(r#"{"version":3,"bloom_spread":0.05}"#),
+            (0.05, 0.025)
+        );
+    }
+
     #[test]
     fn presets_and_limits() {
         let mut c = Config::default();

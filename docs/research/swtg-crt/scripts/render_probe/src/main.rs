@@ -3,7 +3,9 @@
 //! picture. ARTIFACTS, BLOOM and MASK_OPACITY override those settings; FLIP_ARTIFACTS=1 flips the pattern;
 //! PALETTE=0 takes the probe as already through the palette, such as the game's own NTSC frame;
 //! OVERSCAN sets the overscan, and REFLECTION_AS_SCREEN=1 reflects the picture in the bezel as
-//! the screen shows it; BACKDROP sets the backdrop's grey.
+//! the screen shows it; BACKDROP sets the backdrop's grey. BLOOM_MIPMAPS=1 reads the bloom's first
+//! blur through the picture's mipmaps and GLOW_FLOOR=1 holds the glow at its 8-bit floor, as
+//! `Config::super_win_the_game()` does (both off by default, as before).
 //! usage: render_probe PROBE.rgba OUTDIR FRAMES KEEP_FROM [WIDTHxHEIGHT]
 use anyhow::Result;
 use crtsim_core::{config::{Config, Phase}, Renderer, Sequence, Timing};
@@ -30,6 +32,8 @@ fn main() -> Result<()> {
         overscan: std::env::var("OVERSCAN").map_or(1., |v| v.parse().unwrap()),
         reflection_as_screen: std::env::var("REFLECTION_AS_SCREEN").is_ok_and(|v| v == "1"),
         backdrop_color: [std::env::var("BACKDROP").map_or(0., |v| v.parse().unwrap()); 3],
+        bloom_from_mipmaps: std::env::var("BLOOM_MIPMAPS").is_ok_and(|v| v == "1"),
+        glow_floor: std::env::var("GLOW_FLOOR").is_ok_and(|v| v == "1"),
         ..Config::default()
     };
     let renderer = pollster::block_on(Renderer::new(wgpu::Backends::VULKAN))?;

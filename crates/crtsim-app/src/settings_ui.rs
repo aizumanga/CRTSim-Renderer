@@ -271,17 +271,42 @@ impl App {
                     numbers(ui, &mut self.config, defaults, Signal, &shown)
                 });
         }
-        section(ui, &shown, "Glass & mask", &[], &[Glass, Mask], |ui| {
-            numbers(ui, &mut self.config, defaults, Glass, &shown);
-            if shown.key("mask_repeats") {
-                ui.separator();
-                self.mask_density(ui);
-            }
-            numbers(ui, &mut self.config, defaults, Mask, &shown);
-        });
-        let bloom = ["reflection_as_screen"];
+        section(
+            ui,
+            &shown,
+            "Glass & mask",
+            &["faceted_glass"],
+            &[Glass, Mask],
+            |ui| {
+                numbers(ui, &mut self.config, defaults, Glass, &shown);
+                if shown.key("faceted_glass") {
+                    ui.checkbox(&mut self.config.faceted_glass, "Glass as the mesh's facets")
+                        .on_hover_text(
+                            "The glass as Super Win the Game's mesh draws it, each triangle flat \
+                         between corners on the curve, so the picture shifts a hair from facet \
+                         to facet, as the game's mask does. Off is the smooth curve the mesh was \
+                         cut from.",
+                        );
+                }
+                if shown.key("mask_repeats") {
+                    ui.separator();
+                    self.mask_density(ui);
+                }
+                numbers(ui, &mut self.config, defaults, Mask, &shown);
+            },
+        );
+        let bloom = ["bloom_from_mipmaps", "reflection_as_screen"];
         section(ui, &shown, "Bloom & reflections", &bloom, &[Bloom], |ui| {
             numbers(ui, &mut self.config, defaults, Bloom, &shown);
+            if shown.key("bloom_from_mipmaps") {
+                ui.checkbox(&mut self.config.bloom_from_mipmaps, "Bloom from mipmaps")
+                    .on_hover_text(
+                        "The bloom reads the picture through averaged, smaller copies of \
+                         itself, as Super Win the Game does, so each of its taps averages \
+                         16×16 pixels. Off is the public CRTSim source: each tap reads the \
+                         picture itself, where the mask can flicker into the glow.",
+                    );
+            }
             if shown.key("reflection_as_screen") {
                 ui.checkbox(
                     &mut self.config.reflection_as_screen,
@@ -297,7 +322,14 @@ impl App {
         section(ui, &shown, "Frame & lighting", &[], &[Lighting], |ui| {
             numbers(ui, &mut self.config, defaults, Lighting, &shown)
         });
-        let persistence = ["warmup", "phase", "flip_artifacts", "interlace"];
+        let persistence = [
+            "warmup",
+            "phase",
+            "flip_artifacts",
+            "interlace",
+            "glow_floor",
+            "glow_per_frame",
+        ];
         let title = "Persistence & artifact phase";
         section(ui, &shown, title, &persistence, &[Persistence], |ui| {
             numbers(ui, &mut self.config, defaults, Persistence, &shown);
@@ -349,10 +381,87 @@ impl App {
                          only fade by persistence. Use with a 480- or 576-row signal.",
                     );
             }
+            if shown.key("glow_floor") {
+                ui.checkbox(&mut self.config.glow_floor, "Glow floor")
+                    .on_hover_text(
+                        "The glow never fades below the level 8-bit history rounds it back to, \
+                         1 of 255 in red and green at the default persistence, as every pixel \
+                         stays once Super Win the Game's title screen has lit it. Off fades \
+                         to black.",
+                    );
+            }
+            if shown.key("glow_per_frame") {
+                ui.checkbox(&mut self.config.glow_per_frame, "Glow fades per frame")
+                    .on_hover_text(
+                        "The glow fades by persistence once each frame drawn, as Super Win the \
+                         Game does, so on a display faster than 60 Hz it fades faster. Off \
+                         fades it by the time that passes, the same at any rate.",
+                    );
+            }
             notes(
                 ui,
-                "Each still starts from black. Higher persistence may require more warm-up \
-                 ticks. Alternating phase depends on tick count.",
+                "Each still starts from a dark tube. Higher persistence may require more \
+                 warm-up ticks. Alternating phase depends on tick count.",
+            );
+        });
+        let finish = ["fxaa", "tate", "crt_off", "screenshot_stills"];
+        section(ui, &shown, "Picture finish", &finish, &[Finish], |ui| {
+            numbers(ui, &mut self.config, defaults, Finish, &shown);
+            if shown.key("fxaa") {
+                choice(
+                    ui,
+                    "FXAA",
+                    &mut self.config.fxaa,
+                    &[
+                        (Fxaa::Off, "Off"),
+                        (Fxaa::Low, "Low"),
+                        (Fxaa::Medium, "Medium"),
+                        (Fxaa::High, "High"),
+                        (Fxaa::Ultra, "Ultra"),
+                    ],
+                );
+            }
+            if shown.key("tate") {
+                choice(
+                    ui,
+                    "Tate",
+                    &mut self.config.tate,
+                    &[
+                        (Tate::Off, "Off"),
+                        (Tate::Quarter, "A quarter turn left"),
+                        (Tate::Half, "Upside down"),
+                        (Tate::ThreeQuarters, "A quarter turn right"),
+                    ],
+                );
+            }
+            if shown.key("crt_off") {
+                ui.checkbox(&mut self.config.crt_off, "CRT off")
+                    .on_hover_text(
+                        "The clean picture without the CRT: square-cut pixels at the signal's \
+                         aspect, fitted inside the frame, as Super Win the Game draws it with \
+                         its CRT simulation off.",
+                    );
+            }
+            if shown.key("screenshot_stills") {
+                ui.checkbox(&mut self.config.screenshot_stills, "Stills as screenshots")
+                    .on_hover_text(
+                        "With alternating phase, a still's last tick draws both artifact \
+                         patterns at once, as Super Win the Game's screenshots do. Video \
+                         keeps alternating.",
+                    );
+            }
+            notes(
+                ui,
+                "Super Win the Game's options screen: brightness, FXAA and tate act on the \
+                 finished picture.",
+            );
+        });
+        section(ui, &shown, "TV static", &[], &[Static], |ui| {
+            numbers(ui, &mut self.config, defaults, Static, &shown);
+            notes(
+                ui,
+                "Snow, a rolling band and a wavering picture, for switching channels. With a \
+                 cycle, the static comes and goes over that many seconds of video.",
             );
         });
         if self.config != before {

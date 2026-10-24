@@ -30,6 +30,10 @@ extends CompositorEffect
 @export_enum("stable", "A", "B", "alternating") var phase: int = 0
 ## Artifact pattern
 @export_enum("as the public source", "flipped") var flip_artifacts: int = 0
+## Glow floor, as 8-bit history holds it
+@export_enum("off", "on") var glow_floor: int = 0
+## Glow fades
+@export_enum("by the time a frame lasts", "once a frame") var glow_per_frame: int = 0
 ## Interlaced fields
 @export_enum("off", "on", "auto") var interlace: int = 2
 ## Fit on the tube
@@ -38,6 +42,12 @@ extends CompositorEffect
 @export_enum("off", "on") var screen_only: int = 0
 ## Bezel reflection
 @export_enum("as the public source", "as the screen") var reflection_as_screen: int = 0
+## Glass
+@export_enum("the sphere", "the mesh's facets") var faceted_glass: int = 0
+## Bloom reads
+@export_enum("the picture itself", "its mipmaps") var bloom_mipmaps: int = 0
+## FXAA
+@export_enum("off", "low", "medium", "high", "ultra") var fxaa: int = 0
 ## Filter mask when shrinking
 @export_enum("off", "on") var mask_antialias: int = 1
 ## Mask columns (0 follows the signal)
@@ -53,9 +63,9 @@ extends CompositorEffect
 ## Chroma
 @export_range(0.0, 2.0, 0.02) var chroma: float = 1.0
 ## Saturation
-@export_range(0.0, 3.0, 0.03) var saturation: float = 1.0
+@export_range(0.0, 4.0, 0.04) var saturation: float = 1.0
 ## Sharpness / ringing
-@export_range(0.0, 3.0, 0.03) var sharpness: float = 0.8
+@export_range(0.0, 4.0, 0.04) var sharpness: float = 0.8
 ## Color bleed
 @export_range(0.0, 2.0, 0.02) var bleed: float = 0.5
 ## Composite artifacts
@@ -69,27 +79,29 @@ extends CompositorEffect
 ## Tube aspect (width ÷ height)
 @export_range(0.75, 2.0, 0.01) var tube_aspect: float = 1.3333334
 ## Edge dimming
-@export_range(0.0, 1.0, 0.01) var dimming: float = 0.5
+@export_range(0.0, 2.0, 0.02) var dimming: float = 0.5
 ## Camera field of view
-@export_range(5.0, 90.0, 0.9) var fov: float = 15.0
+@export_range(0.05, 90.0, 0.9) var fov: float = 15.0
 ## Mask opacity
-@export_range(0.0, 1.0, 0.01) var mask_opacity: float = 1.0
+@export_range(0.0, 2.0, 0.02) var mask_opacity: float = 1.0
 ## Mask brightness
 @export_range(0.0, 2.0, 0.02) var mask_brightness: float = 0.45
 ## Bloom amount
 @export_range(0.0, 2.0, 0.02) var bloom: float = 0.25
 ## Bloom power
 @export_range(0.1, 8.0, 0.08) var bloom_power: float = 2.0
-## Bloom spread
+## Bloom spread, first blur
 @export_range(0.0, 0.2, 0.002) var bloom_spread: float = 0.025
+## Bloom spread, second blur
+@export_range(0.0, 0.2, 0.002) var bloom_spread_up: float = 0.025
 ## Diffuse light
 @export_range(0.0, 2.0, 0.02) var diffuse: float = 0.5
 ## Specular light
-@export_range(0.0, 2.0, 0.02) var specular: float = 0.35
+@export_range(0.0, 5.0, 0.05) var specular: float = 0.35
 ## Specular power
 @export_range(1.0, 200.0, 2.0) var specular_power: float = 50.0
 ## Rim light
-@export_range(0.0, 2.0, 0.02) var rim: float = 1.0
+@export_range(0.0, 10.0, 0.1) var rim: float = 1.0
 ## Edge reflection
 @export_range(0.0, 2.0, 0.02) var reflection: float = 0.3
 ## Bezel red
@@ -116,6 +128,12 @@ extends CompositorEffect
 @export_range(0.0, 0.999, 0.01) var persistence_g: float = 0.525
 ## Blue persistence
 @export_range(0.0, 0.999, 0.01) var persistence_b: float = 0.42
+## Brightness
+@export_range(-1.0, 1.0, 0.02) var brightness: float = 0.0
+## TV static
+@export_range(0.0, 1.0, 0.01) var static_amount: float = 0.0
+## Channel cycle, seconds (0 holds the static)
+@export_range(0.0, 60.0, 0.6) var static_cycle: float = 0.0
 
 ## The parameters in the order parameters.inc declares them.
 const _PARAMETERS: Array[StringName] = [
@@ -127,10 +145,15 @@ const _PARAMETERS: Array[StringName] = [
 	&"linear",
 	&"phase",
 	&"flip_artifacts",
+	&"glow_floor",
+	&"glow_per_frame",
 	&"interlace",
 	&"fit",
 	&"screen_only",
 	&"reflection_as_screen",
+	&"faceted_glass",
+	&"bloom_mipmaps",
+	&"fxaa",
 	&"mask_antialias",
 	&"mask_columns",
 	&"mask_rows",
@@ -153,6 +176,7 @@ const _PARAMETERS: Array[StringName] = [
 	&"bloom",
 	&"bloom_power",
 	&"bloom_spread",
+	&"bloom_spread_up",
 	&"diffuse",
 	&"specular",
 	&"specular_power",
@@ -170,6 +194,9 @@ const _PARAMETERS: Array[StringName] = [
 	&"persistence_r",
 	&"persistence_g",
 	&"persistence_b",
+	&"brightness",
+	&"static_amount",
+	&"static_cycle",
 ]
 # END PARAMETERS
 
@@ -178,9 +205,11 @@ const _PARAMETERS: Array[StringName] = [
 @export var colour_table: Texture2D
 
 const _PASSES: Array[StringName] = [
-	&"capture", &"rows", &"columns", &"prepare", &"composite", &"surface", &"bloom_down",
-	&"bloom_up", &"present",
+	&"capture", &"rows", &"columns", &"prepare", &"composite", &"surface", &"halve",
+	&"bloom_down", &"bloom_up", &"present",
 ]
+## The surface's mip levels the bloom may read below it: down to the one below a sixteenth.
+const _BLOOM_LEVELS := 5
 const _DIR := "res://addons/crtsim_renderer/"
 
 var _rd: RenderingDevice
@@ -207,6 +236,11 @@ class View:
 	var current := 0
 	var has_previous := false
 	var frame_count := 0
+	## The two of the surface's levels the bloom's first blur reads between, and the first's
+	## number.
+	var bloom_level := RID()
+	var bloom_below := RID()
+	var bloom_level_index := 0
 	## The frame it was last drawn in, so a camera that has gone is forgotten.
 	var drawn := 0
 
@@ -214,6 +248,8 @@ class View:
 		for target: RID in targets.values():
 			rd.free_rid(target)
 		targets.clear()
+		bloom_level = RID()
+		bloom_below = RID()
 
 	func free_signals(rd: RenderingDevice) -> void:
 		for target in signals:
@@ -338,7 +374,7 @@ func _shape(view: View, size: Vector2i) -> void:
 	var byte := RenderingDevice.DATA_FORMAT_R8G8B8A8_UNORM
 	# In linear light the surface and what follows it keep floats, as the renderer does.
 	var surface := RenderingDevice.DATA_FORMAT_R16G16B16A16_SFLOAT if in_linear else byte
-	var bloom := Vector2i(maxi(1, (size.x + 8) / 16), maxi(1, (size.y + 8) / 16))
+	var bloom := _bloom_size(size)
 	view.targets = {
 		&"input": _target(size, byte),
 		# The picture's columns at the signal's rows, in 8-bit steps, unrounded.
@@ -349,13 +385,62 @@ func _shape(view: View, size: Vector2i) -> void:
 		&"bloom_down": _target(bloom, surface),
 		&"bloom_up": _target(size, surface),
 	}
+	# The surface's mip levels below it, each half the one above, for the bloom from mipmaps.
+	var level := size
+	for number in range(1, _BLOOM_LEVELS + 1):
+		level = Vector2i(maxi(1, level.x / 2), maxi(1, level.y / 2))
+		view.targets[_level(number)] = _target(level, surface)
 	view.size = size
 	view.linear = in_linear
+
+
+## A sixteenth of the picture each way, rounded down, as the renderer and the game size the
+## bloom's first blur.
+func _bloom_size(size: Vector2i) -> Vector2i:
+	return Vector2i(maxi(1, size.x / 16), maxi(1, size.y / 16))
+
+
+## The surface's mip level `number` below it, as `view.targets` holds it.
+func _level(number: int) -> StringName:
+	return StringName("level_%d" % number)
+
+
+## The first of the two of the surface's mip levels the bloom's first blur reads between, for a
+## picture of `size`: with the bloom from mipmaps, the one GL picks for its target; else the
+## surface itself.
+func _bloom_level_index(size: Vector2i) -> int:
+	if bloom_mipmaps == 0:
+		return 0
+	var bloom := _bloom_size(size)
+	var ratio := maxf(float(size.x) / bloom.x, float(size.y) / bloom.y)
+	var first := 0
+	while first + 1 < _BLOOM_LEVELS and ratio >= float(1 << (first + 1)):
+		first += 1
+	return first
+
+
+## The two of the surface's mip levels the bloom's first blur reads between: the surface halved
+## level by level down to them, as GL makes mipmaps, with the bloom from mipmaps; else the
+## surface.
+func _halve(view: View) -> void:
+	var above: RID = view.targets[&"surface"]
+	view.bloom_level = above
+	view.bloom_below = above
+	if bloom_mipmaps == 0:
+		return
+	for number in range(1, view.bloom_level_index + 2):
+		var level: RID = view.targets[_level(number)]
+		_run(&"halve", level, above, view)
+		above = level
+		if number == view.bloom_level_index:
+			view.bloom_level = above
+	view.bloom_below = above
 
 
 ## Runs one frame of the CRT over `color`, the camera's picture, of `size`, and draws it there.
 func _draw(color: RID, size: Vector2i, view: View, seconds: float) -> void:
 	_shape(view, size)
+	view.bloom_level_index = _bloom_level_index(size)
 	var t := view.targets
 	var bytes := _parameter_bytes(size, view, seconds)
 	_rd.buffer_update(_parameters, 0, bytes.size(), bytes)
@@ -369,6 +454,7 @@ func _draw(color: RID, size: Vector2i, view: View, seconds: float) -> void:
 	var signal_now: RID = view.signals[view.current]
 	_run(&"composite", signal_now, t[&"prepared"], view)
 	_run(&"surface", t[&"surface"], signal_now, view)
+	_halve(view)
 	_run(&"bloom_down", t[&"bloom_down"], t[&"surface"], view)
 	_run(&"bloom_up", t[&"bloom_up"], t[&"bloom_down"], view)
 	_run(&"present", color, t[&"bloom_up"], view)
@@ -385,12 +471,13 @@ func _parameter_bytes(size := Vector2i.ONE, view: View = null, seconds := 0.0) -
 		size.x, size.y, signal_size.x, signal_size.y, size.x, size.y,
 		view.frame_count if view else 0, seconds * 60.0,
 		1.0 if view and view.has_previous else 0.0,
+		view.bloom_level_index if view else 0,
 	])
 	for parameter in _PARAMETERS:
 		values.append(get(parameter))
 	# A look whose table is missing is drawn without one.
 	if not colour_table:
-		values[9 + _PARAMETERS.find(&"table")] = 0.0
+		values[10 + _PARAMETERS.find(&"table")] = 0.0
 	while values.size() % 4:
 		values.append(0.0)
 	return values.to_byte_array()
@@ -422,6 +509,8 @@ func _run(pass_name: StringName, target: RID, input: RID, view: View) -> void:
 		[9, _point, _rd_texture(_images[&"bezel-uv"])],
 		[10, _point, _rd_texture(_images[&"bezel-normal"])],
 		[11, _point, _rd_texture(_images[&"glass"])],
+		[12, _linear, view.bloom_level if view.bloom_level.is_valid() else view.targets[&"surface"]],
+		[13, _linear, view.bloom_below if view.bloom_below.is_valid() else view.targets[&"surface"]],
 	]:
 		# A pass cannot read the target it draws into, which it never needs: the surface pass
 		# reads no surface.

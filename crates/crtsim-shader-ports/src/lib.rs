@@ -48,6 +48,7 @@ const PASSES: &[(&str, &str)] = &[
         include_str!("../../../ports/passes/surface.inc"),
     ),
     ("bloom.inc", include_str!("../../../ports/passes/bloom.inc")),
+    ("halve.inc", include_str!("../../../ports/passes/halve.inc")),
     (
         "present.inc",
         include_str!("../../../ports/passes/present.inc"),
@@ -62,7 +63,8 @@ fn passes(dir: &str) -> impl Iterator<Item = File> + '_ {
 }
 
 /// The looks a release ships: the original's settings, the same in linear light, the app's
-/// starting point for ordinary images, and the original with the NES palette.
+/// starting point for ordinary images, the original with the NES palette, and Super Win the
+/// Game's CRT options, as the app starts with them and with the game's NES palette.
 pub fn shipped() -> Vec<(String, Config)> {
     let reference = Config::default();
     vec![
@@ -82,6 +84,14 @@ pub fn shipped() -> Vec<(String, Config)> {
                 ..reference
             },
         ),
+        (
+            "crtsim-renderer-super-win-the-game".into(),
+            crtsim_core::presets::default().config,
+        ),
+        (
+            "crtsim-renderer-super-win-the-game-nes-palette".into(),
+            Config::super_win_the_game(),
+        ),
     ]
 }
 
@@ -99,6 +109,16 @@ fn check_looks(looks: &[(&str, &Config)]) -> Result<()> {
         config.validate()?;
         // The renderer reads the signal's name only as it sizes a picture; a port reads it now.
         config.signal()?;
+        ensure!(
+            !config.crt_off,
+            "{name}: a port is the CRT, so a look with the CRT off has nothing to export; turn \
+             the effect off in its host instead"
+        );
+        ensure!(
+            config.tate == crtsim_core::config::Tate::Off,
+            "{name}: a port leaves turning the picture to its host, which turns the screen \
+             itself; export the look without tate"
+        );
     }
     Ok(())
 }
@@ -368,6 +388,7 @@ const NUMBERS: &[(&str, &[&str], &[Host])] = &[
     ("bloom", &["CRTSIM_BLOOM"], ALL),
     ("bloom_power", &["CRTSIM_BLOOM_POWER"], ALL),
     ("bloom_spread", &["CRTSIM_BLOOM_SPREAD"], ALL),
+    ("bloom_spread_up", &["CRTSIM_BLOOM_SPREAD_UP"], ALL),
     ("diffuse", &["CRTSIM_DIFFUSE"], ALL),
     ("specular", &["CRTSIM_SPECULAR"], ALL),
     ("specular_power", &["CRTSIM_SPECULAR_POWER"], ALL),
@@ -401,6 +422,9 @@ const NUMBERS: &[(&str, &[&str], &[Host])] = &[
         ],
         ALL,
     ),
+    ("brightness", &["CRTSIM_BRIGHTNESS"], ALL),
+    ("static_amount", &["CRTSIM_STATIC_AMOUNT"], ALL),
+    ("static_cycle", &["CRTSIM_STATIC_CYCLE"], ALL),
 ];
 
 fn flag(on: bool) -> f32 {
@@ -509,6 +533,20 @@ pub fn parameters(host: Host) -> Vec<Parameter> {
             ALL,
             |c| flag(c.flip_artifacts),
         ),
+        choice(
+            "CRTSIM_GLOW_FLOOR",
+            "Glow floor, as 8-bit history holds it",
+            OFF_ON,
+            ALL,
+            |c| flag(c.glow_floor),
+        ),
+        choice(
+            "CRTSIM_GLOW_PER_FRAME",
+            "Glow fades",
+            &["by the time a frame lasts", "once a frame"],
+            ALL,
+            |c| flag(c.glow_per_frame),
+        ),
         // A look made on a still says nothing about a picture that switches to 480 rows, so a
         // look that does not interlace leaves it to the picture's size.
         choice(
@@ -530,7 +568,9 @@ pub fn parameters(host: Host) -> Vec<Parameter> {
                 Fit::Stretch => 3.,
             },
         ),
-        // RetroArch says the picture's shape itself, from 1.20 on.
+        // RetroArch says the picture's shape itself, from 1.20 on. Before, a look of a fixed
+        // signal stands in with that signal's shape, as Super Win the Game's 8:7 pixels show
+        // 256x224, and any other with 4:3.
         number(
             "CRTSIM_ASPECT",
             "Picture aspect, when the core gives none",
@@ -538,7 +578,12 @@ pub fn parameters(host: Host) -> Vec<Parameter> {
             4.,
             0.01,
             &[Host::RetroArch],
-            |_| 4. / 3.,
+            |c| match signal(c) {
+                [width, height] if width > 0. && height > 0. => {
+                    (width / height * c.pixel_aspect).clamp(0.25, 4.)
+                }
+                _ => 4. / 3.,
+            },
         ),
         choice(
             "CRTSIM_SCREEN_ONLY",
@@ -553,6 +598,27 @@ pub fn parameters(host: Host) -> Vec<Parameter> {
             &["as the public source", "as the screen"],
             ALL,
             |c| flag(c.reflection_as_screen),
+        ),
+        choice(
+            "CRTSIM_FACETED_GLASS",
+            "Glass",
+            &["the sphere", "the mesh's facets"],
+            ALL,
+            |c| flag(c.faceted_glass),
+        ),
+        choice(
+            "CRTSIM_BLOOM_MIPMAPS",
+            "Bloom reads",
+            &["the picture itself", "its mipmaps"],
+            ALL,
+            |c| flag(c.bloom_from_mipmaps),
+        ),
+        choice(
+            "CRTSIM_FXAA",
+            "FXAA",
+            &["off", "low", "medium", "high", "ultra"],
+            ALL,
+            |c| c.fxaa as u32 as f32,
         ),
         choice(
             "CRTSIM_MASK_ANTIALIAS",
@@ -587,11 +653,14 @@ pub fn parameters(host: Host) -> Vec<Parameter> {
             .find(|s| s.key == *key)
             .expect("a setting the ports read is in the table");
         let numbers = setting.numbers.as_ref().expect("a numeric setting");
-        let (min, mut max) = match &numbers.control {
+        let (mut min, mut max) = match &numbers.control {
             Control::Slider { span, .. } => (*span.start(), *span.end()),
             Control::Color => (0., 1.),
         };
         // A look may hold more than its slider shows; the host's range has to reach it.
+        if let Bound::Included(valid) = numbers.valid.0 {
+            min = min.min(valid);
+        }
         if let Bound::Included(valid) = numbers.valid.1 {
             max = max.max(valid);
         }
@@ -785,6 +854,18 @@ mod tests {
     }
 
     #[test]
+    fn no_choice_has_an_item_with_a_comma() {
+        // Godot's @export_enum takes a comma as the end of an item.
+        for host in ALL {
+            for p in parameters(*host) {
+                if let Kind::Choice(items) = p.kind {
+                    assert!(items.iter().all(|item| !item.contains(',')), "{}", p.name);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn a_choice_holds_one_of_its_items() {
         let looks = shipped();
         for host in ALL {
@@ -847,5 +928,22 @@ mod tests {
             ..Config::default()
         };
         assert!(check_looks(&[("look", &unknown)]).is_err());
+    }
+
+    #[test]
+    fn a_look_turning_the_screen_or_the_crt_off_is_left_to_the_host() {
+        let off = Config {
+            crt_off: true,
+            ..Config::default()
+        };
+        let turned = Config {
+            tate: crtsim_core::config::Tate::Quarter,
+            ..Config::default()
+        };
+        assert!(check_looks(&[("look", &off)]).is_err());
+        assert!(check_looks(&[("look", &turned)]).is_err());
+        // A screenshot's still is the renderer's alone; a port draws every frame as it comes.
+        let game = Config::super_win_the_game();
+        assert!(game.screenshot_stills && check_looks(&[("game", &game)]).is_ok());
     }
 }

@@ -61,6 +61,8 @@ pub struct Sequence {
     pub(crate) workspace: Option<Workspace>,
     /// Ticks simulated so far.
     pub(crate) tick: u64,
+    /// Sixtieths of a second from the first tick to the latest, which TV static keeps time by.
+    clock: f64,
     pace: Pace,
 }
 
@@ -125,6 +127,11 @@ impl Sequence {
         })
     }
 
+    /// Whether this is a still, whose one frame a look may draw as the game's screenshots.
+    pub(crate) fn still_frame(&self) -> bool {
+        matches!(self.pace, Pace::Still)
+    }
+
     /// Whether this is a host's sequence, which `Renderer::encode` draws. A clip's warms up,
     /// which takes waiting on the device, so `Renderer::frame` draws it.
     pub(crate) fn hosted(&self) -> bool {
@@ -149,6 +156,7 @@ impl Sequence {
         Self {
             workspace: None,
             tick: 0,
+            clock: 0.,
             pace,
         }
     }
@@ -169,6 +177,26 @@ impl Sequence {
     pub(crate) fn restart(&mut self) {
         self.workspace = None;
         self.tick = 0;
+        self.clock = 0.;
+    }
+
+    /// Moves the clock on through the next frame's `ticks` ticks, saying where it stands at
+    /// each, in sixtieths of a second: the frame's first tick comes as long after the frame
+    /// before as that frame lasted, a video's frame or a host's; any other tick, a sixtieth
+    /// after the tick before it.
+    pub(crate) fn clocks(&mut self, ticks: u32) -> Vec<f64> {
+        (0..ticks)
+            .map(|step| {
+                if self.tick + u64::from(step) > 0 {
+                    self.clock += match self.pace {
+                        Pace::Video { fps, .. } if step == 0 => 60. / fps,
+                        Pace::Host { seconds, .. } if step == 0 => seconds * 60.,
+                        _ => 1.,
+                    };
+                }
+                self.clock
+            })
+            .collect()
     }
 
     /// Whether the sequence starts again, rather than failing, when its signal size or color
@@ -195,15 +223,17 @@ impl Sequence {
 
     /// The settings this sequence renders `config` with: a still's and an editing sequence's
     /// as they are, a video's adjusted to its timing and rate, and a host's glow to how long its
-    /// last frame lasted.
+    /// last frame lasted, unless the look's glow decays once a frame, as the game's does.
     pub fn timed(&self, config: &Config) -> Config {
         let mut c = config.clone();
         let (timing, fps) = match self.pace {
             Pace::Video { timing, fps } => (timing, fps),
             Pace::Host { seconds, .. } => {
                 // The original's persistence is a tick's at 60 a second.
-                for weight in &mut c.persistence {
-                    *weight = weight.powf((seconds * 60.) as f32);
+                if !c.glow_per_frame {
+                    for weight in &mut c.persistence {
+                        *weight = weight.powf((seconds * 60.) as f32);
+                    }
                 }
                 return c;
             }
@@ -212,8 +242,10 @@ impl Sequence {
         match timing {
             Timing::Stable => {
                 c.phase = Phase::Stable;
-                for weight in &mut c.persistence {
-                    *weight = weight.powf((60. / fps) as f32);
+                if !c.glow_per_frame {
+                    for weight in &mut c.persistence {
+                        *weight = weight.powf((60. / fps) as f32);
+                    }
                 }
             }
             Timing::Ntsc60 => c.phase = Phase::Alternating,
@@ -245,6 +277,42 @@ mod tests {
         assert_eq!(ntsc.phase, Phase::Alternating);
         assert_eq!(Sequence::still().timed(&config), config);
         assert_eq!(Sequence::editing().timed(&config), config);
+    }
+
+    #[test]
+    fn the_clock_keeps_time_by_each_frames_length() {
+        let mut video = Sequence::video(Timing::Stable, 30.);
+        let mut clocks = vec![];
+        for _ in 0..3 {
+            let ticks = video.ticks(2);
+            clocks.extend(video.clocks(ticks));
+            video.tick += u64::from(ticks);
+        }
+        // Warm-up ticks a sixtieth apart, then frames a thirtieth apart.
+        assert_eq!(clocks, [0., 1., 2., 4., 6.]);
+        let mut host = Sequence::host();
+        assert_eq!(host.clocks(1), [0.]);
+        host.tick += 1;
+        host.lasted(0.05);
+        assert_eq!(host.clocks(1), [3.]);
+        host.restart();
+        assert_eq!(host.clocks(1), [0.]);
+    }
+
+    #[test]
+    fn a_glow_decaying_per_frame_keeps_its_persistence_at_any_rate() {
+        let config = Config {
+            glow_per_frame: true,
+            ..Config::general()
+        };
+        let at30 = Sequence::video(Timing::Stable, 30.).timed(&config);
+        assert_eq!(at30.persistence, config.persistence);
+        let mut host = Sequence::host();
+        host.lasted(1. / 144.);
+        assert_eq!(host.timed(&config).persistence, config.persistence);
+        // By time, a 144 Hz frame keeps more of the glow than a sixtieth of a second does.
+        let by_time = host.timed(&Config::general()).persistence;
+        assert!(by_time[0] > config.persistence[0]);
     }
 
     #[test]

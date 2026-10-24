@@ -40,10 +40,18 @@ texture tex_prepared { Width = SIGNAL_WIDTH; Height = SIGNAL_HEIGHT; Format = RG
 texture tex_signal { Width = SIGNAL_WIDTH; Height = SIGNAL_HEIGHT; Format = RGBA8; };
 // The last frame's signal, which the glow persists from.
 texture tex_previous { Width = SIGNAL_WIDTH; Height = SIGNAL_HEIGHT; Format = RGBA8; };
-texture tex_surface { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = SURFACE_FORMAT; };
+// With mipmaps, which ReShade makes once the surface is drawn, for the bloom's first blur to
+// read down to the level below a sixteenth.
+texture tex_surface {
+    Width = BUFFER_WIDTH;
+    Height = BUFFER_HEIGHT;
+    Format = SURFACE_FORMAT;
+    MipLevels = 6;
+};
+// A sixteenth of the picture each way, rounded down, as the renderer and the game size it.
 texture tex_bloom_down {
-    Width = (BUFFER_WIDTH + 8) / 16;
-    Height = (BUFFER_HEIGHT + 8) / 16;
+    Width = BUFFER_WIDTH / 16;
+    Height = BUFFER_HEIGHT / 16;
     Format = SURFACE_FORMAT;
 };
 texture tex_bloom_up { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = SURFACE_FORMAT; };
@@ -143,13 +151,13 @@ FILTERED(tex_bloom_up, CLAMP);
 #define HOST_GLASS_SIZE float2(CRTSIM_GLASS_WIDTH, CRTSIM_GLASS_HEIGHT)
 #define HOST_FETCH_GLASS(xy) FETCH(tex_glass, xy, HOST_GLASS_SIZE)
 
-#define HOST_SAMPLE_BLOOM_INPUT(uv, second) bloom_input(uv, second)
+#define HOST_SAMPLE_BLOOM_INPUT(uv, second, lod) bloom_input(uv, second, lod)
 #define HOST_SAMPLE_SURFACE(uv) SAMPLE(tex_surface, uv, 0.0)
 #define HOST_SAMPLE_BLOOM(uv) SAMPLE(tex_bloom_up, uv, 0.0)
 
-float4 bloom_input(float2 uv, bool second) {
+float4 bloom_input(float2 uv, bool second, float lod) {
     if (second) return SAMPLE(tex_bloom_down, uv, 0.0);
-    return SAMPLE(tex_surface, uv, 0.0);
+    return SAMPLE(tex_surface, uv, lod);
 }
 
 float4 previous_texel(int2 xy) {

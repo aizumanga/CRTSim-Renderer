@@ -1,0 +1,15 @@
+# Draws a picture's mip levels with this renderer's own halving pass, to compare with the levels
+# the game's driver makes. Not part of the workspace; build it from this directory.
+[package]
+name = "halve_levels"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+crtsim-core = { path = "../../../../../crates/crtsim-core" }
+pollster = "0.3"
+wgpu = "30.0.1"
+anyhow = "1"

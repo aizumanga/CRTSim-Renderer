@@ -98,8 +98,11 @@ enum Command {
         #[arg(short, long)]
         output: PathBuf,
         /// The desktop's General image preset instead of the public-reference defaults.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "preset")]
         general: bool,
+        /// An included preset by name, such as "Super Win the Game"; `presets` lists them.
+        #[arg(long, value_name = "NAME")]
+        preset: Option<String>,
     },
     /// Write looks as RetroArch shader presets into a NEW directory.
     ExportRetroarch(PortExport),
@@ -474,11 +477,17 @@ fn main() -> Result<()> {
             for preset in presets::included() {
                 println!("  {}: {}", preset.name, preset.description);
             }
-            println!("Signal: original (256x224), auto (up to 480 rows, preserves aspect), native, 240p, 288p, 360p, 480p, 576p, WIDTHxHEIGHT\nOutput: reference (1600x900), 720p, 1080p, 1440p, 4k, match-input, WIDTHxHEIGHT\nUse config --general for square-pixel images and contain fitting. Default is CRTSim Reference.");
+            println!("Signal: original (256x224), auto (up to 480 rows, preserves aspect), native, 240p, 288p, 360p, 480p, 576p, WIDTHxHEIGHT\nOutput: reference (1600x900), 720p, 1080p, 1440p, 4k, match-input, WIDTHxHEIGHT\nUse config --general for square-pixel images and contain fitting, or config --preset NAME for an included preset, such as \"Super Win the Game\". Default is CRTSim Reference.");
         }
-        Command::Config { output, general } => {
+        Command::Config {
+            output,
+            general,
+            preset: name,
+        } => {
             let c = if general {
                 Config::general()
+            } else if let Some(name) = name {
+                preset(&name)?
             } else {
                 Config::default()
             };

@@ -23,6 +23,12 @@ uniform texture2d bezel_shape_filtered;
 uniform texture2d bezel_uv_image;
 uniform texture2d bezel_normal_image;
 uniform texture2d glass_image;
+// OBS cannot make a target's mipmaps, so the filter halves the surface into a texture for each
+// level, and binds the two the bloom's first blur reads between: level crtsim_bloom_level and
+// the one below it.
+uniform texture2d bloom_level;
+uniform texture2d bloom_below;
+uniform float crtsim_bloom_level;
 
 uniform int crtsim_frame_count;
 uniform float crtsim_frame_ticks;
@@ -101,9 +107,20 @@ VertInOut VSDefault(VertInOut v)
 #define HOST_FETCH_BEZEL_NORMAL(xy) FETCH(bezel_normal_image, xy, crtsim_bezel_size)
 #define HOST_GLASS_SIZE crtsim_glass_size
 #define HOST_FETCH_GLASS(xy) FETCH(glass_image, xy, crtsim_glass_size)
-#define HOST_SAMPLE_BLOOM_INPUT(uv, second) pass_input.SampleLevel(linear_clamp, uv, 0.0)
+#define HOST_SAMPLE_BLOOM_INPUT(uv, second, lod) bloom_input(uv, second, lod)
 #define HOST_SAMPLE_SURFACE(uv) surface_image.SampleLevel(linear_clamp, uv, 0.0)
 #define HOST_SAMPLE_BLOOM(uv) pass_input.SampleLevel(linear_clamp, uv, 0.0)
+#define HOST_SAMPLE_LEVEL_ABOVE(uv) pass_input.SampleLevel(linear_clamp, uv, 0.0)
+
+// The bloom's input: for the second pass the first's output, for the first the surface, or
+// between two of its levels.
+float4 bloom_input(float2 uv, bool second, float lod)
+{
+    if (second || lod <= 0.0)
+        return pass_input.SampleLevel(linear_clamp, uv, 0.0);
+    return lerp(bloom_level.SampleLevel(linear_clamp, uv, 0.0),
+        bloom_below.SampleLevel(linear_clamp, uv, 0.0), saturate(lod - crtsim_bloom_level));
+}
 
 #include "passes/common.inc"
 #include "passes/resize.inc"
@@ -111,6 +128,7 @@ VertInOut VSDefault(VertInOut v)
 #include "passes/composite.inc"
 #include "passes/surface.inc"
 #include "passes/bloom.inc"
+#include "passes/halve.inc"
 #include "passes/present.inc"
 
 // The first resize's output has the picture's columns and the signal's rows.
@@ -123,6 +141,7 @@ float4 PSColumns(VertInOut v) : TARGET { return crtsim_resize_columns(int2(v.uv 
 float4 PSPrepare(VertInOut v) : TARGET { return crtsim_prepare(int2(v.uv * crtsim_signal_size)); }
 float4 PSComposite(VertInOut v) : TARGET { return crtsim_composite(int2(v.uv * crtsim_signal_size)); }
 float4 PSSurface(VertInOut v) : TARGET { return crtsim_surface(v.uv); }
+float4 PSHalve(VertInOut v) : TARGET { return crtsim_halve(v.uv); }
 float4 PSBloomDown(VertInOut v) : TARGET { return crtsim_bloom(v.uv, false); }
 float4 PSBloomUp(VertInOut v) : TARGET { return crtsim_bloom(v.uv, true); }
 float4 PSPresent(VertInOut v) : TARGET { return crtsim_present(v.uv); }
@@ -132,6 +151,7 @@ technique Columns { pass { vertex_shader = VSDefault(v); pixel_shader = PSColumn
 technique Prepare { pass { vertex_shader = VSDefault(v); pixel_shader = PSPrepare(v); } }
 technique Composite { pass { vertex_shader = VSDefault(v); pixel_shader = PSComposite(v); } }
 technique Surface { pass { vertex_shader = VSDefault(v); pixel_shader = PSSurface(v); } }
+technique Halve { pass { vertex_shader = VSDefault(v); pixel_shader = PSHalve(v); } }
 technique BloomDown { pass { vertex_shader = VSDefault(v); pixel_shader = PSBloomDown(v); } }
 technique BloomUp { pass { vertex_shader = VSDefault(v); pixel_shader = PSBloomUp(v); } }
 technique Present { pass { vertex_shader = VSDefault(v); pixel_shader = PSPresent(v); } }
