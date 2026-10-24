@@ -57,7 +57,10 @@ The rest of the game's options screen, TV static, and the game's glow and screen
   tate, where it kept the height and cut the sides off. This changes portrait pictures in the
   renderer and every shader port.
 - The shader ports gain brightness, FXAA, the two spreads, TV static, the glow fading per
-  frame and faceted glass, each checked against the renderer in RetroArch, OBS and Godot. Tate and the CRT off are
+  frame and faceted glass, each checked against the renderer in RetroArch, OBS and Godot.
+- The RetroArch port is now also checked in RetroArch itself, with its OpenGL and Vulkan
+  drivers, and the ReShade effect in vkBasalt, which runs it over a window's frames, picture for
+  picture against the renderer. Tate and the CRT off are
   left to the host, which turns its screen and its effects itself; exporting a look with either
   says so.
 

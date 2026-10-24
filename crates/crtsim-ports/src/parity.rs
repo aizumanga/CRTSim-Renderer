@@ -8,8 +8,8 @@
 //! mask's mipmaps its own way, rounding each texel its own way, which moves a third of a
 //! filtered frame's pixels by a step or two. So every case samples the mask unfiltered, where
 //! only a real translation error can move a pixel, and one case keeps the mipmaps under a limit
-//! of its own, as one keeps the bloom from the surface's halved levels. The limits were set from the first measurement and frozen; `--nocapture`
-//! prints each case's margin.
+//! of its own, as one keeps the bloom from the surface's halved levels and one FXAA. The limits
+//! were set from the first measurement and frozen; `--nocapture` prints each case's margin.
 
 use crtsim_core::config::{self, ColorMode, Config, Phase};
 use crtsim_core::{nes_luts, Renderer, Sequence};
@@ -49,9 +49,10 @@ pub const FLOAT_TABLE: Limits = Limits {
 
 /// FXAA reads the surface filtered at fractions of a texel and turns those reads into choices:
 /// which way an edge runs, where it ends. Where a host filters a last bit apart from Vulkan, as
-/// OBS's OpenGL does, or rounds the surface through half floats, as Godot does, a pixel at a tie
-/// goes the other way: measured at 21 pixels of 57,344 past 2 steps in OBS and 19 of 57,600 in
-/// Godot, by up to 25 steps; none in RetroArch.
+/// OpenGL does, rounds the surface through half floats, as Godot does, or compiles the
+/// arithmetic its own way, as ReShade does, a pixel at a tie goes the other way: measured at up
+/// to 26 pixels of 57,344 past 2 steps in OBS, 19 of 57,600 in Godot, 9 in RetroArch's glcore
+/// and 24 in vkBasalt, by up to 25 steps; none through librashader or RetroArch's Vulkan.
 pub const FXAA: Limits = Limits {
     worst: 2,
     mean: 0.01,
