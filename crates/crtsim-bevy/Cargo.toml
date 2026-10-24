@@ -20,7 +20,7 @@ default = ["ui"]
 ui = ["bevy/bevy_ui_render"]
 
 [dependencies]
-crtsim-core = { path = "../crtsim-core", version = "1.7.0" }
+crtsim-core = { path = "../crtsim-core", version = "1.8.0" }
 anyhow.workspace = true
 wgpu.workspace = true
 bevy = { version = "0.20", default-features = false, features = [

@@ -1,5 +1,29 @@
 # Portable releases (Phase 4)
 
+## v1.8.0
+
+The interface plays more like a game's: its controls look and feel like a set's, and it can make
+sounds of its own. What is rendered and exported is unchanged.
+
+- **Meters.** Sliders are meters: a well of cells that light up to the value, with a mark at the
+  default, each theme in its own style: glowing LEDs in CRT Dark, a flat bar in Paper Light,
+  glossy green blocks in Luna Blue, stripes in Classic Platinum and a pink pill with a star in
+  Sky Diary. Dragging, fine dragging, the arrow keys, Delete and typed numbers work as before.
+- **Switches and lamps.** Settings turn on and off with sliding switches whose lamp lights while
+  on. A section's lamp lights while a setting in it differs from the preset, and sections are
+  plates screwed to the panel. **Original / CRT / Compare** is a channel selector. Buttons sink
+  while pressed.
+- **View → Interface effects.** Full eases the meters and switches, switches the preview's screen
+  on like a set's when new media first shows, and flickers it with static when the channel or the
+  preset changes; Reduced keeps the screen still; Off moves nothing that need not. The web app
+  starts at Reduced. The screen's effects are drawn over the preview only, never into exports.
+- **View → Interface sounds.** Short sounds the app makes itself, with no audio files: ticks as a
+  meter moves, a click at its default, a thud at its ends, switches, buttons, channels, sections,
+  power-on, presets and finished exports. Off until turned on, with a volume and three groups
+  that can each be turned off.
+- Building from source on Linux needs ALSA's development package (`libasound2-dev` on Debian and
+  Ubuntu) for the sounds.
+
 ## v1.7.0
 
 Super Win the Game's look comes closer to the game's own: its bloom reads the picture as the game
