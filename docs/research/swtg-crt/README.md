@@ -801,6 +801,57 @@ TV static, also new, is this renderer's own, not the game's title-screen static 
 the game's content): white noise anew each sixtieth of a second, squared, under a rolling dark
 band, over the picture wavering and slipping, with a channel cycle for video.
 
+## The Steam build, and the Windows and Mac builds again (session 13)
+
+The Steam build (Linux), and the Windows and macOS builds of session 8 again, for what that
+session left open. All four builds ship the same data files, byte for byte (see Inputs), so they
+differ only in their executables.
+
+**The Steam build** (static and runtime). Its `SuperGame_NFML` adds Steamworks: `NSteamworks`
+grows from a one-byte stub to leaderboards, achievements, statistics and the overlay, and
+`libsteam_api.so` comes with it. Compared function by function with addresses masked, 936 of the
+943 functions to do with rendering, textures, shaders and materials are identical. Of the seven
+that differ, `NBaseGame::render` differs only in how a staged screenshot is saved, and
+`SaveScreenshot` with it: with Steam running it saves nothing (`NSteamworks+0x38`, set from
+`SteamAPI_Init`), and the game never hooks Steam's screenshots, so a screenshot is Steam's own
+capture of an ordinary presented frame; without Steam it takes the itch build's own path. The
+other five are constructors of glyph materials and a screen-resolution setter, compiled
+differently. Run without the Steam client, `SteamAPI_Init` fails (`unable to locate a running
+instance of Steam`) and the game plays on; with the probe injected, its passes are bit-identical
+to the itch build's at the defaults, at FXAA 4 and at Tate 1 (all eight passes, both phases, max
+0, the uniforms identical).
+
+**The Windows build's bloom reads mipmaps** (runtime, Wine 9 with the native `d3dx9_42`, a
+`+d3d9,+d3d_texture` trace). Exactly one 1280×960 target is created with
+`D3DUSAGE_RENDERTARGET | D3DUSAGE_AUTOGENMIPMAP` (usage 0x401, levels 1, which an auto-generated
+texture reports while it carries all 11); the others are plain targets (one more at 1280×960, five
+at 256×224, one at 80×60). The game never calls `GenerateMipSubLevels`: the levels are rebuilt
+about once a frame, as the bloom's first pass sets sampler 0's `MIPFILTER` to linear, which its
+state file (`MipFilter=Linear` for `PreHUDBuffer`) and the `.fxo`'s `autogen` annotation on
+`PreHUDBuffer` say too. Its frames agree: bloom at 1, the first scene, the Windows grabs moved
+half a pixel back (session 8), mean of the worst channel over 16×16 block means:
+
+| Renderer | Windows | Linux, the control |
+| --- | ---: | ---: |
+| Unflipped, mipmaps on | **0.953** | 0.767 |
+| Unflipped, mipmaps off | 1.413 | 1.395 |
+| Flipped, mipmaps on | 1.367 | **0.045** |
+| Flipped, mipmaps off | 1.791 | 0.895 |
+
+At full resolution, 2.46 steps with mipmaps against 2.88 without; what is left is mostly the
+half-pixel approximation and Wine's low frame rate mixing glow states in the grabs. A Windows
+driver builds the levels with its own filter, so their rounding there may differ from Mesa's.
+
+**The macOS build** (static; it cannot run here). Its `Valkyrie` imports exactly the 27 core
+OpenGL functions the Linux build imports from `libGL`, and reaches the rest through GLEW, whose
+extension strings it carries, as Linux does; its renderer's own symbols are stripped. Drawing the
+same GLSL into the same targets through the same calls, it almost certainly flips the artifact
+pattern and reads the bloom through `glGenerateMipmap`'s levels as Linux does.
+
+**What it changes:** nothing in the renderer. The presets match the Windows build (artifacts
+unflipped, bloom from mipmaps); **Flip artifact pattern** matches the Linux, Steam and, most
+likely, Mac builds.
+
 ## Unresolved
 
 1. ~~How the LUT fills between palette entries~~: nearest source colour (session 2).
@@ -822,13 +873,15 @@ band, over the picture wavering and slipping, with a channel cycle for video.
    vertical field of view, as in this renderer, over a grey backdrop (session 10); narrower
    than 4:3, as tate's portrait buffer is, the 4:3 view fits the width (session 12).
 8. ~~Whether the Windows build flips the artifact pattern~~: it does not (session 8). The
-   macOS build, on OpenGL, is not checked at runtime; it most likely flips, as Linux does.
-9. ~~What the bloom reads~~: the glass and bezel's mipmaps, level 4 (session 11). Whether the
-   Windows build's Direct3D 9 makes those mipmaps too, and how its driver rounds them, is not
-   checked; the flag is the engine's, so it most likely does (hypothesis).
+   macOS build, on OpenGL, is not checked at runtime; it draws through the same OpenGL calls as
+   Linux (session 13), so it almost certainly flips, as Linux does.
+9. ~~What the bloom reads~~: the glass and bezel's mipmaps, level 4 (session 11), on Windows
+   too, an auto-generated mipmap chain (session 13). How a Windows driver rounds those levels is
+   not checked.
 10. ~~Why black differs by a step~~: 8-bit history's floor, held after the title screen
     (session 11).
-11. The Steam build has not been compared with the itch.io one.
+11. ~~The Steam build against the itch.io one~~: the same data, and passes bit-identical; it
+    differs only in Steamworks and in leaving screenshots to Steam (session 13).
 
 ## Proposals
 
