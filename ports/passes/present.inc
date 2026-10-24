@@ -12,11 +12,16 @@ float fxaa_luma(float3 c) {
     return g.g * (0.587 / 0.299) + g.r;
 }
 
+// The surface at a point of GL's texture coordinates, which run up the picture.
+float3 surface_gl(float2 gl) { return surface_at(float2(gl.x, 1.0 - gl.y)); }
+
 // Super Win the Game's FXAA: Timothy Lottes' FXAA 3 quality, as the game sets its four levels.
 // A pixel on an edge, found by the luma range across its neighbours, is filtered along the edge
 // by how far it lies from the edge's two ends, found by stepping along it, and blended towards
-// its neighbours' average where the edge is finer than a pixel.
-float3 fxaa(float2 uv, int level) {
+// its neighbours' average where the edge is finer than a pixel. It runs in GL's coordinates, as
+// the game does, so where two ways tie it takes the game's.
+float3 fxaa(float2 screen_uv, int level) {
+    float2 uv = float2(screen_uv.x, 1.0 - screen_uv.y);
     float2 px = V2(1.0) / HOST_OUTPUT_SIZE;
     float edge = 0.25;
     float least = 1.0 / 12.0;
@@ -24,20 +29,20 @@ float3 fxaa(float2 uv, int level) {
     if (level == 2) { edge = 1.0 / 6.0; least = 1.0 / 14.0; steps = 8; }
     if (level == 3) { edge = 0.125; least = 1.0 / 16.0; steps = 16; }
     if (level == 4) { edge = 1.0 / 16.0; least = 1.0 / 32.0; steps = 32; }
-    float3 centre = surface_at(uv);
+    float3 centre = surface_gl(uv);
     float m = fxaa_luma(centre);
-    float n = fxaa_luma(surface_at(uv + float2(0.0, -px.y)));
-    float w = fxaa_luma(surface_at(uv + float2(-px.x, 0.0)));
-    float e = fxaa_luma(surface_at(uv + float2(px.x, 0.0)));
-    float s = fxaa_luma(surface_at(uv + float2(0.0, px.y)));
+    float n = fxaa_luma(surface_gl(uv + float2(0.0, -px.y)));
+    float w = fxaa_luma(surface_gl(uv + float2(-px.x, 0.0)));
+    float e = fxaa_luma(surface_gl(uv + float2(px.x, 0.0)));
+    float s = fxaa_luma(surface_gl(uv + float2(0.0, px.y)));
     float lowest = min(m, min(min(n, w), min(s, e)));
     float highest = max(m, max(max(n, w), max(s, e)));
     float range = highest - lowest;
     if (range < max(least, highest * edge)) return centre;
-    float nw = fxaa_luma(surface_at(uv + float2(-px.x, -px.y)));
-    float ne = fxaa_luma(surface_at(uv + float2(px.x, -px.y)));
-    float sw = fxaa_luma(surface_at(uv + float2(-px.x, px.y)));
-    float se = fxaa_luma(surface_at(uv + float2(px.x, px.y)));
+    float nw = fxaa_luma(surface_gl(uv + float2(-px.x, -px.y)));
+    float ne = fxaa_luma(surface_gl(uv + float2(px.x, -px.y)));
+    float sw = fxaa_luma(surface_gl(uv + float2(-px.x, px.y)));
+    float se = fxaa_luma(surface_gl(uv + float2(px.x, px.y)));
     float average = (n + w + e + s) * 0.25;
     float subpixel = min(0.75, clamp(abs(average - m) / range - 0.25, 0.0, 1.0) / 0.75);
     float across = abs(nw - 2.0 * n + ne) + 2.0 * abs(w - 2.0 * m + e) + abs(sw - 2.0 * s + se);
@@ -68,12 +73,12 @@ float3 fxaa(float2 uv, int level) {
     for (int i = 0; i < 32; i++) {
         if (i >= steps) break;
         if (!done_n) {
-            end_n = fxaa_luma(surface_at(to_n));
+            end_n = fxaa_luma(surface_gl(to_n));
             done_n = abs(end_n - pair) >= threshold;
         }
         if (!done_n) to_n -= along;
         if (!done_p) {
-            end_p = fxaa_luma(surface_at(to_p));
+            end_p = fxaa_luma(surface_gl(to_p));
             done_p = abs(end_p - pair) >= threshold;
         }
         if (!done_p) to_p += along;
@@ -85,7 +90,7 @@ float3 fxaa(float2 uv, int level) {
     // Only the end whose luma lies across the pair from this pixel's moves it.
     if ((m - pair < 0.0) == (end - pair < 0.0)) side = 0.0;
     float offset = (0.5 - (nearer_n ? far_n : far_p) / (far_p + far_n) + subpixel * 0.125) * side;
-    float3 filtered = surface_at(uv + (horizontal ? float2(0.0, offset) : float2(offset, 0.0)));
+    float3 filtered = surface_gl(uv + (horizontal ? float2(0.0, offset) : float2(offset, 0.0)));
     float filtered_luma = fxaa_luma(filtered) + 1.0 / (65536.0 * 256.0);
     return filtered * min(4.0, lerp(filtered_luma, average, subpixel) / filtered_luma);
 }
@@ -106,7 +111,9 @@ float4 crtsim_present(float2 uv) {
     float3 colored = blurred / max(lum, 0.000001) * pow(max(lum, 0.0), P(CRTSIM_BLOOM_POWER));
     float3 result = base + colored * P(CRTSIM_BLOOM);
     float3 shown = HOST_LINEAR ? srgb_encode(result) : result;
-    // Brightness at 0 leaves the picture exactly as it is.
+    // Brightness at 0 leaves the picture exactly as it is; otherwise it works on the picture as
+    // the game's final pass reads it, in 8-bit steps.
     float power = exp2(-P(CRTSIM_BRIGHTNESS));
-    return float4(power == 1.0 ? shown : color_pow(shown, power), 1.0);
+    float3 held = floor(clamp(shown, V3(0.0), V3(1.0)) * 255.0 + V3(0.5)) / 255.0;
+    return float4(power == 1.0 ? shown : color_pow(held, power), 1.0);
 }

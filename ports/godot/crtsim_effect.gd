@@ -42,6 +42,8 @@ extends CompositorEffect
 @export_enum("off", "on") var screen_only: int = 0
 ## Bezel reflection
 @export_enum("as the public source", "as the screen") var reflection_as_screen: int = 0
+## Glass
+@export_enum("the sphere", "the mesh's facets") var faceted_glass: int = 0
 ## Bloom reads
 @export_enum("the picture itself", "its mipmaps") var bloom_mipmaps: int = 0
 ## FXAA
@@ -149,6 +151,7 @@ const _PARAMETERS: Array[StringName] = [
 	&"fit",
 	&"screen_only",
 	&"reflection_as_screen",
+	&"faceted_glass",
 	&"bloom_mipmaps",
 	&"fxaa",
 	&"mask_antialias",

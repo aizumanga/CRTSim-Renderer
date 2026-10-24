@@ -37,6 +37,7 @@ layout(std140, set = 0, binding = 0) uniform UBO {
     float CRTSIM_BEZEL_G;
     float CRTSIM_BEZEL_B;
     float CRTSIM_REFLECTION_AS_SCREEN;
+    float CRTSIM_FACETED_GLASS;
     float CRTSIM_BACKDROP_R;
     float CRTSIM_BACKDROP_G;
     float CRTSIM_BACKDROP_B;

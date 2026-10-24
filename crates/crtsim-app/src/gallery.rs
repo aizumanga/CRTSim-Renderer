@@ -192,7 +192,7 @@ mod tests {
         assert_eq!(game.backdrop_color, [0.0625; 3]);
         // Its bloom reads the picture's mipmaps, and its history rounds black to a floor.
         assert!(game.bloom_from_mipmaps && game.glow_floor && game.glow_per_frame);
-        assert!(game.screenshot_stills);
+        assert!(game.screenshot_stills && game.faceted_glass);
         let palette = game.palette.unwrap();
         assert_eq!(
             (palette.tint, palette.tint_i, palette.tint_q, palette.model),

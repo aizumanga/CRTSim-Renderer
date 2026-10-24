@@ -257,8 +257,8 @@ palette**, the palette rows' preset) unless a row says otherwise.
 | Mask density on the bezel | (128, 224), as on the screen (runtime, session 9) | (128, 112) on the frame | as above | **matches with the setting on** (presets) |
 | Mask texture and mips | `mask.bmp` + box mips, each level equal to `halve`'s (session 11), trilinear | `mask.bmp`, D3DX mips | `mask.bmp` + `halve` | match |
 | Artifact texture | `artifacts.bmp` | same | same | match |
-| Screen geometry | `screen.m3d`, rasterised | same | ray-traced sphere fitted to it, the mesh's shade and outline baked (session 7) | intentional extension; measured (sessions 6 and 7): shape within 0.016 signal px, picture 0.30 steps inside, from the mesh's faceted UVs |
-| Bezel geometry | `frame.m3d` | same | baked from `frame.m3d`, ray-marched | intentional extension; measured (session 6): picture 0.13 steps inside, UV p99 0.77 signal px |
+| Screen geometry | `screen.m3d`, rasterised | same | ray-traced sphere fitted to it, the mesh's shade and outline baked (session 7), and its facets with **Faceted glass** (session 12), on in the presets | **matches with the setting on** (presets): picture 0.025 steps inside (session 12) |
+| Bezel geometry | `frame.m3d` | same | baked from `frame.m3d`, ray-marched, the march going on past the rim's blended texels since session 12 | intentional extension; measured (sessions 6 and 12): picture 0.23 steps inside, UV p99 0.77 signal px, 16 rim pixels missed |
 | FOV | 30° | 15° | presets 30° (default 15°) | match (presets) |
 | Artifact pattern orientation | Windows unflipped; Linux flipped against the picture, its second sample one row up (sessions 4 and 8) | row *y* and the row below | either, **Flip artifact pattern** (`flip_artifacts`, session 5), off in the presets | matches the Windows build; **the Linux build with the setting on** |
 | Lighting, light position | CRTSim's, (−10, −5, 10); the rim term squared by multiplying | same | same, squared alike since session 11 | match |
@@ -273,9 +273,9 @@ palette**, the palette rows' preset) unless a row says otherwise.
 | NTSC palette: generator | `MakePalette` (YIQ, Tint/I/Q) | — | the game's, ported, in the **game** model (the signal decoder, mean 18.8 steps off at the defaults, remains as its own model) | **fixed**: bit-exact on 60 settings |
 | NTSC palette: table | 32³ nearest source colour | — | the same, in the game model | **fixed**: bit-exact at the defaults |
 | NTSC palette: sampling | point in R and G, blue interpolated | — | the same for the game's table (`Sampling::NearestRedGreen`) in the renderer and every port since session 3; trilinear for other tables | **fixed**: matches a transcription of the game's shader at every 8-bit level |
-| Final pass | `ColorPow(c, 2^−Brightness)`, Brightness 0 by default (session 11); tate | — | **Brightness** and **Tate** (session 12) | match |
-| FXAA | off by default; FXAA 3 quality at four levels on the glass and bezel, before the bloom | — | **FXAA**, the same at the same levels (session 12) | match |
-| CRT off | the Clean Frame point-sampled at 8:7, over black, no bloom (session 11) | — | **CRT off** (session 12) | match |
+| Final pass | `ColorPow(c, 2^−Brightness)` on the 8-bit compose, Brightness 0 by default (session 11); tate, Tate 1 counter-clockwise into a portrait buffer | — | **Brightness** and **Tate** (session 12) | match (runtime, session 12) |
+| FXAA | off by default; FXAA 3 quality at four levels on the glass and bezel, before the bloom, in GL's coordinates | — | **FXAA**, the same at the same levels (session 12) | match (runtime, session 12) |
+| CRT off | the Clean Frame point-sampled at 8:7, over black, no bloom, whatever the overscan (session 11) | — | **CRT off** (session 12) | exact (runtime, session 12) |
 
 A side-by-side image of the three palettes (game source, game generated, this renderer's
 decoder) is left out of the repository because it is game-derived data;
@@ -443,6 +443,10 @@ what remains is the faceted UVs (0.29 steps, as session 6 found): the mesh's mas
 triangle to triangle and the sphere's does not. Baking the mesh's UVs would remove that too, but
 would bring the faceting into the renderer's picture, which is a choice about fidelity to the
 game, not a gap in the measurement.
+
+*Correction (session 12):* the 540 were not grazing rays the march stepped past but rays whose
+march gave up a step early, and the faceting is a few thousandths of a pixel of depth, not the
+UVs themselves; both are fixed, the facets as a setting (session 12).
 
 ## The Windows and macOS builds (session 8)
 
@@ -688,34 +692,101 @@ equal to the game's to the bit on llvmpipe (`scripts/halve_levels`).
   divide by 16 it can be a texel larger than the game's; the bloom reads the level the game's
   size gives either way.
 
-## The options screen, screenshots and the glow's frame rate (session 12)
+## The options screen, the glass's facets and the bezel's rim (session 12)
 
 The rest of the game's video options, each in the renderer and, where a shader port can carry
-it, every port; and the two differences session 11 left, each as a setting on in the presets.
+it, every port; the two differences session 11 left, each as a setting on in the presets; and
+the two left inside the glass and bezel since session 7.
+
+### The options screen
 
 - **Brightness**: the final pass's `ColorPow(c, 2^−Brightness)`, luma raised to the power with
-  hue kept; black stays black. Exactly the picture at 0.
+  hue kept, on the compose pass's 8-bit picture, so on the picture clamped and in 8-bit steps.
+  Exactly the picture at 0.
 - **FXAA**: the game's four `Valkyrie_FXAA_*` effects are FXAA 3 quality, which this renderer
   writes again in WGSL and the ports' passes: edge threshold 1/4, 1/6, 1/8 and 1/16, with
   minimums 1/12, 1/14, 1/16 and 1/32, 4, 8, 16 and 32 search steps, a search threshold of 1/4,
   sub-pixel trim 1/4 and cap 3/4, and FXAA's red-and-green luma (`g·0.587/0.299 + r`), on the
-  glass and bezel before the bloom is added, as `DoPost` takes its `PostFXAA`.
-- **Tate**: the final pass turns the picture about its middle in quarter turns, the output at
-  the turned size. *Hypothesis until runtime-checked:* a quarter is clockwise on screen.
-- **CRT off**: the Clean Frame point-sampled in its pixel aspect, fitted to the output and
-  zoomed by the overscan, over black, with no colour table or bloom. Brightness, FXAA and tate
-  still apply, as the game's final pass still runs.
-- **Bloom spreads**: BloomDown and BloomUp each with its own, 0.025 at the game's defaults.
-  Looks saved before keep one spread for both.
+  glass and bezel before the bloom is added, as `DoPost` takes its `PostFXAA`. It runs in GL's
+  coordinates, up the picture, where its "north" neighbour is the row below on screen.
+- **Tate**: the final pass turns the picture about its middle, Tate 1 a quarter
+  counter-clockwise (`tateMat` (0, −1, 1, 0)), 3 a quarter clockwise. For 1 and 3 the game keeps
+  its window and draws the tube into a portrait buffer, its 4:3 view fitted to the buffer's
+  width, with bezel and backdrop above and below; the bloom's spread is a fraction of that
+  buffer. The renderer draws the CRT at the turned size, and any output narrower than its tube
+  now fits the tube's width, where it kept the height and cut the sides off.
+- **CRT off**: the Clean Frame point-sampled in its pixel aspect, fitted to the output whatever
+  the overscan (`UVScalar` (1.1667, 1) at overscan 1.25, the pixel aspect's fit alone), over
+  black, with no colour table or bloom. Brightness, FXAA and tate still apply, as the game's
+  final pass still runs.
+- **Bloom spreads**: BloomDown and BloomUp each with its own, 0.025 at the game's defaults;
+  their `BloomScale` uniforms are the spread across and up, (0.0075, 0.01) for BloomDown at
+  0.01. Looks saved before keep one spread for both.
 - **Screenshots**: a still of an alternating look ends on a tick of both patterns averaged, as
   `NBaseGame+0x50` makes the game's (session 10), after warm-up ticks that alternate.
 - **Glow per frame**: persistence applied once a drawn frame, whatever its length, as the game
   does, for a host's frames and a video's; off, by the time that passes.
 
-The shader ports carry all but tate and the CRT off, which their hosts do themselves; an export
-of a look with either refuses it. In OBS and Godot the FXAA case differs on about 20 pixels of
-57,000: FXAA turns filtered reads into choices, and where OpenGL's filter or Godot's half-float
-round trip moves a read by its last bit, a pixel at a tie goes the other way.
+**Against the game** (runtime, the probe at 1280×960 as in session 11, the game's final pass
+read back as well; mean of the worst channel, share past 2 steps, max, 8-bit steps). Default
+settings measure 0.381 / 0.81% / 227, the baseline. A small tool ran the renderer's own present
+pass on the game's captured surface and bloom; with FXAA off and Brightness 0 it reproduces the
+game's compose exactly.
+
+| Option | Before | After |
+| --- | --- | --- |
+| Tate 1 | renderer's quarter clockwise: 116.3 / 94% / 255 | counter-clockwise: 2.1 / 27.9% / 202, the rest the framing above, since fixed |
+| Brightness +0.5 | 1.116 / 7.02% / 212 | clamped and rounded first: 0.430 / 1.52% / 212 |
+| Brightness −0.5 | 2.994 / 16.8% / 191 | 0.335 / 0.84% / 191 |
+| FXAA Ultra | — | 0.543 / 2.99% / 98 (FXAA off: 1.314); 0.0027 on the game's own surface |
+| FXAA Low | — | 0.398 / 1.05% / 98 (off: 0.481); 0.0001 on the game's own surface |
+| CRT off, overscan 1 | — | exact |
+| CRT off, overscan 1.25, pixel aspect 1 | zoomed by the overscan: 85.7 / 56.8% / 255 | exact |
+| BloomDown 0.01, BloomUp 0.06 | one spread: 2.314 | 0.391 / 0.87% / 227 |
+
+What FXAA leaves end to end is its own amplifying of the small surface differences: both the
+game's and the renderer's FXAA change 11.8% of pixels, 91% of them the same ones.
+
+### The glass's facets
+
+The mesh's UVs are the sphere's formula at its vertices, so what its faceting changes is where a
+ray meets it: each triangle is flat, up to 0.00034 units behind the sphere at its middle, and a
+ray meets it that much further along, a few thousandths of a signal pixel across, enough to
+shift the mask's phase (session 6's "UV" row). `glass.rs` now bakes that depth across the
+glass's UVs under its shade and outline, and with **Faceted glass** (`faceted_glass`, on in the
+presets) the surface pass takes one step of Newton's along the ray from the sphere to the facet.
+Within a texel's blend of each crease: 3.8·10⁻⁷ units off at the triangles' middles on average,
+the corners' creases up to 5·10⁻⁵.
+
+### The bezel's rim
+
+The 540 pixels at the bezel's outer rim that the renderer left empty (session 7) were rays
+whose march stopped a step early: there the filtered high byte of the depth blends in the empty
+texels past the rim, so a step seemed inside where the full depth is still empty, the halving
+found nothing, and the ray gave up, though one step on it was inside the bezel. The march now
+goes on from such a step. The same fault left a column of backdrop where a portrait tube's bezel
+meets its glass, in the goldens since session 9.
+
+**Results** (`measure_surfaces.py`, the reference signal as the composite; `MARCH=give-up`
+gives the march as it was, `GLASS=faceted` the facets):
+
+| | Session 11 | The march going on | And faceted glass |
+| --- | ---: | ---: | ---: |
+| Bezel in the meshes, nothing in the renderer | 540 | 12 | 16 |
+| Bezel in the meshes, glass in the renderer | 36 | 36 | 0 |
+| Picture, whole, mean steps | 0.342 | 0.336 | 0.052 |
+| Picture, glass inside | 0.340 | 0.346 | 0.025 |
+| Picture, outline band, mean steps (pixels) | 2.03 (13 054) | 2.35 (3 544) | 0.67 (952) |
+| Glass UV's cost inside | 0.340 | 0.346 | 0.025 |
+
+With the facets, every pixel the meshes show as glass the renderer does too, and every pixel
+it shows as glass the meshes do; what is left of the picture is the bezel's bake, 0.23 steps
+inside the bezel, and 16 pixels of its rim.
+
+The shader ports carry all of it but tate and the CRT off, which their hosts do themselves; an
+export of a look with either refuses it. In OBS and Godot the FXAA case differs on about 20
+pixels of 57,000: FXAA turns filtered reads into choices, and where OpenGL's filter or Godot's
+half-float round trip moves a read by its last bit, a pixel at a tie goes the other way.
 
 TV static, also new, is this renderer's own, not the game's title-screen static (`StaticMaterial`,
 the game's content): white noise anew each sixtieth of a second, squared, under a rolling dark
@@ -736,9 +807,11 @@ band, over the picture wavering and slipping, with a channel cycle for video.
    reads baked since session 7.
 6. ~~How large the glass and bezel approximations are~~: measured (session 6), 0.46 steps
    on average over the probe; 0.30 since the glass's shade and outline are baked (session 7),
-   most of what is left the mesh's faceted UVs and the bezel's rim.
+   most of what is left the mesh's faceted UVs and the bezel's rim; 0.05 with the facets and
+   the rim (session 12), what is left the bezel's bake.
 7. ~~Viewport handling of the 4:3 target aspect in non-4:3 windows~~: the view widens at a fixed
-   vertical field of view, as in this renderer, over a grey backdrop (session 10).
+   vertical field of view, as in this renderer, over a grey backdrop (session 10); narrower
+   than 4:3, as tate's portrait buffer is, the 4:3 view fits the width (session 12).
 8. ~~Whether the Windows build flips the artifact pattern~~: it does not (session 8). The
    macOS build, on OpenGL, is not checked at runtime; it most likely flips, as Linux does.
 9. ~~What the bloom reads~~: the glass and bezel's mipmaps, level 4 (session 11). Whether the
@@ -794,10 +867,18 @@ change the RetroArch port did.
    every shader port; see *The glow's floor*.
 
 10. **The rest of the options screen.** *Done in session 12:* `brightness`, `fxaa`, `tate`,
-    `crt_off` and the second blur's own spread, `bloom_spread_up`; see *The options screen*.
+    `crt_off` and the second blur's own spread, `bloom_spread_up`, checked against the game at
+    runtime; see *The options screen*.
 
 11. **Screenshots and the glow's frame rate.** *Done in session 12:* `screenshot_stills` and
     `glow_per_frame`, on in the presets.
+
+12. **The glass's facets.** *Done in session 12:* `faceted_glass`, on in the presets; see *The
+    glass's facets*. Session 7 left it out as a choice about fidelity; as a setting, the
+    reference keeps the smooth sphere.
+
+13. **The bezel's rim.** *Done in session 12:* the march goes on past a step whose halving
+    finds nothing; see *The bezel's rim*.
 
 Frame-by-frame comparison is set up (session 4); more probes, motion and other settings can go
 through it.

@@ -14,7 +14,7 @@ struct Params {
     bloom: vec4<f32>, // amount, power, spread, the tube's widening either side
     processing: vec4<f32>, // linear-light surface/bloom path, interlaced, field scanned this tick, screen only
     backdrop: vec4<f32>, // colour where neither the glass nor the bezel is, the view's widening
-    post: vec4<f32>, // bloom read through the picture's mipmaps, glow floor, unused
+    post: vec4<f32>, // bloom read through the picture's mipmaps, glow floor, faceted glass, unused
     finish: vec4<f32>, // brightness's power, FXAA level, tate's quarter turns, second blur's spread
     picture: vec4<f32>, // pixel aspect, TV static, its cycle in seconds, its clock in 60ths
 };
@@ -185,10 +185,13 @@ fn shade(v: Surface, across: vec2<f32>, down: vec2<f32>, bezel: bool) -> vec4<f3
 // this sphere: its UVs and normals are functions of where a ray meets it.
 const GLASS_CENTRE = vec3(4.,0.,0.);
 const GLASS_RADIUS = 4.;
-// The mesh's outline and darkened edges, baked across the glass's UVs (crtsim-core's glass
-// module): its shade, and the distance to its outline, positive inside and within ±GLASS_EDGE.
+// The mesh's outline, darkened edges and facets, baked across the glass's UVs (crtsim-core's
+// glass module), two maps one above the other: its shade, and the distance to its outline,
+// positive inside and within ±GLASS_EDGE; then how far behind the sphere its flat triangles lie,
+// up to GLASS_FACET.
 @group(0) @binding(12) var glass_map: texture_2d<f32>;
 const GLASS_EDGE = 0.015625;
+const GLASS_FACET = 0.00048828125;
 // The bezel, baked from its mesh seen straight on (crtsim-core's bezel module): a depth for
 // each point across it, and what the mesh holds there, 16-bit values split over two channels.
 @group(0) @binding(9) var bezel_shape: texture_2d<f32>;
@@ -248,9 +251,15 @@ fn pairs(t: texture_2d<f32>, g: vec2<f32>) -> vec2<f32> {
 fn bezel_pairs(t: texture_2d<f32>, yz: vec2<f32>) -> vec2<f32> { return pairs(t,bezel_texel(yz)); }
 // The glass's shade and distance to its outline at uv; texel (i, j) is uv (i, j) / (size - 1).
 fn glass_baked(uv: vec2<f32>) -> vec2<f32> {
-    let last=vec2<f32>(textureDimensions(glass_map))-vec2(1.);
+    let last=vec2<f32>(textureDimensions(glass_map))*vec2(1.,0.5)-vec2(1.);
     let v=pairs(glass_map,clamp(uv,vec2(0.),vec2(1.))*last);
     return vec2(v.x,mix(-GLASS_EDGE,GLASS_EDGE,v.y));
+}
+// How far behind the sphere the mesh's facet lies at uv, along the view.
+fn glass_facet(uv: vec2<f32>) -> f32 {
+    let half=vec2<f32>(textureDimensions(glass_map))*vec2(1.,0.5);
+    return pairs(glass_map,clamp(uv,vec2(0.),vec2(1.))*(half-vec2(1.))+vec2(0.,half.y)).x
+        *GLASS_FACET;
 }
 fn bezel_bytes(yz: vec2<f32>) -> vec2<f32> {
     let g=bezel_texel(yz); let xy=vec2<i32>(floor(g)); let f=fract(g);
@@ -264,28 +273,31 @@ fn along(ray: vec3<f32>, x: f32) -> vec3<f32> {
 }
 // Where the ray first meets the bezel, NOTHING when it does not: stepping across its depths on
 // the depth's high byte, filtered by the sampler, then halving the step it passed the surface
-// in on the full depth. It takes no derivatives, so it may stop at the first step inside.
+// in on the full depth. At the bezel's outer rim the filtered byte blends in the empty texels
+// past it, so a step can seem inside where the full depth is still empty; the march goes on
+// from there. It takes no derivatives, so it may stop at the first step inside.
 fn bezel_hit(ray: vec3<f32>) -> f32 {
     let step=(BEZEL_FAR-BEZEL_NEAR)/f32(BEZEL_STEPS);
     let size=vec2<f32>(textureDimensions(bezel_shape));
-    var before=BEZEL_NEAR-step; var after=NOTHING;
+    var before=BEZEL_NEAR-step;
     for (var i=0; i<=BEZEL_STEPS; i++) {
         let x=BEZEL_NEAR+step*f32(i);
         let at=(bezel_texel(along(ray,x).yz)+vec2(0.5))/size;
         let coarse=mix(BEZEL_NEAR,BEZEL_FAR,
             textureSampleLevel(bezel_shape,linear_clamp,at,0.).r*255.*256./65534.);
-        if x>=coarse && all(at>=vec2(0.)) && all(at<=vec2(1.)) { after=x; break; }
+        if x>=coarse && all(at>=vec2(0.)) && all(at<=vec2(1.)) {
+            var low=before; var high=x;
+            for (var j=0; j<BEZEL_HALVINGS; j++) {
+                let middle=0.5*(low+high);
+                let inside=middle>=bezel_depth(along(ray,middle).yz);
+                high=select(high,middle,inside);
+                low=select(middle,low,inside);
+            }
+            if bezel_depth(along(ray,high).yz)<NOTHING { return high; }
+        }
         before=x;
     }
-    var low=before; var high=after;
-    for (var i=0; i<BEZEL_HALVINGS; i++) {
-        let middle=0.5*(low+high);
-        let inside=middle>=bezel_depth(along(ray,middle).yz);
-        high=select(high,middle,inside);
-        low=select(middle,low,inside);
-    }
-    let found=after<NOTHING && bezel_depth(along(ray,high).yz)<NOTHING;
-    return select(NOTHING,high,found);
+    return NOTHING;
 }
 // Whether a ray can meet the bezel at all: not if it stays within the opening's clear box
 // across the bezel's whole depth.
@@ -297,7 +309,8 @@ fn may_meet_bezel(ray: vec3<f32>) -> bool {
 @fragment fn surface(q: Quad) -> @location(0) vec4<f32> {
     let ndc=vec2(q.position.x/p.size.z*2.-1.,1.-q.position.y/p.size.w*2.);
     // The camera looks along +x from 1/tan(fov/2) in front, with z up and -y to the right. A
-    // tube wider than the picture is framed as a 4:3 tube is in a picture of the tube's shape.
+    // tube wider than the picture fits across it, as the game fits its 4:3 tube across tate's
+    // portrait picture.
     let spread=-1./p.camera.x*p.backdrop.w;
     // The ray where the glass is the original's sphere, across `stretched` times narrower;
     // along any ray, the bezel steps by depth alone, so it takes the ray stretched back.
@@ -308,7 +321,15 @@ fn may_meet_bezel(ray: vec3<f32>) -> bool {
     let to=p.camera.xyz-GLASS_CENTRE;
     let b=dot(to,traced);
     let reach=b*b-dot(to,to)+GLASS_RADIUS*GLASS_RADIUS;
-    let sphere_at=p.camera.xyz+traced*(-b-sqrt(max(reach,0.)));
+    var sphere_at=p.camera.xyz+traced*(-b-sqrt(max(reach,0.)));
+    if p.post.z>0.5 {
+        // On to the mesh's flat triangle there, as far behind as the facet lies: one step of
+        // Newton's along the ray, which lands on it within a ten-thousandth of a signal pixel
+        // on average.
+        let facet=glass_facet(vec2((4./3.-sphere_at.y)*0.375,(1.-sphere_at.z)*0.5));
+        let from_centre=sphere_at-GLASS_CENTRE;
+        sphere_at+=traced*(facet*from_centre.x/min(dot(traced,from_centre),-0.000001));
+    }
     let glass_at=vec3(sphere_at.x,sphere_at.y*s,sphere_at.z);
     var glass: Surface;
     // The picture spans the whole glass; its outline and shading keep the original's corners.
@@ -386,13 +407,13 @@ fn color_pow(c: vec3<f32>, power: f32) -> vec3<f32> {
     return c/max(lum,0.000001)*pow(max(lum,0.),power);
 }
 // Where the turned picture's pixel at uv comes from: Super Win the Game's tate turns the
-// finished picture about its middle in quarter turns.
+// finished picture about its middle in quarter turns counter-clockwise.
 fn turned(uv: vec2<f32>) -> vec2<f32> {
     let v=uv-vec2(0.5);
     switch u32(p.finish.z) {
-        case 1u: { return vec2(v.y,-v.x)+vec2(0.5); }
+        case 1u: { return vec2(-v.y,v.x)+vec2(0.5); }
         case 2u: { return vec2(-v.x,-v.y)+vec2(0.5); }
-        case 3u: { return vec2(-v.y,v.x)+vec2(0.5); }
+        case 3u: { return vec2(v.y,-v.x)+vec2(0.5); }
         default: { return uv; }
     }
 }
@@ -402,30 +423,34 @@ fn fxaa_luma(c: vec3<f32>) -> f32 {
     let g=select(c,srgb_encode(c),p.processing.x>0.5);
     return g.g*(0.587/0.299)+g.r;
 }
+// The surface at a point of GL's texture coordinates, which run up the picture.
+fn surface_gl(gl: vec2<f32>) -> vec3<f32> { return surface_at(vec2(gl.x,1.-gl.y)); }
 // Super Win the Game's FXAA: Timothy Lottes' FXAA 3 quality, as the game sets its four levels.
 // A pixel on an edge, found by the luma range across its neighbours, is filtered along the edge
 // by how far it lies from the edge's two ends, found by stepping along it, and blended towards
-// its neighbours' average where the edge is finer than a pixel.
-fn fxaa(uv: vec2<f32>, level: u32) -> vec3<f32> {
+// its neighbours' average where the edge is finer than a pixel. It runs in GL's coordinates, as
+// the game does, so where two ways tie it takes the game's.
+fn fxaa(screen_uv: vec2<f32>, level: u32) -> vec3<f32> {
+    let uv=vec2(screen_uv.x,1.-screen_uv.y);
     let px=1./vec2<f32>(textureDimensions(source));
     var edge=0.25; var least=1./12.; var steps=4u;
     if level==2u { edge=1./6.; least=1./14.; steps=8u; }
     if level==3u { edge=0.125; least=1./16.; steps=16u; }
     if level==4u { edge=1./16.; least=1./32.; steps=32u; }
-    let centre=surface_at(uv);
+    let centre=surface_gl(uv);
     let m=fxaa_luma(centre);
-    var n=fxaa_luma(surface_at(uv+vec2(0.,-px.y)));
-    let w=fxaa_luma(surface_at(uv+vec2(-px.x,0.)));
-    let e=fxaa_luma(surface_at(uv+vec2(px.x,0.)));
-    var s=fxaa_luma(surface_at(uv+vec2(0.,px.y)));
+    var n=fxaa_luma(surface_gl(uv+vec2(0.,-px.y)));
+    let w=fxaa_luma(surface_gl(uv+vec2(-px.x,0.)));
+    let e=fxaa_luma(surface_gl(uv+vec2(px.x,0.)));
+    var s=fxaa_luma(surface_gl(uv+vec2(0.,px.y)));
     let lowest=min(m,min(min(n,w),min(s,e)));
     let highest=max(m,max(max(n,w),max(s,e)));
     let range=highest-lowest;
     if range<max(least,highest*edge) { return centre; }
-    let nw=fxaa_luma(surface_at(uv+vec2(-px.x,-px.y)));
-    let ne=fxaa_luma(surface_at(uv+vec2(px.x,-px.y)));
-    let sw=fxaa_luma(surface_at(uv+vec2(-px.x,px.y)));
-    let se=fxaa_luma(surface_at(uv+vec2(px.x,px.y)));
+    let nw=fxaa_luma(surface_gl(uv+vec2(-px.x,-px.y)));
+    let ne=fxaa_luma(surface_gl(uv+vec2(px.x,-px.y)));
+    let sw=fxaa_luma(surface_gl(uv+vec2(-px.x,px.y)));
+    let se=fxaa_luma(surface_gl(uv+vec2(px.x,px.y)));
     let average=(n+w+e+s)*0.25;
     let subpixel=min(0.75,clamp(abs(average-m)/range-0.25,0.,1.)/0.75);
     let across=abs(nw-2.*n+ne)+2.*abs(w-2.*m+e)+abs(sw-2.*s+se);
@@ -444,9 +469,9 @@ fn fxaa(uv: vec2<f32>, level: u32) -> vec3<f32> {
     var end_n=0.; var end_p=0.;
     var done_n=false; var done_p=false;
     for (var i=0u; i<steps; i++) {
-        if !done_n { end_n=fxaa_luma(surface_at(to_n)); done_n=abs(end_n-pair)>=threshold; }
+        if !done_n { end_n=fxaa_luma(surface_gl(to_n)); done_n=abs(end_n-pair)>=threshold; }
         if !done_n { to_n-=along; }
-        if !done_p { end_p=fxaa_luma(surface_at(to_p)); done_p=abs(end_p-pair)>=threshold; }
+        if !done_p { end_p=fxaa_luma(surface_gl(to_p)); done_p=abs(end_p-pair)>=threshold; }
         if !done_p { to_p+=along; }
     }
     let far_n=select(uv.y-to_n.y,uv.x-to_n.x,horizontal);
@@ -456,7 +481,7 @@ fn fxaa(uv: vec2<f32>, level: u32) -> vec3<f32> {
     // Only the end whose luma lies across the pair from this pixel's moves it.
     if ((m-pair)<0.)==((end-pair)<0.) { side=0.; }
     let offset=(0.5-select(far_p,far_n,nearer_n)/(far_p+far_n)+subpixel*0.125)*side;
-    let filtered=surface_at(uv+select(vec2(offset,0.),vec2(0.,offset),horizontal));
+    let filtered=surface_gl(uv+select(vec2(offset,0.),vec2(0.,offset),horizontal));
     let filtered_luma=fxaa_luma(filtered)+1./(65536.*256.);
     return filtered*min(4.,mix(filtered_luma,average,subpixel)/filtered_luma);
 }
@@ -471,17 +496,19 @@ fn fxaa(uv: vec2<f32>, level: u32) -> vec3<f32> {
     let colored=blurred/max(lum,0.000001)*pow(max(lum,0.),p.bloom.y);
     let result=base+colored*p.bloom.x;
     let shown=select(result,srgb_encode(result),p.processing.x>0.5);
-    // Brightness at 0 leaves the picture exactly as it is.
-    return vec4(select(color_pow(shown,p.finish.x),shown,p.finish.x==1.),1.);
+    // Brightness at 0 leaves the picture exactly as it is; otherwise it works on the picture as
+    // the game's final pass reads it, in 8-bit steps.
+    let held=floor(clamp(shown,vec3(0.),vec3(1.))*255.+vec3(0.5))/255.;
+    return vec4(select(color_pow(held,p.finish.x),shown,p.finish.x==1.),1.);
 }
 // The CRT off, as Super Win the Game draws without its CRT simulation: the signal pixel by pixel
-// in its pixel aspect inside the output, zoomed by the overscan, over black. Static, part of the
-// game's picture, shows here too.
+// in its pixel aspect fitted inside the output, over black, whatever the overscan. Static, part
+// of the game's picture, shows here too.
 @fragment fn flat(q: Quad) -> @location(0) vec4<f32> {
     let picture=p.size.x/p.size.y*p.picture.x;
     let output=p.size.z/p.size.w;
     let fit=select(vec2(1.,picture/output),vec2(output/picture,1.),output>picture);
-    let uv=(q.uv-vec2(0.5))*fit/p.geometry.z+vec2(0.5);
+    let uv=(q.uv-vec2(0.5))*fit+vec2(0.5);
     if any(uv<vec2(0.)) || any(uv>=vec2(1.)) { return vec4(0.,0.,0.,1.); }
     let texel=(floor(uv*p.size.xy)+vec2(0.5))/p.size.xy;
     let c=picture_at(texel,static_strength());

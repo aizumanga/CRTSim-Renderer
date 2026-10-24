@@ -600,6 +600,13 @@ pub fn parameters(host: Host) -> Vec<Parameter> {
             |c| flag(c.reflection_as_screen),
         ),
         choice(
+            "CRTSIM_FACETED_GLASS",
+            "Glass",
+            &["the sphere", "the mesh's facets"],
+            ALL,
+            |c| flag(c.faceted_glass),
+        ),
+        choice(
             "CRTSIM_BLOOM_MIPMAPS",
             "Bloom reads",
             &["the picture itself", "its mipmaps"],

@@ -32,8 +32,9 @@ struct Tube {
     stretch: f32,
     /// How much wider each side is than the original's, or narrower where it is negative.
     widening: f32,
-    /// How much more the view takes in, so a tube wider than an output of `output`'s shape is
-    /// framed as a 4:3 one is in an output of the tube's shape; 1 for any other.
+    /// How much more the view takes in, so a tube wider than the output fits across it, as
+    /// Super Win the Game fits its 4:3 tube across the portrait picture it draws for tate; 1 for
+    /// any other.
     framing: f32,
 }
 
@@ -44,7 +45,7 @@ impl Tube {
         Self {
             stretch: aspect / ORIGINAL,
             widening: aspect - ORIGINAL,
-            framing: (aspect / output.max(ORIGINAL)).max(1.),
+            framing: (aspect / output).max(1.),
         }
     }
 }
@@ -117,7 +118,12 @@ impl Params {
                 c.backdrop_color[2],
                 tube.framing,
             ],
-            post: [flag(c.bloom_from_mipmaps), flag(c.glow_floor), 0., 0.],
+            post: [
+                flag(c.bloom_from_mipmaps),
+                flag(c.glow_floor),
+                flag(c.faceted_glass),
+                0.,
+            ],
             finish: [
                 2_f32.powf(-c.brightness),
                 c.fxaa as u32 as f32,

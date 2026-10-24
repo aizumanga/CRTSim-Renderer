@@ -28,6 +28,7 @@ static const char *const CRTSIM_INTERLACE_ITEMS[] = {"off", "on", "auto", NULL};
 static const char *const CRTSIM_FIT_ITEMS[] = {"original", "contain", "cover", "stretch", NULL};
 static const char *const CRTSIM_SCREEN_ONLY_ITEMS[] = {"off", "on", NULL};
 static const char *const CRTSIM_REFLECTION_AS_SCREEN_ITEMS[] = {"as the public source", "as the screen", NULL};
+static const char *const CRTSIM_FACETED_GLASS_ITEMS[] = {"the sphere", "the mesh's facets", NULL};
 static const char *const CRTSIM_BLOOM_MIPMAPS_ITEMS[] = {"the picture itself", "its mipmaps", NULL};
 static const char *const CRTSIM_FXAA_ITEMS[] = {"off", "low", "medium", "high", "ultra", NULL};
 static const char *const CRTSIM_MASK_ANTIALIAS_ITEMS[] = {"off", "on", NULL};
@@ -47,6 +48,7 @@ enum crtsim_parameter_index {
 	CRTSIM_FIT_INDEX,
 	CRTSIM_SCREEN_ONLY_INDEX,
 	CRTSIM_REFLECTION_AS_SCREEN_INDEX,
+	CRTSIM_FACETED_GLASS_INDEX,
 	CRTSIM_BLOOM_MIPMAPS_INDEX,
 	CRTSIM_FXAA_INDEX,
 	CRTSIM_MASK_ANTIALIAS_INDEX,
@@ -110,6 +112,7 @@ static const struct crtsim_parameter crtsim_parameters[CRTSIM_PARAMETER_COUNT] =
 	{"CRTSIM_FIT", "Fit on the tube", 0.0f, 3.0f, 1.0f, 1.0f, CRTSIM_FIT_ITEMS},
 	{"CRTSIM_SCREEN_ONLY", "Screen only, without the bezel", 0.0f, 1.0f, 1.0f, 0.0f, CRTSIM_SCREEN_ONLY_ITEMS},
 	{"CRTSIM_REFLECTION_AS_SCREEN", "Bezel reflection", 0.0f, 1.0f, 1.0f, 0.0f, CRTSIM_REFLECTION_AS_SCREEN_ITEMS},
+	{"CRTSIM_FACETED_GLASS", "Glass", 0.0f, 1.0f, 1.0f, 0.0f, CRTSIM_FACETED_GLASS_ITEMS},
 	{"CRTSIM_BLOOM_MIPMAPS", "Bloom reads", 0.0f, 1.0f, 1.0f, 0.0f, CRTSIM_BLOOM_MIPMAPS_ITEMS},
 	{"CRTSIM_FXAA", "FXAA", 0.0f, 4.0f, 1.0f, 0.0f, CRTSIM_FXAA_ITEMS},
 	{"CRTSIM_MASK_ANTIALIAS", "Filter mask when shrinking", 0.0f, 1.0f, 1.0f, 1.0f, CRTSIM_MASK_ANTIALIAS_ITEMS},

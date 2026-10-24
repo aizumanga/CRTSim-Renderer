@@ -126,6 +126,7 @@ GLASS_RADIUS = 4.
 # exponent, shaded 1 - 0.5 r^6. Since, they are baked from the mesh (crtsim-core's glass.rs).
 GLASS_CORNER = 11.54
 GLASS_EDGE = 1 / 64
+GLASS_FACET = 1 / 2048
 BEZEL_HALF = np.array([1.6533334, 1.32])
 BEZEL_NEAR, BEZEL_FAR = -0.1, 0.33
 BEZEL_OPENING = np.array([1.24, 0.95])
@@ -139,19 +140,29 @@ class Bezel:
         self.size = np.array([self.shape.shape[1], self.shape.shape[0]], float)
         self.glass = load('glass') if os.path.exists(f'{folder}/glass.png') else None
 
-    def glass_baked(self, uv):
-        """`glass_baked`: the mesh's shade and the distance to its outline at uv."""
+    def glass_pairs(self, uv, rows):
+        """The glass image's two values at uv, from its map `rows` down (session 12: two maps,
+        one above the other; an older image of one map has no facets)."""
         h, w = self.glass.shape[:2]
-        g = np.clip(uv, 0, 1) * [w - 1, h - 1]
+        half = h // 2 if h * 2 == w * 3 else h
+        g = np.clip(uv, 0, 1) * [w - 1, half - 1] + [0, rows]
         xy = np.floor(g).astype(int)
         f = g - xy
         def dec(xy):
             v = self.load(self.glass, xy)
             return np.stack([self.pair(v[..., 0], v[..., 1]), self.pair(v[..., 2], v[..., 3])], -1)
         fx, fy = f[..., :1], f[..., 1:]
-        v = (dec(xy) * (1 - fx) + dec(xy + [1, 0]) * fx) * (1 - fy) + \
+        return (dec(xy) * (1 - fx) + dec(xy + [1, 0]) * fx) * (1 - fy) + \
             (dec(xy + [0, 1]) * (1 - fx) + dec(xy + [1, 1]) * fx) * fy
+
+    def glass_baked(self, uv):
+        """`glass_baked`: the mesh's shade and the distance to its outline at uv."""
+        v = self.glass_pairs(uv, 0)
         return v[..., 0], -GLASS_EDGE + v[..., 1] * 2 * GLASS_EDGE
+
+    def glass_facet(self, uv):
+        """`glass_facet`: how far behind the sphere the mesh's facet lies at uv."""
+        return self.glass_pairs(uv, self.glass.shape[0] // 2)[..., 0] * GLASS_FACET
 
     def texel(self, yz):
         return (BEZEL_HALF - yz) / (2 * BEZEL_HALF) * self.size - 0.5
@@ -213,9 +224,12 @@ class Bezel:
                (r(xy + [0, 1]) * (1 - fx) + r(xy + [1, 1]) * fx) * fy
 
 
-def approximate(bezel, width, height, fov, screen_only=False, formula=False):
+def approximate(bezel, width, height, fov, screen_only=False, formula=False, faceted=False,
+                give_up=False):
     """`surface()`: the sphere's glass and the ray-marched bezel, nearest wins. `formula` draws
-    the glass's outline and shade as the renderer did until session 7."""
+    the glass's outline and shade as the renderer did until session 7; `faceted` moves the glass
+    on to the mesh's facets (session 12); `give_up` stops the bezel's march at its first step
+    inside, as it did until session 12."""
     cam, ray = rays(width, height, fov)
     out = empty(height, width)
     along = lambda x: cam + ray * ((x - cam[0]) / ray[..., 0])[..., None]
@@ -223,6 +237,11 @@ def approximate(bezel, width, height, fov, screen_only=False, formula=False):
     b = ray @ to
     reach = b * b - to @ to + GLASS_RADIUS ** 2
     glass_at = cam + ray * (-b - np.sqrt(np.maximum(reach, 0)))[..., None]
+    if faceted:
+        facet = bezel.glass_facet(np.stack([(4 / 3 - glass_at[..., 1]) * 0.375,
+                                            (1 - glass_at[..., 2]) * 0.5], -1))
+        rel = glass_at - GLASS_CENTRE
+        glass_at = glass_at + ray * (facet * rel[..., 0] / np.minimum((ray * rel).sum(-1), -1e-6))[..., None]
     guv = np.stack([(4 / 3 - glass_at[..., 1]) * 0.375, (1 - glass_at[..., 2]) * 0.5], -1)
     if formula:
         edge = np.abs(guv * 2 - 1)
@@ -239,24 +258,24 @@ def approximate(bezel, width, height, fov, screen_only=False, formula=False):
         may = (np.maximum(near, far) >= BEZEL_OPENING).any(-1)
         step = (BEZEL_FAR - BEZEL_NEAR) / BEZEL_STEPS
         before = np.full((height, width), BEZEL_NEAR - step)
-        after = np.full((height, width), NOTHING)
         searching = may.copy()
         for i in range(BEZEL_STEPS + 1):
             x = BEZEL_NEAR + step * i
             at = (bezel.texel(along(x)[..., 1:]) + 0.5) / bezel.size
             coarse = BEZEL_NEAR + (BEZEL_FAR - BEZEL_NEAR) * bezel.coarse(at) * 255 * 256 / 65534
             hit = searching & (x >= coarse) & (at >= 0).all(-1) & (at <= 1).all(-1)
-            after = np.where(hit, x, after)
-            before = np.where(searching & ~hit, x, before)
-            searching &= ~hit
-        low, high = before.copy(), after.copy()
-        for _ in range(BEZEL_HALVINGS):
-            middle = 0.5 * (low + high)
-            inside = middle >= bezel.depth(along(middle)[..., 1:])
-            high = np.where(inside, middle, high)
-            low = np.where(inside, low, middle)
-        found = may & (after < NOTHING) & (bezel.depth(along(high)[..., 1:]) < NOTHING)
-        bezel_depth = np.where(found, high, NOTHING)
+            low, high = before.copy(), np.full((height, width), x)
+            for _ in range(BEZEL_HALVINGS):
+                middle = 0.5 * (low + high)
+                inside = middle >= bezel.depth(along(middle)[..., 1:])
+                high = np.where(inside, middle, high)
+                low = np.where(inside, low, middle)
+            # A step that seemed inside on the filtered byte, where the full depth is empty, goes
+            # on marching (session 12).
+            found = hit & (bezel.depth(along(high)[..., 1:]) < NOTHING)
+            bezel_depth = np.where(found, high, bezel_depth)
+            searching &= ~(hit if give_up else found)
+            before = np.where(searching, x, before)
     bezel_at = along(np.minimum(bezel_depth, BEZEL_FAR))
 
     is_bezel = bezel_depth < glass_depth

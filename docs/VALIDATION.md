@@ -12,7 +12,7 @@ NTSC blending and the flipped artifact pattern in the signal, linear-light, the 
 screen-only, the bezel's reflection as on the screen, a backdrop, a widescreen and a portrait
 tube, interlaced scanning, a bundled NES LUT, the bloom from mipmaps, the glow floor, FXAA at
 its finest, a brighter picture, the picture turned for tate, the CRT off, TV static in the
-signal, Super Win the Game's look as a whole, drawn as the game's screenshots, and the second
+signal, Super Win the Game's look as a whole, drawn as the game's screenshots on its mesh's facets, and the second
 frame of a sequence, which is the only case that sees frame-to-frame persistence.
 
 The other twelve capture the prepare step's output -- the clean signal, before the simulation --

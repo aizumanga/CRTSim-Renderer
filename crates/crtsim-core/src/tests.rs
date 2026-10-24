@@ -828,13 +828,20 @@ fn tate_turns_the_finished_picture_and_the_crt_off_draws_it_flat() {
         ..Config::default()
     };
     let upright = render(&r, &card, &c).unwrap().crt;
-    // A quarter turn clockwise, a half, and three quarters, texel for texel.
+    // A quarter turn draws the tube in a portrait picture, fitted to its width, and turns that
+    // counter-clockwise, as the game's Tate 1 does; three quarters turns it clockwise. Texel for
+    // texel.
+    let portrait = Config {
+        output: "180x320".into(),
+        ..c.clone()
+    };
+    let portrait = render(&r, &card, &portrait).unwrap().crt;
     for (tate, expected) in [
-        (config::Tate::Quarter, image::imageops::rotate90(&upright)),
+        (config::Tate::Quarter, image::imageops::rotate270(&portrait)),
         (config::Tate::Half, image::imageops::rotate180(&upright)),
         (
             config::Tate::ThreeQuarters,
-            image::imageops::rotate270(&upright),
+            image::imageops::rotate90(&portrait),
         ),
     ] {
         let turned = render(&r, &card, &Config { tate, ..c.clone() })
@@ -842,6 +849,8 @@ fn tate_turns_the_finished_picture_and_the_crt_off_draws_it_flat() {
             .crt;
         assert_eq!(turned, expected, "{tate:?}");
     }
+    // Fitted to its width: the tube's sides show, past them the bezel and below it the backdrop.
+    assert_ne!(portrait.get_pixel(90, 2), portrait.get_pixel(90, 160));
     // The CRT off: the clean signal, each pixel twice as wide and tall at twice its size,
     // without the colour table, which belongs to the CRT's signal.
     let flat = Config {

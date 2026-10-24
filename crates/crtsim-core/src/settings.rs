@@ -347,6 +347,7 @@ pub static SETTINGS: &[Setting] = &[
         Numbers::slider(Bloom, access!(reflection), 0.0..=2.),
     ),
     Setting::other("reflection_as_screen", "Reflection as on the screen"),
+    Setting::other("faceted_glass", "Glass as the mesh's facets"),
     Setting::other("bloom_from_mipmaps", "Bloom from mipmaps"),
     Setting::numbers(
         "frame_color",

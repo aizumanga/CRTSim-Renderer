@@ -271,14 +271,30 @@ impl App {
                     numbers(ui, &mut self.config, defaults, Signal, &shown)
                 });
         }
-        section(ui, &shown, "Glass & mask", &[], &[Glass, Mask], |ui| {
-            numbers(ui, &mut self.config, defaults, Glass, &shown);
-            if shown.key("mask_repeats") {
-                ui.separator();
-                self.mask_density(ui);
-            }
-            numbers(ui, &mut self.config, defaults, Mask, &shown);
-        });
+        section(
+            ui,
+            &shown,
+            "Glass & mask",
+            &["faceted_glass"],
+            &[Glass, Mask],
+            |ui| {
+                numbers(ui, &mut self.config, defaults, Glass, &shown);
+                if shown.key("faceted_glass") {
+                    ui.checkbox(&mut self.config.faceted_glass, "Glass as the mesh's facets")
+                        .on_hover_text(
+                            "The glass as Super Win the Game's mesh draws it, each triangle flat \
+                         between corners on the curve, so the picture shifts a hair from facet \
+                         to facet, as the game's mask does. Off is the smooth curve the mesh was \
+                         cut from.",
+                        );
+                }
+                if shown.key("mask_repeats") {
+                    ui.separator();
+                    self.mask_density(ui);
+                }
+                numbers(ui, &mut self.config, defaults, Mask, &shown);
+            },
+        );
         let bloom = ["bloom_from_mipmaps", "reflection_as_screen"];
         section(ui, &shown, "Bloom & reflections", &bloom, &[Bloom], |ui| {
             numbers(ui, &mut self.config, defaults, Bloom, &shown);
@@ -412,9 +428,9 @@ impl App {
                     &mut self.config.tate,
                     &[
                         (Tate::Off, "Off"),
-                        (Tate::Quarter, "A quarter turn"),
+                        (Tate::Quarter, "A quarter turn left"),
                         (Tate::Half, "Upside down"),
-                        (Tate::ThreeQuarters, "Three quarters"),
+                        (Tate::ThreeQuarters, "A quarter turn right"),
                     ],
                 );
             }

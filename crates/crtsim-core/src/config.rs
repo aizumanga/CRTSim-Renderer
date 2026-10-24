@@ -38,8 +38,9 @@ pub enum Fxaa {
     Ultra,
 }
 
-/// Super Win the Game's tate: the finished picture turned in quarter turns, for a screen on its
-/// side. An odd number of quarters draws the tube across the output's height.
+/// Super Win the Game's tate: the finished picture turned in quarter turns counter-clockwise, for
+/// a screen on its side, as the game's Tate 1 to 3 turn it. An odd number of quarters draws the
+/// tube in an output of the other shape, a 4:3 tube fitted to its width, and turns that.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum Tate {
@@ -214,6 +215,10 @@ pub struct Config {
     /// Win the Game draws it. Off, as the public source draws it, the reflection takes the
     /// overscan unreciprocated and half the mask's rows.
     pub reflection_as_screen: bool,
+    /// The glass as Super Win the Game's mesh draws it, each triangle flat between corners on
+    /// the sphere, so the picture shifts a hair from facet to facet, as the game's mask does.
+    /// Off, the glass is the smooth sphere the mesh was cut from.
+    pub faceted_glass: bool,
     pub diffuse: f32,
     pub specular: f32,
     pub specular_power: f32,
@@ -244,8 +249,8 @@ pub struct Config {
     /// Super Win the Game's tate: the finished picture turned for a screen on its side.
     pub tate: Tate,
     /// The CRT off, as Super Win the Game draws without its CRT simulation: the picture flat,
-    /// pixel for pixel in its pixel aspect inside the output, over black, with no colour table,
-    /// glow or bloom; brightness, FXAA and tate still apply.
+    /// pixel for pixel in its pixel aspect fitted inside the output, whatever the overscan, over
+    /// black, with no colour table, glow or bloom; brightness, FXAA and tate still apply.
     pub crt_off: bool,
     /// A still of an alternating look ends on a tick showing both artifact patterns averaged,
     /// as Super Win the Game draws the frame it saves as a screenshot, after warm-up ticks that
@@ -294,6 +299,7 @@ impl Default for Config {
             ntsc_blending: 0.,
             flip_artifacts: false,
             reflection_as_screen: false,
+            faceted_glass: false,
             persistence: [0.7, 0.525, 0.42],
             glow_per_frame: false,
             glow_floor: false,
@@ -403,13 +409,15 @@ impl Config {
     /// it, with the artifact pattern as its Windows build draws it, the bezel reflecting the
     /// picture as the screen shows it, a grey backdrop past the bezel, the bloom read through
     /// the picture's mipmaps, the glow held at its 8-bit floor, as after the title screen, and
-    /// decaying once a frame, and stills drawn as its screenshots.
+    /// decaying once a frame, stills drawn as its screenshots, and the glass as its mesh's
+    /// facets.
     pub fn super_win_the_game() -> Self {
         Self {
             fov: 30.,
             phase: Phase::Alternating,
             ntsc_blending: 0.35,
             reflection_as_screen: true,
+            faceted_glass: true,
             // The game's engine draws a backdrop at 1/16 grey, seen past the bezel.
             backdrop_color: [0.0625; 3],
             bloom_from_mipmaps: true,
@@ -480,7 +488,8 @@ impl Config {
     pub fn sequence_shape(&self, input: (u32, u32)) -> Result<crate::Shape> {
         Ok(crate::Shape {
             signal: self.signal_size(input)?,
-            output: self.output_size(input)?,
+            // The CRT draws at the output's size, or for tate at the size it turns into it.
+            output: self.tate.turned(self.output_size(input)?),
             color_mode: self.color_mode,
         })
     }

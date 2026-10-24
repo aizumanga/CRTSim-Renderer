@@ -245,6 +245,14 @@ pub fn cases() -> Vec<Case> {
                 ..base()
             },
         ),
+        // The glass on its mesh's facets, as the game draws it.
+        still(
+            "faceted-glass",
+            Config {
+                faceted_glass: true,
+                ..base()
+            },
+        ),
         // TV static, half over the picture.
         still(
             "tv-static",
