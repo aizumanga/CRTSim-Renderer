@@ -10,7 +10,53 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
+  # What the pull request or push changed, so each job below runs only where a change can reach
+  # what it checks. A skipped job counts as passed. Anything that cannot be compared, such as a
+  # new branch, runs everything.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.paths.outputs.code }}
+      crates: ${{ steps.paths.outputs.crates }}
+      ports: ${{ steps.paths.outputs.ports }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: paths
+        shell: bash
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          everything() { printf 'code=true\ncrates=true\nports=true\n' >> "$GITHUB_OUTPUT"; exit 0; }
+          case "$BASE" in ''|0000000000000000000000000000000000000000) everything ;; esac
+          git fetch --quiet --depth=1 origin "$BASE" || everything
+          changed=$(git diff --name-only "$BASE" HEAD) || everything
+          echo "$changed"
+          # Whether any changed file matches the pattern.
+          any() { if grep -Eq "$1" <<< "$changed"; then echo true; else echo false; fi; }
+          # This workflow changing counts as everything.
+          [ "$(any '^\.github/workflows/phase0\.yml$')" = false ] || everything
+          # Code is anything but the documentation, the package managers' manifests and the
+          # other workflows.
+          if grep -Evq '^(docs/|Casks/|bucket/|[^/]+\.md$|LICENSE$|\.github/workflows/)' <<< "$changed"; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+          # The crates published on crates.io, and what they build with.
+          echo "crates=$(any '^(crates/crtsim-(core|bevy)/|Cargo\.(toml|lock)$)')" >> "$GITHUB_OUTPUT"
+          # What the shader ports are checked against: the renderer, the ports' translation and
+          # files, their harness, the command line that exports ReShade's, ReShade's compiler, and
+          # the crates they build with. A release moving only the workspace's own version is not
+          # a dependency changing: every other line of the manifests differs when one does.
+          ports=$(any '^(crates/crtsim-(core|shader-ports|ports|cli)/|ports/|tools/reshadefx/)')
+          manifests=$(git diff -U0 "$BASE" HEAD -- Cargo.toml Cargo.lock | grep -E '^[-+]' | grep -Ev '^(\+\+\+|---) ' || true)
+          if [ -n "$manifests" ] && grep -Evq '^[-+]version = "[0-9.]+"$' <<< "$manifests"; then
+            ports=true
+          fi
+          echo "ports=$ports" >> "$GITHUB_OUTPUT"
   build:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -41,13 +87,13 @@ jobs:
         run: cargo clippy --locked --target wasm32-unknown-unknown -p crtsim-core -p crtsim-shader-ports -p crtsim-app --no-deps -- -D warnings
       # A Bevy game in a browser draws with the plugin too.
       - name: The Bevy plugin compiles for the browser
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && needs.changes.outputs.crates == 'true'
         run: cargo clippy --locked --target wasm32-unknown-unknown -p crtsim-bevy --no-deps -- -D warnings
       # crtsim-core and crtsim-bevy are published on crates.io: each must package, and build
       # from its package alone, with nothing from outside its folder; the plugin builds on the
       # renderer's package.
       - name: crtsim-core and crtsim-bevy package for crates.io
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && needs.changes.outputs.crates == 'true'
         run: cargo package --locked -p crtsim-core -p crtsim-bevy
       - run: cargo run --locked -p crtsim-cli -- inspect-meshes
       - run: python tools/verify_assets.py
@@ -63,6 +109,8 @@ jobs:
           path: formatting.patch
   # The oldest Rust crtsim-core says it builds with, in its Cargo.toml.
   msrv:
+    needs: changes
+    if: needs.changes.outputs.crates == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -72,6 +120,8 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo check --locked -p crtsim-core
   vulkan:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     env:
       XDG_RUNTIME_DIR: /tmp
@@ -84,7 +134,7 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install software Vulkan driver
-        run: sudo apt-get update -qq && sudo apt-get install -y mesa-vulkan-drivers libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libegl1-mesa-dev libasound2-dev xvfb ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y mesa-vulkan-drivers libgl1-mesa-dri libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libegl1-mesa-dev libasound2-dev xvfb ffmpeg
       - run: cargo test --locked -p crtsim-core gpu_smoke -- --ignored --nocapture
       - name: GPU prepare step against the CPU implementation
         run: cargo test --locked -p crtsim-core gpu_prepare_matches_cpu_prepare -- --ignored --nocapture
@@ -96,6 +146,81 @@ jobs:
         run: cargo test --locked -p crtsim-service --test service -- --ignored --nocapture
       - name: Golden-image rendering regression
         run: cargo test --locked -p crtsim-core --test golden -- --ignored --nocapture
+      - name: Video history, FFmpeg and audio integration
+        run: |
+          cargo test --locked -p crtsim-core video_history -- --ignored --nocapture
+          cargo test --locked -p crtsim-core a_video_keeps_its_glow_at_a_new_output_size -- --ignored --nocapture
+          cargo test --locked -p crtsim-core interlaced_ticks_scan_alternate_fields -- --ignored --nocapture
+          cargo test --locked -p crtsim-core an_editing_sequence_follows_edits -- --ignored --nocapture
+          cargo test --locked -p crtsim-media --test video -- --ignored --nocapture --test-threads=1
+          cargo test --locked -p crtsim-app a_preview_finishes_while_an_export_is_still_running -- --ignored --nocapture
+          cargo test --locked -p crtsim-app interactive_previews_run_on_and_a_settled_one_is_a_still -- --ignored --nocapture
+          cargo test --locked -p crtsim-app a_video_plays_through_the_worker_to_its_end -- --ignored --nocapture
+          cargo test --locked -p crtsim-app edits_while_playing_reach_the_next_frames_without_stopping -- --ignored --nocapture
+          cargo test --locked -p crtsim-app a_contact_sheet_is_saved_with_a_tile_for_each_look -- --ignored --nocapture
+      - name: Render resolution and phase fixtures
+        shell: bash
+        run: |
+          mkdir -p output
+          cargo run --locked -p crtsim-cli -- render -o output/reference.png --debug-dir output/debug --backend vulkan
+          cargo run --locked -p crtsim-cli -- render -o output/720p.png --size 720p --backend vulkan
+          cargo run --locked -p crtsim-cli -- render -o output/1080p.png --size 1080p --backend vulkan
+          cargo run --locked -p crtsim-cli -- render -o output/4k.png --size 4k --backend vulkan
+          cargo run --locked -p crtsim-cli -- render -o output/phase-a.png --phase a --backend vulkan
+          cargo run --locked -p crtsim-cli -- render -o output/phase-b.png --phase b --backend vulkan
+          cargo run --locked -p crtsim-cli -- config --general -o output/general.json
+          cargo run --locked -p crtsim-cli -- render -i output/4k.png --config output/general.json -o output/auto.png --debug-dir output/auto-debug --backend vulkan
+          cargo run --locked -p crtsim-cli -- render -o output/ntsc-240p.png --preset "NTSC 240p" --backend vulkan
+          cargo run --locked -p crtsim-cli -- contact-sheet -o output/contact-sheet.png --backend vulkan
+          # The video integration tests leave their input here.
+          cargo run --locked -p crtsim-cli -- render -i output/video-input.mkv -o output/cli-video.mp4 --size 320x240 --backend vulkan
+          cargo run --locked -p crtsim-cli -- render -i output/video-input.mkv -o output/cli-lossless.mkv --size 320x240 --quality lossless --backend vulkan
+          cargo run --locked -p crtsim-cli -- render -i output/video-input.mkv -o output/cli-animation.png --max-side 320 --backend vulkan
+      - name: Launch desktop and capture rendered preview
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          WINIT_UNIX_BACKEND: x11
+        run: |
+          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-app -- --backend vulkan --smoke-test output/desktop.png
+          mkdir -p "$CRTSIM_DATA_DIR"
+          echo 'sky-diary' > "$CRTSIM_DATA_DIR/theme-v1.txt"
+          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-app -- --smoke-test output/welcome.png --smoke-welcome
+          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-app -- --backend vulkan --smoke-test output/first-look.png --smoke-first-look
+          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-app -- --backend vulkan --smoke-test output/phone.png --smoke-size 390x844
+          mkdir -p "$CRTSIM_DATA_DIR/presets"
+          cp output/general.json "$CRTSIM_DATA_DIR/presets/Animation CRT.json"
+          echo 'A personal description for animation, with a soft mask and gentle bloom.' > "$CRTSIM_DATA_DIR/presets/Animation CRT.txt"
+          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-app -- --backend vulkan --smoke-test output/gallery.png --smoke-gallery
+          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-app -- --backend vulkan --smoke-test output/lut-gallery.png --smoke-lut-gallery
+          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-app -- output/video-input.mkv --backend vulkan --smoke-test output/video-desktop.png
+          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-app -- output/video-input.mkv --backend vulkan --smoke-test output/video-export-window.png --smoke-export
+          ffmpeg -v error -f lavfi -i testsrc2=size=160x120:rate=10 -t 1 -c:v gif -loop 0 output/animation-input.gif
+          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-app -- output/animation-input.gif --backend vulkan --smoke-test output/animation-desktop.png
+      - uses: actions/upload-artifact@v4
+        # Runs on failure too: a golden mismatch writes its rendered and diff images here.
+        if: always()
+        with:
+          name: renderer-fixtures
+          path: output/
+          retention-days: 14
+  # The shader ports against the renderer, in each host itself: the longest checks, which only a
+  # change to the renderer, the ports or their tools can affect. Beside the Vulkan job, not
+  # after it.
+  ports:
+    needs: changes
+    if: needs.changes.outputs.ports == 'true'
+    runs-on: ubuntu-latest
+    env:
+      XDG_RUNTIME_DIR: /tmp
+      CRTSIM_TEST_OUTPUT: ${{ github.workspace }}/output
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install software Vulkan driver
+        run: sudo apt-get update -qq && sudo apt-get install -y mesa-vulkan-drivers libxkbcommon-x11-0 xvfb
       - name: RetroArch port against the renderer, through librashader
         run: |
           cargo clippy --locked -p crtsim-ports --all-targets -- -D warnings
@@ -154,60 +279,11 @@ jobs:
         run: |
           sudo apt-get install -y vkbasalt
           xvfb-run -a cargo test --locked -p crtsim-ports --test reshade_vkbasalt -- --ignored --nocapture
-      - name: Video history, FFmpeg and audio integration
-        run: |
-          cargo test --locked -p crtsim-core video_history -- --ignored --nocapture
-          cargo test --locked -p crtsim-core a_video_keeps_its_glow_at_a_new_output_size -- --ignored --nocapture
-          cargo test --locked -p crtsim-core interlaced_ticks_scan_alternate_fields -- --ignored --nocapture
-          cargo test --locked -p crtsim-core an_editing_sequence_follows_edits -- --ignored --nocapture
-          cargo test --locked -p crtsim-media --test video -- --ignored --nocapture --test-threads=1
-          cargo test --locked -p crtsim-app a_preview_finishes_while_an_export_is_still_running -- --ignored --nocapture
-          cargo test --locked -p crtsim-app interactive_previews_run_on_and_a_settled_one_is_a_still -- --ignored --nocapture
-          cargo test --locked -p crtsim-app a_video_plays_through_the_worker_to_its_end -- --ignored --nocapture
-          cargo test --locked -p crtsim-app edits_while_playing_reach_the_next_frames_without_stopping -- --ignored --nocapture
-          cargo test --locked -p crtsim-app a_contact_sheet_is_saved_with_a_tile_for_each_look -- --ignored --nocapture
-      - name: Render resolution and phase fixtures
-        shell: bash
-        run: |
-          mkdir -p output
-          cargo run --locked -p crtsim-cli -- render -o output/reference.png --debug-dir output/debug --backend vulkan
-          cargo run --locked -p crtsim-cli -- render -o output/720p.png --size 720p --backend vulkan
-          cargo run --locked -p crtsim-cli -- render -o output/1080p.png --size 1080p --backend vulkan
-          cargo run --locked -p crtsim-cli -- render -o output/4k.png --size 4k --backend vulkan
-          cargo run --locked -p crtsim-cli -- render -o output/phase-a.png --phase a --backend vulkan
-          cargo run --locked -p crtsim-cli -- render -o output/phase-b.png --phase b --backend vulkan
-          cargo run --locked -p crtsim-cli -- config --general -o output/general.json
-          cargo run --locked -p crtsim-cli -- render -i output/4k.png --config output/general.json -o output/auto.png --debug-dir output/auto-debug --backend vulkan
-          cargo run --locked -p crtsim-cli -- render -o output/ntsc-240p.png --preset "NTSC 240p" --backend vulkan
-          cargo run --locked -p crtsim-cli -- contact-sheet -o output/contact-sheet.png --backend vulkan
-          # The video integration tests leave their input here.
-          cargo run --locked -p crtsim-cli -- render -i output/video-input.mkv -o output/cli-video.mp4 --size 320x240 --backend vulkan
-          cargo run --locked -p crtsim-cli -- render -i output/video-input.mkv -o output/cli-lossless.mkv --size 320x240 --quality lossless --backend vulkan
-          cargo run --locked -p crtsim-cli -- render -i output/video-input.mkv -o output/cli-animation.png --max-side 320 --backend vulkan
-      - name: Launch desktop and capture rendered preview
-        env:
-          LIBGL_ALWAYS_SOFTWARE: '1'
-          WINIT_UNIX_BACKEND: x11
-        run: |
-          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-app -- --backend vulkan --smoke-test output/desktop.png
-          mkdir -p "$CRTSIM_DATA_DIR"
-          echo 'sky-diary' > "$CRTSIM_DATA_DIR/theme-v1.txt"
-          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-app -- --smoke-test output/welcome.png --smoke-welcome
-          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-app -- --backend vulkan --smoke-test output/first-look.png --smoke-first-look
-          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-app -- --backend vulkan --smoke-test output/phone.png --smoke-size 390x844
-          mkdir -p "$CRTSIM_DATA_DIR/presets"
-          cp output/general.json "$CRTSIM_DATA_DIR/presets/Animation CRT.json"
-          echo 'A personal description for animation, with a soft mask and gentle bloom.' > "$CRTSIM_DATA_DIR/presets/Animation CRT.txt"
-          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-app -- --backend vulkan --smoke-test output/gallery.png --smoke-gallery
-          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-app -- --backend vulkan --smoke-test output/lut-gallery.png --smoke-lut-gallery
-          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-app -- output/video-input.mkv --backend vulkan --smoke-test output/video-desktop.png
-          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-app -- output/video-input.mkv --backend vulkan --smoke-test output/video-export-window.png --smoke-export
-          ffmpeg -v error -f lavfi -i testsrc2=size=160x120:rate=10 -t 1 -c:v gif -loop 0 output/animation-input.gif
-          xvfb-run -a -s '-screen 0 1440x1000x24' cargo run --locked -p crtsim-app -- output/animation-input.gif --backend vulkan --smoke-test output/animation-desktop.png
       - uses: actions/upload-artifact@v4
-        # Runs on failure too: a golden mismatch writes its rendered and diff images here.
+        # Runs on failure too: a mismatch writes its rendered and diff images here.
         if: always()
         with:
-          name: renderer-fixtures
+          name: port-fixtures
           path: output/
           retention-days: 14
+          if-no-files-found: ignore
