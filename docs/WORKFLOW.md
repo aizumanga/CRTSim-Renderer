@@ -29,8 +29,9 @@ a sweep on reset), buttons, channels and sections, and power-on, presets and fin
 at a button ticks very quietly, with Full effects only. The audio output opens the first time a sound
 plays; if there is none, View → Interface sounds says why and the app stays silent until sounds are
 turned off and on again. Browsers let a page play nothing before your first click, touch or key
-press, so with sounds on the web app opens with its screen dark, asking to be switched on; that first
-click, touch or key press switches it on, with its sound. On Linux, sounds go to PulseAudio's server, which PipeWire serves too, or else
+press, so with sounds on the web app starts as a computer does, at its power button: pressing it boots
+the interface, offering to restore the last session if there is one, and the screen switches on with
+its sound. On Linux, sounds go to PulseAudio's server, which PipeWire serves too, or else
 to ALSA. Building from source on Linux needs ALSA's development package (Debian/Ubuntu:
 `libasound2-dev`).
 

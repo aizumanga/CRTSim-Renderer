@@ -1,8 +1,6 @@
 //! The preview's screen behaving as a set's: switching on when new media first shows, and a
 //! burst of static when the channel or the preset changes. Drawn over the picture on screen only,
-//! never into what is exported, and only with the interface's effects full. A browser plays no
-//! sound before the person's first click, so the web app's screen waits dark for it, asking to be
-//! switched on, and switches on with its sound then.
+//! never into what is exported, and only with the interface's effects full.
 use crate::{interface, sound};
 use eframe::egui::{self, Color32, Rect};
 use web_time::Instant;
@@ -16,8 +14,6 @@ const STATIC: f32 = 0.16;
 pub struct Screen {
     /// Whether new media is waiting for its first picture, to switch on for it.
     armed: bool,
-    /// Whether the screen waits dark for the person's first click, touch or key press.
-    standby: bool,
     /// When the screen switched on, while it still is.
     powered: Option<Instant>,
     /// When the static began, while it lasts.
@@ -29,19 +25,6 @@ impl Screen {
     /// New media opened: switch on when its first picture shows.
     pub fn new_media(&mut self) {
         self.armed = true;
-    }
-
-    /// Waits dark, asking to be switched on, until [`wake`](Self::wake).
-    pub fn stand_by(&mut self) {
-        self.standby = true;
-    }
-
-    /// The person clicked, touched or pressed a key: a screen standing by switches on.
-    pub fn wake(&mut self, ctx: &egui::Context) {
-        if std::mem::take(&mut self.standby) {
-            self.armed = true;
-            ctx.request_repaint();
-        }
     }
 
     /// Whether the screen is switching on or flickering.
@@ -60,14 +43,6 @@ impl Screen {
     /// Draws what the screen is doing over the picture, shown at `picture`.
     pub fn paint(&mut self, ui: &egui::Ui, picture: Rect) {
         let ctx = ui.ctx();
-        if self.standby {
-            let blinks = interface::effects(ctx).screen();
-            standby(ui, picture, blinks);
-            if blinks {
-                ctx.request_repaint_after(web_time::Duration::from_millis(250));
-            }
-            return;
-        }
         if std::mem::take(&mut self.armed) {
             sound::cue(ctx, sound::Sound::PowerOn);
             if interface::effects(ctx).screen() {
@@ -87,40 +62,6 @@ impl Screen {
             ctx.request_repaint();
         }
     }
-}
-
-/// The screen dark, with a line across it asking to be switched on, blinking as a game's title
-/// screen does when `blinks`.
-fn standby(ui: &egui::Ui, picture: Rect, blinks: bool) {
-    let painter = ui
-        .painter()
-        .with_clip_rect(picture.intersect(ui.clip_rect()));
-    painter.rect_filled(picture, 0., Color32::from_rgb(6, 8, 10));
-    let seconds = ui.input(|i| i.time);
-    let shown = !blinks || seconds.fract() < 0.65;
-    let size = (picture.height() * 0.06).clamp(14., 30.);
-    if shown {
-        painter.text(
-            picture.center(),
-            egui::Align2::CENTER_CENTER,
-            "CLICK TO SWITCH ON",
-            egui::FontId::monospace(size),
-            Color32::from_rgb(214, 238, 222),
-        );
-    }
-    painter.text(
-        picture.center() + egui::vec2(0., size * 1.6),
-        egui::Align2::CENTER_CENTER,
-        "Sounds can be turned off at the top of the settings",
-        egui::FontId::proportional((size * 0.5).max(11.)),
-        Color32::from_gray(120),
-    );
-    // The set's standby lamp, in the corner of the glass.
-    painter.circle_filled(
-        picture.right_bottom() - egui::vec2(16., 16.),
-        4.,
-        Color32::from_rgb(235, 72, 64),
-    );
 }
 
 /// How far through an effect begun at `start` and lasting `length` seconds it is, from 0 to 1,
@@ -230,30 +171,6 @@ mod tests {
         assert!(start.is_none());
         let mut start = Some(Instant::now());
         assert!(elapsed(&mut start, 10.).is_some_and(|t| t < 0.1));
-    }
-
-    #[test]
-    fn a_screen_standing_by_switches_on_only_when_woken() {
-        let ctx = egui::Context::default();
-        let mut screen = Screen::default();
-        screen.stand_by();
-        screen.new_media();
-        let frame = |screen: &mut Screen| {
-            let mut heard = vec![];
-            let mut output = ctx.run_ui(Default::default(), |ui| {
-                screen.paint(ui, ui.max_rect());
-                heard = sound::take(ui.ctx());
-            });
-            output.textures_delta.clear();
-            heard
-        };
-        assert_eq!(frame(&mut screen), vec![], "dark until woken");
-        assert_eq!(frame(&mut screen), vec![]);
-        screen.wake(&ctx);
-        assert_eq!(frame(&mut screen), vec![sound::Sound::PowerOn]);
-        // Woken again, by the next click, it does not switch on again.
-        screen.wake(&ctx);
-        assert_eq!(frame(&mut screen), vec![]);
     }
 
     #[test]

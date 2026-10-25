@@ -4,10 +4,11 @@
 
 - **Sounds in the web app.** Since 1.8.1 started sounds on, the web app opened its audio as the
   page loaded, which a browser keeps suspended until the person's first click, so it stayed
-  silent. With sounds on, its screen now opens dark, asking to be switched on, as a game's title
-  screen asks to start; the first click, touch or key press switches it on, with its power-on
-  sound, and opens the audio then. Each sound also resumes audio the browser suspended, as when
-  the page was hidden. The desktop switches on as the app starts, as before.
+  silent. With sounds on, the web app now starts as a computer does, at its power button; pressing
+  it, by a click, a touch, Enter or Space, boots the interface, with the offer to restore the last
+  session if there is one, and the screen switches on with its power-on sound. Audio opens with
+  the first click, touch or key press, and each sound resumes audio the browser suspended, as
+  when the page was hidden. With sounds off, and on the desktop, the app starts as before.
 
 ## v1.8.1
 
