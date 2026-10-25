@@ -55,7 +55,7 @@ fn display_luma(c: vec3<f32>) -> f32 {
 // TV static, this renderer's own: white noise drawn anew each sixtieth of a second, squared, rolling under a
 // darker band, over the picture wavering across and slipping down as the static thickens.
 fn static_hash(x: u32, y: u32, tick: u32) -> f32 {
-    var h=x*0x8da6b343u ^ y*0xd8163841u ^ tick*0xcb1ab31fu;
+    var h=(x*0x8da6b343u) ^ (y*0xd8163841u) ^ (tick*0xcb1ab31fu);
     h=(h ^ (h >> 16u))*0x7feb352du;
     h=(h ^ (h >> 15u))*0x846ca68bu;
     return f32(h ^ (h >> 16u))/4294967295.;

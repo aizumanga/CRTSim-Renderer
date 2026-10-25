@@ -1,5 +1,11 @@
 # Portable releases (Phase 4)
 
+## v1.8.3
+
+- **Web app on strict WebGPU.** The shader's noise hash mixed `*` and `^` without parentheses,
+  which Chrome's WebGPU rejects ("mixing '*' and '^' requires parenthesis"), so the screen failed
+  to start there. The hash is parenthesized; what is rendered is unchanged.
+
 ## v1.8.2
 
 - **Sounds in the web app.** Since 1.8.1 started sounds on, the web app opened its audio as the

@@ -2263,7 +2263,7 @@ checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
 
 [[package]]
 name = "crtsim-app"
-version = "1.8.2"
+version = "1.8.3"
 dependencies = [
  "anyhow",
  "cpal",
@@ -2292,7 +2292,7 @@ dependencies = [
 
 [[package]]
 name = "crtsim-bevy"
-version = "1.8.2"
+version = "1.8.3"
 dependencies = [
  "anyhow",
  "bevy",
@@ -2306,7 +2306,7 @@ dependencies = [
 
 [[package]]
 name = "crtsim-cli"
-version = "1.8.2"
+version = "1.8.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -2321,7 +2321,7 @@ dependencies = [
 
 [[package]]
 name = "crtsim-core"
-version = "1.8.2"
+version = "1.8.3"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -2341,7 +2341,7 @@ dependencies = [
 
 [[package]]
 name = "crtsim-frei0r"
-version = "1.8.2"
+version = "1.8.3"
 dependencies = [
  "anyhow",
  "crtsim-plugin",
@@ -2350,7 +2350,7 @@ dependencies = [
 
 [[package]]
 name = "crtsim-media"
-version = "1.8.2"
+version = "1.8.3"
 dependencies = [
  "anyhow",
  "crc32fast",
@@ -2370,7 +2370,7 @@ dependencies = [
 
 [[package]]
 name = "crtsim-ofx"
-version = "1.8.2"
+version = "1.8.3"
 dependencies = [
  "anyhow",
  "crtsim-plugin",
@@ -2379,7 +2379,7 @@ dependencies = [
 
 [[package]]
 name = "crtsim-plugin"
-version = "1.8.2"
+version = "1.8.3"
 dependencies = [
  "anyhow",
  "crtsim-core",
@@ -2391,7 +2391,7 @@ dependencies = [
 
 [[package]]
 name = "crtsim-ports"
-version = "1.8.2"
+version = "1.8.3"
 dependencies = [
  "anyhow",
  "crtsim-core",
@@ -2405,7 +2405,7 @@ dependencies = [
 
 [[package]]
 name = "crtsim-service"
-version = "1.8.2"
+version = "1.8.3"
 dependencies = [
  "anyhow",
  "base64",
@@ -2424,7 +2424,7 @@ dependencies = [
 
 [[package]]
 name = "crtsim-shader-ports"
-version = "1.8.2"
+version = "1.8.3"
 dependencies = [
  "anyhow",
  "crtsim-core",
