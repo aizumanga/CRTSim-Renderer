@@ -28,8 +28,9 @@ groups you hear: meters and switches (a tick for each cell, a click at the defau
 a sweep on reset), buttons, channels and sections, and power-on, presets and finished exports. Pointing
 at a button ticks very quietly, with Full effects only. The audio output opens the first time a sound
 plays; if there is none, View → Interface sounds says why and the app stays silent until sounds are
-turned off and on again. In the web app, sounds begin with your first click, touch or key press, as
-browsers let a page play nothing before one. On Linux, sounds go to PulseAudio's server, which PipeWire serves too, or else
+turned off and on again. Browsers let a page play nothing before your first click, touch or key
+press, so with sounds on the web app opens with its screen dark, asking to be switched on; that first
+click, touch or key press switches it on, with its sound. On Linux, sounds go to PulseAudio's server, which PipeWire serves too, or else
 to ALSA. Building from source on Linux needs ALSA's development package (Debian/Ubuntu:
 `libasound2-dev`).
 

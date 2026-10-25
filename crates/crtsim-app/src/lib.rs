@@ -335,8 +335,12 @@ impl App {
             app.notices.failed(Topic::AppData, error);
         }
         app.source.profiles = app.colors.profiles;
-        // The screen switches on for the first picture, as a set does when the app starts.
+        // The screen switches on for the first picture, as a set does when the app starts. A
+        // browser plays no sound before the first click, so there the screen waits for it.
         app.screen.new_media();
+        if cfg!(target_arch = "wasm32") && app.interface.sounds.on {
+            app.screen.stand_by();
+        }
         app.ffmpeg.start_check(ctx);
         #[cfg(not(target_arch = "wasm32"))]
         app.check_for_updates_at_start(ctx);
@@ -790,6 +794,7 @@ impl eframe::App for App {
         });
         if gesture {
             self.speaker.woken();
+            self.screen.wake(ctx);
         }
         // A smoke run's screenshot needs no sound, and CI has no audio output to play it on.
         if self.smoke.is_none() {
