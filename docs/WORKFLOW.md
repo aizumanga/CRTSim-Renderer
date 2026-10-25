@@ -1,7 +1,7 @@
 # v0.2 workflow
 
 The toolbar groups commands under **File**, **Presets**, **View**, **Export** and **Help**, which holds the credits and, on the desktop, the update check.
-File contains media and project commands; Presets contains the gallery and imports; View contains interface themes, effects and sounds.
+File contains media and project commands; Presets contains the gallery and imports; View contains interface themes and sounds.
 Export contains PNG, video and batch queue commands.
 
 The workbench uses beveled control groups, a shaded menu bar, a native monitor icon and a colored status lamp.
@@ -16,19 +16,21 @@ mark at the default. Dragging, the arrow keys, Delete and typed numbers work as 
 switch with sliding switches whose lamp lights while on, and a section's lamp lights while any setting
 in it differs from the preset. **Original / CRT / Compare** is a channel selector.
 
-**View → Interface effects** chooses how much the interface moves. **Full** eases the meters and
-switches, and the preview's screen switches on like a set's when new media first shows and flickers
-with static when the channel or the preset changes; **Reduced** keeps the meters and switches moving
-but the screen still; **Off** moves nothing that need not. The web app starts at Reduced. The screen's
+**Effects**, first in the settings panel, chooses how much the interface moves. **Full**, the
+default, eases the meters and switches, and the preview's screen switches on like a set's when new
+media first shows and flickers with static when the channel or the preset changes; **Reduced** keeps
+the meters and switches moving but the screen still; **Off** moves nothing that need not. The screen's
 effects are drawn over the preview only, never into exports.
 
-**View → Interface sounds** turns on short sounds the app makes itself: no audio files are shipped.
-They are off until you turn them on. Choose the volume and which groups you hear: meters and switches
-(a tick for each cell, a click at the default, a thud at the ends, a sweep on reset), buttons, channels
-and sections, and power-on, presets and finished exports. Pointing at a button ticks very quietly, with
-Full effects only. The audio output opens the first time a sound plays; if there is none, the status
-area says so once and the app stays silent. Building from source on Linux needs ALSA's development
-package (Debian/Ubuntu: `libasound2-dev`).
+The interface makes short sounds of its own: no audio files are shipped. They are on until you turn
+them off with **Sounds**, beside Effects. **View → Interface sounds** chooses the volume and which
+groups you hear: meters and switches (a tick for each cell, a click at the default, a thud at the ends,
+a sweep on reset), buttons, channels and sections, and power-on, presets and finished exports. Pointing
+at a button ticks very quietly, with Full effects only. The audio output opens the first time a sound
+plays; if there is none, View → Interface sounds says why and the app stays silent until sounds are
+turned off and on again. On Linux, sounds go to PulseAudio's server, which PipeWire serves too, or else
+to ALSA. Building from source on Linux needs ALSA's development package (Debian/Ubuntu:
+`libasound2-dev`).
 
 ## Edit and compare
 

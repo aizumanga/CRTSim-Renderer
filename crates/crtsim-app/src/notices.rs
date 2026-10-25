@@ -21,8 +21,6 @@ pub enum Topic {
     AppData,
     /// The renderer's thread.
     Renderer,
-    /// The interface's sounds, and the audio output they play through.
-    Sounds,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

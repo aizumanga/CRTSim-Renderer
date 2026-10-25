@@ -45,6 +45,12 @@ rfd = "0.14.1"
 # certificates the system trusts. A browser page is the latest release already.
 ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
 
+# On Linux, sounds go to PulseAudio's server, which PipeWire serves too, before ALSA, whose
+# default device does not reach PipeWire without its ALSA plugin. The protocol is spoken in
+# Rust, so no PulseAudio library is needed.
+[target.'cfg(target_os = "linux")'.dependencies]
+cpal = { version = "0.18", features = ["pulseaudio"] }
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Plays the interface's sounds through the page's Web Audio.
 cpal = { version = "0.18", features = ["wasm-bindgen"] }
