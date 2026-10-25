@@ -2,7 +2,7 @@
   "name": "crtsim-renderer",
   "displayName": "CRTSim Renderer",
   "description": "Draws a sprite's frame or animation through a CRT simulation, with CRTSim Renderer's crtsim command line.",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "author": {
     "name": "aizumanga",
     "url": "https://github.com/aizumanga/CRTSim-Renderer"

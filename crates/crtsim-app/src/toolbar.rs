@@ -254,16 +254,10 @@ impl App {
 }
 
 impl App {
-    /// The View menu's choice of how much the interface moves and which sounds it makes.
+    /// The View menu's choice of which sounds the interface makes, and how loud.
     fn interface_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let before = self.interface;
-        ui.label("Interface effects");
-        for effects in interface::Effects::ALL {
-            ui.radio_value(&mut self.interface.effects, effects, effects.name())
-                .on_hover_text(effects.description());
-        }
-        ui.separator();
-        let sounds = &mut self.interface.sounds;
+        let mut interface = self.interface;
+        let sounds = &mut interface.sounds;
         ui.checkbox(&mut sounds.on, "Interface sounds")
             .on_hover_text(
                 "Short clicks and tones as you use the controls, which the app makes itself. \
@@ -277,9 +271,23 @@ impl App {
                 ui.checkbox(sounds.group_mut(group), group.name());
             }
         });
-        if self.interface != before {
-            self.interface.apply(ctx);
+        if let Some(why) = self.speaker.failure().filter(|_| sounds.on) {
+            ui.colored_label(ui.visuals().warn_fg_color, format!("No sound: {why}"));
         }
+        self.set_interface(interface, ctx);
+    }
+
+    /// Makes `interface` how the interface behaves, if it changed. Sounds turned back on try the
+    /// audio output again, which may have come back since it failed.
+    pub(crate) fn set_interface(&mut self, interface: interface::Interface, ctx: &egui::Context) {
+        if interface == self.interface {
+            return;
+        }
+        if interface.sounds.on && !self.interface.sounds.on {
+            self.speaker.retry();
+        }
+        self.interface = interface;
+        interface.apply(ctx);
     }
 
     /// Remembers the interface's effects and sounds once they have changed and nothing is held,

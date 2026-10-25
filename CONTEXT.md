@@ -203,14 +203,15 @@ number box and screen readers; the meter is drawn over its rail.
 (`crates/crtsim-app/src/interface.rs`). Meters ease and switches slide unless Off; only Full
 switches the preview's **screen** on for new media and flickers it with static when the channel
 or the preset changes (`crates/crtsim-app/src/screen.rs`), drawn over the picture on screen and
-never into an export. A browser page starts at Reduced.
+never into an export. Chosen first in the settings panel; Full until a person chooses otherwise.
 
-**Interface sounds**: short tones and noise the app makes itself as the controls are used, off
-until a person turns them on, in three groups that can each be turned off: meters and switches,
+**Interface sounds**: short tones and noise the app makes itself as the controls are used, on
+until a person turns them off, in three groups that can each be turned off: meters and switches,
 buttons, channels and sections, and power-on, presets and finished exports
 (`crates/crtsim-app/src/sound.rs`). A widget **cues** a sound through egui's context; a click no
 widget cued one for is heard as what egui says was clicked. The audio output opens the first
-time a sound is heard.
+time a sound is heard, with short periods so a click is heard as it is made: on Linux, PulseAudio's
+server, which PipeWire serves too, before ALSA. A stream that stops is opened again.
 
 **FFmpeg setup**: whether the FFmpeg programs video work needs start, which export formats
 they can write, and how to install them (`crates/crtsim-app/src/ffmpeg_setup.rs`). The

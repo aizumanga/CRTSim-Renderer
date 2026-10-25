@@ -1,5 +1,17 @@
 # Portable releases (Phase 4)
 
+## v1.8.1
+
+- **Effects** moves to the top of the settings panel, where it can be turned down on a first look,
+  with a **Sounds** switch beside it. Full is the default, in the web app too. View → Interface
+  sounds keeps the volume and which sounds play.
+- Interface sounds are on until turned off.
+- **Sounds on Linux.** Sounds go to PulseAudio's server, which PipeWire serves too, before ALSA,
+  whose default device does not reach PipeWire without its ALSA plugin. The audio output is asked
+  for short periods, so a click is heard as it is made rather than up to a second later, and a
+  stream that stops, as when its device goes away, is opened again. When there is no audio output,
+  View → Interface sounds says why instead of an error in the status area.
+
 ## v1.8.0
 
 The interface plays more like a game's: its controls look and feel like a set's, and it can make

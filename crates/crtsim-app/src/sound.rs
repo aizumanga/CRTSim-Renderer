@@ -4,7 +4,10 @@
 //! hands them to its [`Speaker`], which plays those the person chose to hear.
 use crate::interface::Sounds;
 use eframe::egui;
-use std::sync::mpsc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    mpsc, Arc,
+};
 use web_time::{Duration, Instant};
 
 /// A sound the interface makes.
@@ -233,47 +236,62 @@ fn clicked(info: &egui::WidgetInfo) -> Option<Sound> {
 }
 
 /// Plays sounds through the computer's or the browser's audio output, opened the first time
-/// one is heard, so a person who never turns sounds on never has one opened.
+/// one is heard, so a person who turns sounds off never has one opened.
 #[derive(Default)]
 pub struct Speaker {
     output: Option<Output>,
-    /// Why the output could not be opened; then no sound is tried again.
-    failed: Option<String>,
+    /// Why the output could not be opened; then no sound is tried again until asked.
+    failure: Option<String>,
     /// When each spaced sound last played.
     last: Vec<(std::mem::Discriminant<Sound>, Instant)>,
 }
 
 struct Output {
-    _stream: cpal::Stream,
+    stream: cpal::Stream,
     voices: mpsc::Sender<Vec<Voice>>,
+    /// Set from the audio thread when the stream stops for good, as when its device goes away.
+    broken: Arc<AtomicBool>,
 }
 
 impl Speaker {
-    /// Plays those of `sounds` that `settings` hears. The first time the audio output cannot be
-    /// opened, says why; after that, stays silent.
-    pub fn play(&mut self, sounds: &[Sound], settings: &Sounds) -> Option<String> {
+    /// Plays those of `sounds` that `settings` hears.
+    pub fn play(&mut self, sounds: &[Sound], settings: &Sounds) {
         let voices = self.heard(sounds, settings, Instant::now());
-        if voices.is_empty() || self.failed.is_some() {
-            return None;
+        if voices.is_empty() || self.failure.is_some() {
+            return;
+        }
+        // A stream that stopped, as when its device went away, is opened again.
+        if self
+            .output
+            .as_ref()
+            .is_some_and(|output| output.broken.load(Ordering::Relaxed))
+        {
+            self.output = None;
         }
         if self.output.is_none() {
             match Output::open() {
                 Ok(output) => self.output = Some(output),
                 Err(e) => {
-                    let message = format!("Interface sounds are unavailable: {e:#}");
-                    self.failed = Some(message.clone());
-                    return Some(message);
+                    self.failure = Some(format!("{e:#}"));
+                    return;
                 }
             }
         }
-        // The stream ending, as when its device goes away, leaves nothing to play to; the next
-        // sound opens the output again.
         if let Some(output) = &self.output {
             if output.voices.send(voices).is_err() {
                 self.output = None;
             }
         }
-        None
+    }
+
+    /// Why no sound plays, if the audio output could not be opened.
+    pub fn failure(&self) -> Option<&str> {
+        self.failure.as_deref()
+    }
+
+    /// Tries the audio output again with the next sound, as when sounds are turned back on.
+    pub fn retry(&mut self) {
+        self.failure = None;
     }
 
     /// The voices of those of `sounds` that `settings` hears, at their volume, leaving out any
@@ -297,43 +315,94 @@ impl Speaker {
 }
 
 impl Output {
+    /// The default output of the first sound system that has one: on Linux, PulseAudio's server,
+    /// which PipeWire serves too, before ALSA, whose default device may not reach PipeWire.
     fn open() -> anyhow::Result<Self> {
+        let default = cpal::default_host().id();
+        let mut ids = cpal::available_hosts();
+        ids.sort_by_key(|id| *id != default);
+        let mut first_error = None;
+        for id in ids {
+            match cpal::host_from_id(id)
+                .map_err(anyhow::Error::from)
+                .and_then(|host| Self::open_on(&host))
+            {
+                Ok(output) => return Ok(output),
+                Err(e) => {
+                    first_error.get_or_insert(e.context(id.name()));
+                }
+            }
+        }
+        Err(first_error.unwrap_or_else(|| anyhow::anyhow!("no sound system was found")))
+    }
+
+    fn open_on(host: &cpal::Host) -> anyhow::Result<Self> {
         use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-        let device = cpal::default_host()
+        let device = host
             .default_output_device()
             .ok_or_else(|| anyhow::anyhow!("no audio output was found"))?;
         let supported = device.default_output_config()?;
         let config = supported.config();
+        // Short periods, so a click is heard as it is made: some systems' own default buffers
+        // hold a second or more. A system that refuses them keeps its own.
+        let short = match *supported.buffer_size() {
+            cpal::SupportedBufferSize::Range { min, max } => Some(cpal::StreamConfig {
+                buffer_size: cpal::BufferSize::Fixed(
+                    ((config.sample_rate as f32 * PERIOD) as u32).clamp(min, max),
+                ),
+                ..config
+            }),
+            cpal::SupportedBufferSize::Unknown => None,
+        };
+        let output = match short.map(|short| Self::start(&device, supported.sample_format(), short))
+        {
+            Some(Ok(output)) => output,
+            Some(Err(_)) | None => Self::start(&device, supported.sample_format(), config)?,
+        };
+        output.stream.play()?;
+        Ok(output)
+    }
+
+    /// A stream to `device` in `config`, not yet playing.
+    fn start(
+        device: &cpal::Device,
+        format: cpal::SampleFormat,
+        config: cpal::StreamConfig,
+    ) -> anyhow::Result<Self> {
         let (send, receive) = mpsc::channel();
         let mixer = Mixer::new(config.sample_rate as f32, receive);
         let channels = usize::from(config.channels.max(1));
-        let stream = match supported.sample_format() {
-            cpal::SampleFormat::F32 => stream::<f32>(&device, config, mixer, channels),
-            cpal::SampleFormat::I16 => stream::<i16>(&device, config, mixer, channels),
-            cpal::SampleFormat::U16 => stream::<u16>(&device, config, mixer, channels),
-            cpal::SampleFormat::I32 => stream::<i32>(&device, config, mixer, channels),
+        let broken = Arc::new(AtomicBool::new(false));
+        let stream = match format {
+            cpal::SampleFormat::F32 => stream::<f32>(device, config, mixer, channels, &broken),
+            cpal::SampleFormat::I16 => stream::<i16>(device, config, mixer, channels, &broken),
+            cpal::SampleFormat::U16 => stream::<u16>(device, config, mixer, channels, &broken),
+            cpal::SampleFormat::I32 => stream::<i32>(device, config, mixer, channels, &broken),
             other => anyhow::bail!("the audio output takes {other} samples"),
         }?;
-        stream.play()?;
         Ok(Self {
-            _stream: stream,
+            stream,
             voices: send,
+            broken,
         })
     }
 }
 
-/// A stream to `device` that `mixer` fills, the same on every channel.
+/// A stream to `device` that `mixer` fills, the same on every channel, which marks itself
+/// `broken` when it stops for good.
 fn stream<T>(
     device: &cpal::Device,
     config: cpal::StreamConfig,
     mut mixer: Mixer,
     channels: usize,
+    broken: &Arc<AtomicBool>,
 ) -> anyhow::Result<cpal::Stream>
 where
     T: cpal::SizedSample + cpal::FromSample<f32>,
 {
     use cpal::traits::DeviceTrait;
     let mut mono = vec![];
+    let broken = broken.clone();
     Ok(device.build_output_stream::<T, _, _>(
         config,
         move |data: &mut [T], _| {
@@ -343,8 +412,16 @@ where
                 frame.fill(T::from_sample(sample));
             }
         },
-        // A dropped buffer is a click at worst; there is no one to tell from the audio thread.
-        |_| {},
+        // A dropped buffer is a click at worst; a stream that has stopped is opened again.
+        move |error| {
+            use cpal::ErrorKind::*;
+            if matches!(
+                error.kind(),
+                DeviceNotAvailable | HostUnavailable | StreamInvalidated | BackendError | Other
+            ) {
+                broken.store(true, Ordering::Relaxed);
+            }
+        },
         None,
     )?)
 }
@@ -388,6 +465,9 @@ struct Playing {
     phase: f32,
     filter: Biquad,
 }
+
+/// How long the audio output's periods are asked to be, in seconds; it holds two.
+const PERIOD: f32 = 0.02;
 
 /// The most voices that play at once; the oldest give way to new ones.
 const VOICES: usize = 48;

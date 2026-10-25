@@ -567,7 +567,7 @@ mod tests {
         assert_eq!(s.theme().unwrap(), Some(Theme::SkyDiary));
         assert_eq!(s.interface().unwrap(), Interface::default());
         let mut interface = Interface::default();
-        interface.sounds.on = true;
+        interface.sounds.on = false;
         s.set_interface(interface).unwrap();
         assert_eq!(s.interface().unwrap(), interface);
         assert!(s.tool_windows().unwrap().is_empty());

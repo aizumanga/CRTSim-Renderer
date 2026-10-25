@@ -1,5 +1,5 @@
 //! The settings panel: CRT settings by section, then source framing and color.
-use crate::widgets::{choice, notes, numbers, resolution, Keyed, Shown, Switches};
+use crate::widgets::{channels, choice, notes, numbers, resolution, Keyed, Shown, Switches};
 use crate::*;
 use crtsim_core::palette::Model;
 use crtsim_core::settings::Section::*;
@@ -7,6 +7,7 @@ use std::collections::HashSet;
 
 impl App {
     pub(crate) fn settings(&mut self, ui: &mut egui::Ui) {
+        self.interface_row(ui);
         if let Some(video) = self.source.timeline.as_ref().map(|t| &t.video) {
             ui.heading("Video");
             ui.label(format!(
@@ -468,6 +469,28 @@ impl App {
         if self.config != before {
             self.changed();
         }
+    }
+    /// How much the interface moves, and whether it makes sounds, first in the panel, where a
+    /// person who would rather it stayed still or quiet finds it on their first look.
+    fn interface_row(&mut self, ui: &mut egui::Ui) {
+        let mut interface = self.interface;
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Effects").on_hover_text(
+                interface::Effects::ALL
+                    .map(|effects| format!("{}: {}", effects.name(), effects.description()))
+                    .join("\n"),
+            );
+            channels(
+                ui,
+                &mut interface.effects,
+                &interface::Effects::ALL.map(|effects| (effects, effects.name())),
+            );
+            ui.switch(&mut interface.sounds.on, "Sounds")
+                .on_hover_text("Volume and which sounds play: View → Interface sounds");
+        });
+        let ctx = ui.ctx().clone();
+        self.set_interface(interface, &ctx);
+        ui.separator();
     }
     /// Which preset the settings are, or are closest to, and how many of them differ from it,
     /// listed when pointed at, with the toggle that shows only those.

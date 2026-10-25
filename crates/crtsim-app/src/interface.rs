@@ -4,9 +4,11 @@
 use crate::sound::Group;
 use eframe::egui;
 
-/// How much the interface moves.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// How much the interface moves: everything, until a person chooses otherwise at the top of
+/// the settings panel.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Effects {
+    #[default]
     /// Meters ease, switches slide, and the preview's screen switches on and flickers with
     /// static as a set's would.
     Full,
@@ -57,17 +59,6 @@ impl Effects {
     }
 }
 
-impl Default for Effects {
-    /// A browser page holds back, as the page's own reduced-motion setting cannot be read.
-    fn default() -> Self {
-        if cfg!(target_arch = "wasm32") {
-            Self::Reduced
-        } else {
-            Self::Full
-        }
-    }
-}
-
 /// Whether the interface makes sounds, how loud, and which.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Sounds {
@@ -80,10 +71,10 @@ pub struct Sounds {
 }
 
 impl Default for Sounds {
-    /// Silent until a person turns them on.
+    /// Heard, until a person turns them off.
     fn default() -> Self {
         Self {
-            on: false,
+            on: true,
             volume: 0.5,
             controls: true,
             navigation: true,
@@ -220,11 +211,12 @@ mod tests {
     }
 
     #[test]
-    fn sounds_are_silent_until_turned_on_and_each_group_can_be_turned_off() {
+    fn sounds_are_heard_until_turned_off_and_each_group_can_be_turned_off() {
         let mut sounds = Sounds::default();
+        assert!(Group::ALL.into_iter().all(|group| sounds.hears(group)));
+        sounds.on = false;
         assert!(!sounds.hears(Group::Controls));
         sounds.on = true;
-        assert!(Group::ALL.into_iter().all(|group| sounds.hears(group)));
         sounds.navigation = false;
         assert!(!sounds.hears(Group::Navigation) && sounds.hears(Group::Events));
         sounds.volume = 0.;
