@@ -1,5 +1,15 @@
 # Portable releases (Phase 4)
 
+## v1.8.2
+
+- **Sounds in the web app.** Since 1.8.1 started sounds on, the web app opened its audio as the
+  page loaded, which a browser keeps suspended until the person's first click, so it stayed
+  silent. With sounds on, the web app now starts as a computer does, at its power button; pressing
+  it, by a click, a touch, Enter or Space, boots the interface, with the offer to restore the last
+  session if there is one, and the screen switches on with its power-on sound. Audio opens with
+  the first click, touch or key press, and each sound resumes audio the browser suspended, as
+  when the page was hidden. With sounds off, and on the desktop, the app starts as before.
+
 ## v1.8.1
 
 - **Effects** moves to the top of the settings panel, where it can be turned down on a first look,

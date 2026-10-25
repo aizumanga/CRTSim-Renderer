@@ -5,6 +5,7 @@
 #![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 mod app_data;
 mod batch;
+mod boot;
 mod chrome;
 mod closing;
 mod dialogs;
@@ -92,6 +93,9 @@ struct App {
     theme: theme::Theme,
     /// How much the interface moves, and the sounds it makes.
     interface: interface::Interface,
+    /// Whether the interface is up. A browser plays no sound before the person's first click,
+    /// so with sounds on the web app waits at its power button until pressed.
+    booted: bool,
     /// The interface's settings as last remembered.
     interface_saved: interface::Interface,
     speaker: sound::Speaker,
@@ -286,6 +290,7 @@ impl App {
             store,
             theme,
             interface,
+            booted: !(cfg!(target_arch = "wasm32") && interface.sounds.on),
             interface_saved: interface,
             speaker: Default::default(),
             colors,
@@ -650,6 +655,19 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = &ui.ctx().clone();
+        if !self.booted {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE)
+                .show(ui, |ui| {
+                    if boot::power_button(ui) {
+                        self.booted = true;
+                        sound::cue(ctx, sound::Sound::Switch { on: true });
+                        ctx.request_repaint();
+                    }
+                });
+            self.hear(ctx);
+            return;
+        }
         self.video_export_window(ctx);
         self.tick_playback(ctx);
         self.recovery_window(ctx);
@@ -777,12 +795,33 @@ impl eframe::App for App {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
         self.save_interface(ctx);
+        self.hear(ctx);
+        self.advance_smoke(ctx);
+    }
+}
+
+impl App {
+    /// Plays the sounds of the frame just drawn. A click, touch or key press lets a browser play
+    /// them from then on.
+    fn hear(&mut self, ctx: &egui::Context) {
         let sounds = sound::take(ctx);
+        let gesture = ctx.input(|i| {
+            i.events.iter().any(|event| {
+                matches!(
+                    event,
+                    egui::Event::PointerButton { pressed: true, .. }
+                        | egui::Event::Key { pressed: true, .. }
+                        | egui::Event::Touch { .. }
+                )
+            })
+        });
+        if gesture {
+            self.speaker.woken();
+        }
         // A smoke run's screenshot needs no sound, and CI has no audio output to play it on.
         if self.smoke.is_none() {
             self.speaker.play(&sounds, &self.interface.sounds);
         }
-        self.advance_smoke(ctx);
     }
 }
 
