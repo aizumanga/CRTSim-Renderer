@@ -244,6 +244,9 @@ pub struct Speaker {
     failure: Option<String>,
     /// When each spaced sound last played.
     last: Vec<(std::mem::Discriminant<Sound>, Instant)>,
+    /// Whether the person has clicked, touched or pressed a key yet. A browser keeps audio
+    /// opened before then suspended, so a page opens none until they have.
+    woken: bool,
 }
 
 struct Output {
@@ -257,7 +260,8 @@ impl Speaker {
     /// Plays those of `sounds` that `settings` hears.
     pub fn play(&mut self, sounds: &[Sound], settings: &Sounds) {
         let voices = self.heard(sounds, settings, Instant::now());
-        if voices.is_empty() || self.failure.is_some() {
+        let asleep = cfg!(target_arch = "wasm32") && !self.woken;
+        if voices.is_empty() || self.failure.is_some() || asleep {
             return;
         }
         // A stream that stopped, as when its device went away, is opened again.
@@ -278,6 +282,13 @@ impl Speaker {
             }
         }
         if let Some(output) = &self.output {
+            // A browser may suspend a page's audio again, as when it is hidden; asking to play
+            // resumes it, and is nothing to an output already playing.
+            #[cfg(target_arch = "wasm32")]
+            {
+                use cpal::traits::StreamTrait;
+                let _ = output.stream.play();
+            }
             if output.voices.send(voices).is_err() {
                 self.output = None;
             }
@@ -287,6 +298,11 @@ impl Speaker {
     /// Why no sound plays, if the audio output could not be opened.
     pub fn failure(&self) -> Option<&str> {
         self.failure.as_deref()
+    }
+
+    /// The person clicked, touched or pressed a key, after which a browser lets a page play.
+    pub fn woken(&mut self) {
+        self.woken = true;
     }
 
     /// Tries the audio output again with the next sound, as when sounds are turned back on.

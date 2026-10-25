@@ -778,6 +778,19 @@ impl eframe::App for App {
         }
         self.save_interface(ctx);
         let sounds = sound::take(ctx);
+        let gesture = ctx.input(|i| {
+            i.events.iter().any(|event| {
+                matches!(
+                    event,
+                    egui::Event::PointerButton { pressed: true, .. }
+                        | egui::Event::Key { pressed: true, .. }
+                        | egui::Event::Touch { .. }
+                )
+            })
+        });
+        if gesture {
+            self.speaker.woken();
+        }
         // A smoke run's screenshot needs no sound, and CI has no audio output to play it on.
         if self.smoke.is_none() {
             self.speaker.play(&sounds, &self.interface.sounds);
