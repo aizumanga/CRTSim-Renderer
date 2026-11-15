@@ -12,7 +12,8 @@ glow of a bright picture fades over the frames after it, as a picture tube's did
 ## Installing it
 
 On Linux, a release's `obs-linux-x86_64` package holds the plugin built for OBS 30 and later:
-copy its `crtsim-renderer` folder into `~/.config/obs-studio/plugins`.
+copy its `crtsim-renderer` folder into `~/.config/obs-studio/plugins`, or for OBS's Flatpak into
+`~/.var/app/com.obsproject.Studio/config/obs-studio/plugins`.
 
 Elsewhere, or for another version of OBS, build it from `ports/obs` in the repository against
 OBS's development files, with the data folder the command line writes:
