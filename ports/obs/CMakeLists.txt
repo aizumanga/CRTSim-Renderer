@@ -13,7 +13,7 @@ add_library(crtsim-renderer MODULE src/crtsim-filter.c)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   # libobs's file name differs between OBS builds (Ubuntu's libobs.so.0, the Flatpak's
   # libobs.so.30), so the filter names none and binds to the libobs OBS has already loaded.
-  target_include_directories(crtsim-renderer PRIVATE
+  target_include_directories(crtsim-renderer SYSTEM PRIVATE
     $<TARGET_PROPERTY:OBS::libobs,INTERFACE_INCLUDE_DIRECTORIES>)
   target_compile_definitions(crtsim-renderer PRIVATE
     $<TARGET_PROPERTY:OBS::libobs,INTERFACE_COMPILE_DEFINITIONS>)
