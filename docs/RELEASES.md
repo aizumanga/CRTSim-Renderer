@@ -1,5 +1,12 @@
 # Portable releases (Phase 4)
 
+## v1.8.4
+
+- **The OBS filter in OBS's Flatpak.** The Linux filter named Ubuntu's `libobs.so.0`, which the
+  Flatpak, shipping `libobs.so.30`, does not have, so it failed to load there. It now uses the
+  libobs OBS has already loaded, whatever its file name; for the Flatpak, copy the
+  `crtsim-renderer` folder into `~/.var/app/com.obsproject.Studio/config/obs-studio/plugins`.
+
 ## v1.8.3
 
 - **Web app on strict WebGPU.** The shader's noise hash mixed `*` and `^` without parentheses,
