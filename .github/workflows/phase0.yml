@@ -119,10 +119,14 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo check --locked -p crtsim-core
+  # The goldens are bit-exact to the Mesa recorded in tests/golden/driver.txt, and the ports'
+  # parity limits were set on that same Mesa (and the OBS 30 the release is built against), so
+  # these two jobs stay on the Ubuntu that packages them, not on whatever ubuntu-latest becomes.
+  # Moving them is a re-baseline: regenerate the goldens and review the diffs.
   vulkan:
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       XDG_RUNTIME_DIR: /tmp
       CRTSIM_TEST_OUTPUT: ${{ github.workspace }}/output
@@ -209,7 +213,7 @@ jobs:
   ports:
     needs: changes
     if: needs.changes.outputs.ports == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       XDG_RUNTIME_DIR: /tmp
       CRTSIM_TEST_OUTPUT: ${{ github.workspace }}/output
