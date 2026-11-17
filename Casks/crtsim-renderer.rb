@@ -1,6 +1,6 @@
 cask "crtsim-renderer" do
-  version "1.8.2"
-  sha256 "a40bd5bb924059ded6f0518d40b2cc90b84bedfecfc6f060de0e7c40b07bfeda"
+  version "1.8.3"
+  sha256 "cf887e65b469c036e76ac3447bc23f24831f691e38e74cc33d661b3691af63da"
 
   url "https://github.com/aizumanga/CRTSim-Renderer/releases/download/v#{version}/CRTSim-Renderer-v#{version}-macos-arm64.tar.gz"
   name "CRTSim Renderer"
