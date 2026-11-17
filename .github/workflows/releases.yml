@@ -146,6 +146,16 @@ jobs:
           cargo build --release --locked -p crtsim-cli
           cmake -S ports/obs -B build/obs -DCMAKE_BUILD_TYPE=Release -DCMAKE_COMPILE_WARNING_AS_ERROR=ON
           cmake --build build/obs
+      # The filter names no libobs, so the Flatpak's libobs.so.30 serves as well as Ubuntu's
+      # libobs.so.0, and so the linker no longer catches a symbol OBS 30 lacks: loading it after
+      # libobs, binding every symbol, does.
+      - name: Check the filter binds to the libobs OBS has loaded
+        run: |
+          if readelf -d build/obs/crtsim-renderer.so | grep -q 'NEEDED.*libobs'; then
+            echo "The filter names a libobs, which the Flatpak's OBS may not have" >&2
+            exit 1
+          fi
+          python3 -c "import ctypes, os; ctypes.CDLL('libobs.so.0', os.RTLD_GLOBAL | os.RTLD_NOW); ctypes.CDLL('./build/obs/crtsim-renderer.so', os.RTLD_NOW)"
       - name: Package the filter
         shell: bash
         env:
